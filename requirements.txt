@@ -1,0 +1,10 @@
+# Minimal planned Python dependencies.
+# Keep conservative until the Wyoming server and s2.cpp API shape are verified.
+wyoming>=1.5.0
+
+# Test dependency for local development.
+pytest>=8.0.0
+
+# Future candidates, not enabled until needed:
+# aiohttp
+# httpx

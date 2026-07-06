@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+env/
+
+# Local environment/config
+.env
+.env.*
+*.local
+/config/*
+!/config/.gitkeep
+
+# Docker/build artifacts
+.docker/
+build/
+dist/
+*.egg-info/
+
+# Models and large ML artifacts
+/models/*
+!/models/.gitkeep
+/voices/*
+!/voices/.gitkeep
+/appdata/*
+*.gguf
+*.pt
+*.pth
+*.safetensors
+*.bin
+*.onnx
+*.ckpt
+
+# Generated audio/cache/logs
+*.wav
+*.mp3
+*.flac
+*.ogg
+*.pcm
+/cache/
+/logs/
+*.log
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/

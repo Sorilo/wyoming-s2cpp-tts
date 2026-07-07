@@ -35,7 +35,7 @@ The Python wrapper is responsible for translating Home Assistant/Wyoming TTS req
 
 ## Current status
 
-Phase 2.5 is now implemented at an opt-in non-streaming integration level:
+Phase 2.75 is now implemented at an optional external-smoke-test level:
 
 - Repository structure exists.
 - Docs describe the intended architecture and deployment path.
@@ -44,6 +44,7 @@ Phase 2.5 is now implemented at an opt-in non-streaming integration level:
 - `app/s2_client.py` can POST a request to an already-running external `s2.cpp` HTTP `/generate` endpoint and return raw audio bytes.
 - Optional `TTS_BACKEND=s2cpp` routes one buffered s2.cpp client result back through Wyoming `AudioStart`/`AudioChunk`/`AudioStop` events.
 - The s2.cpp client and opt-in Wyoming backend path are covered with mocked tests.
+- `scripts/smoke_s2cpp_generate.py` provides an optional direct `/generate` smoke test for an already-running external s2.cpp backend and skips harmlessly unless opted in.
 - No s2.cpp build, CUDA setup, GGUF model download, Docker build, progressive streaming, or final cancellation/barge-in behavior is implemented yet.
 
 Implementation continues in small phases. See [`docs/ROADMAP.md`](docs/ROADMAP.md) and [`docs/NEXT_GOAL_PROMPTS.md`](docs/NEXT_GOAL_PROMPTS.md).
@@ -114,6 +115,51 @@ For the mocked Phase 2/2.5 client and backend-route tests, run:
 ```bash
 python -m pytest tests/test_s2_client.py tests/test_wyoming_s2cpp_backend.py -q
 ```
+
+## Phase 2.75 optional direct s2.cpp smoke test
+
+Use this only when an external s2.cpp HTTP server is already running. The script does not start s2.cpp, build CUDA code, download models, or require model infrastructure for normal tests/CI.
+
+Default harmless skip mode:
+
+```bash
+python scripts/smoke_s2cpp_generate.py --text "hello"
+```
+
+Expected output includes:
+
+```text
+status=skipped
+endpoint=http://127.0.0.1:3030/generate
+bytes_received=0
+```
+
+Opt in when a backend is available:
+
+```bash
+export TTS_BACKEND=s2cpp
+export S2_HOST=192.168.1.45
+export S2_PORT=3030
+python scripts/smoke_s2cpp_generate.py --text "Hello from direct s2.cpp smoke test."
+```
+
+Expected success output includes:
+
+```text
+status=ok
+endpoint=http://192.168.1.45:3030/generate
+content_type=<backend content type>
+bytes_received=<non-zero byte count>
+```
+
+If `TTS_BACKEND=s2cpp` is set but the backend is unavailable, the script reports `status=unavailable` and exits successfully so it is safe to run during local setup checks.
+
+Limitations:
+
+- This is a direct backend-client smoke test, not a Home Assistant/Wyoming integration test.
+- It buffers one response and prints metadata only.
+- It assumes the backend `/generate` endpoint is already running and compatible with the current JSON payload.
+- It does not validate audio quality, realtime factor, VRAM use, streaming, cancellation, or barge-in behavior.
 
 ## GitHub remote
 

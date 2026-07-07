@@ -1,8 +1,8 @@
 # Next Hermes `/goal` prompts
 
-Run these phases one at a time. Keep each run small. Do **not** start the CUDA/s2.cpp build until the Wyoming server works with fake/test audio, the backend client path is proven, and an external backend smoke path is documented. Phase 2.5 is complete; the next immediate goal is an optional external s2.cpp smoke-test step if an already-running backend is available.
+Run these phases one at a time. Keep each run small. Do **not** start the CUDA/s2.cpp build until the Wyoming server works with fake/test audio, the backend client path is proven, and the container/process structure is in place. Phase 2.75 is complete; the next immediate goal is Phase 3 container structure/supervision placeholders.
 
-## Next immediate prompt: Phase 2.75
+## Next immediate prompt: Phase 3
 
 ```text
 /goal
@@ -10,30 +10,24 @@ You are Hermes, acting as a senior Python/Home Assistant Wyoming Protocol engine
 
 Project: /workspace/wyoming-s2cpp-tts
 
-Quota protection: Keep this run small. Do not build s2.cpp, do not download models, do not run Docker builds, and do not implement final streaming/cancellation yet.
+Quota protection: Keep this run small. Do not build s2.cpp, do not download models, do not compile CUDA, and do not implement final streaming/cancellation yet.
 
-Goal: Implement Phase 2.75 only: add an optional direct smoke-test path for an already-running external s2.cpp HTTP /generate endpoint, without requiring that backend for normal tests or CI.
+Goal: Implement Phase 3 only: turn the placeholder Dockerfile and entrypoint into a container/process structure that can run the Python Wyoming wrapper and leave clear supervised-process hooks for a future s2.cpp server.
 
 Requirements:
-- Inspect the current Phase 2.5 implementation first.
-- Keep fake backend as the default and keep all mocked tests passing.
-- Do not start, build, compile, package, or supervise s2.cpp.
-- Do not download GGUF models.
-- Add a small script or documented command that uses Settings.from_env(), S2_HOST, S2_PORT, and TTS_BACKEND=s2cpp to send one direct /generate request when a backend is already available.
-- The smoke path must be opt-in and skipped/harmless when no backend is available.
-- Add tests for any new parsing/helper code using mocks only.
-- Document expected inputs, expected output, and limitations.
+- Inspect the current Phase 2.75 implementation first.
+- Keep fake backend as default and keep all tests passing.
+- Do not build, compile, download, or vendor s2.cpp.
+- Do not run a Docker build unless it is extremely cheap and clearly safe; prefer static/smoke checks.
+- Update Dockerfile and entrypoint.sh to install Python requirements and run `python -m app.main`.
+- Add TODO/supervision hooks for future s2.cpp startup on 127.0.0.1:3030.
+- Keep Unraid WebUI Add Container compatibility in mind: env vars, ports 10200/8088, paths /models /voices /config.
+- Add lightweight tests or script checks for entrypoint behavior where possible without Docker/GPU/model infrastructure.
+- Document what the container can and cannot do yet.
 - Run the cheapest relevant tests available.
 - Make one git commit with a clear message.
 
 Final response: summarize files changed, tests run, git status, and the next recommended prompt.
-```
-
-## Phase 3 prompt
-
-```text
-/goal
-Implement Phase 3 for /workspace/wyoming-s2cpp-tts: turn the scaffold Dockerfile and entrypoint into a container structure that can supervise the Python Wyoming wrapper and a future s2.cpp server process. Do not compile CUDA or download models. Add clear TODOs where the real s2.cpp binary will be copied/built later. Add a lightweight container smoke-test if possible without building GPU code. Commit the change.
 ```
 
 ## Phase 4 prompt

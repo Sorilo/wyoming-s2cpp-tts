@@ -18,7 +18,7 @@ Implemented. `TTS_BACKEND=fake` remains the default. `TTS_BACKEND=s2cpp` calls t
 
 ## Phase 2.75: optional direct external s2.cpp smoke test
 
-If an already-running s2.cpp server is available, prove one direct request path against it without building s2.cpp or downloading models. Keep this optional and documented so CI/tests do not require local model infrastructure.
+Implemented. `scripts/smoke_s2cpp_generate.py` uses `Settings.from_env()`, `TTS_BACKEND=s2cpp`, `S2_HOST`, and `S2_PORT` to send one direct `/generate` request when an external backend is already available. It skips harmlessly by default and reports unavailable without failing when no backend is running.
 
 ## Phase 3: Docker container with s2.cpp supervised process
 

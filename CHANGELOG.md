@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Implemented Phase 2.75 optional direct s2.cpp `/generate` smoke-test script that skips harmlessly unless opted in.
+- Added mocked tests for the smoke helper success, skip, and unavailable outcomes.
+- Documented direct smoke-test inputs, outputs, and limitations.
 - Implemented Phase 2.5 opt-in `TTS_BACKEND=s2cpp` Wyoming route for one buffered backend response.
 - Kept `TTS_BACKEND=fake` as the default fake PCM/Home Assistant test mode.
 - Added mocked tests for converting s2.cpp client results into Wyoming `AudioStart`/`AudioChunk`/`AudioStop` events.

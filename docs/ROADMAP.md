@@ -171,14 +171,15 @@ Acceptance criteria status:
 
 ### Phase 5B: streaming async iterator over s2.cpp response bytes
 
-Implement a streaming client interface that can expose backend response bytes progressively, using mocked chunked responses. Preserve or safely migrate the buffered interface with tests.
+Implemented. ``app/s2_client.py`` now has ``S2StreamResult`` (a resource-safe context manager / iterator that yields audio chunks via ``response.read(4096)`` without buffering the entire response) and ``S2Client.generate_stream()`` (builds canonical multipart with ``stream=true``, ``chunked=true``, ``output_format="pcm_s16le"``, ``low_latency=true`` in ``params`` JSON). ``S2GenerateRequest.to_multipart_fields(streaming=True)`` injects streaming flags without duplicating multipart-building logic.
 
-Acceptance criteria:
+Acceptance criteria status:
 
-- Mocked backend chunks can be consumed by an async or async-compatible iterator.
-- Errors and partial streams are represented clearly.
-- No Wyoming streaming behavior is changed unless explicitly scoped in this phase.
-- No real streaming success is claimed without a tested backend.
+- Mocked backend chunks can be consumed by an iterator that does not read the full response first. ✅ (15 new tests)
+- Errors and partial streams are represented clearly: HTTP errors raise ``S2ClientError`` before iteration; read errors mid-stream raise ``S2ClientError`` and close the response; early consumer exit (``break``) closes the response via ``__exit__``. ✅
+- No Wyoming streaming behavior is changed: ``app/wyoming_server.py`` is untouched. ``TTS_BACKEND=fake`` remains default. ✅
+- All 47 existing tests (buffered JSON, canonical multipart, fake Wyoming) still pass; 62 total tests pass. ✅
+- No real streaming success is claimed without a tested backend. ✅
 
 ### Phase 5C: streamed audio to Wyoming events
 

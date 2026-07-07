@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Phase 5B: implemented streaming client interface for progressive s2.cpp audio delivery.
+- Added ``S2StreamResult`` class — a resource-safe context manager / iterator that yields
+  backend response bytes one chunk at a time via ``response.read(4096)`` without buffering
+  the entire response.
+- Added ``S2Client.generate_stream()`` method — builds a canonical multipart request with
+  ``stream=true``, ``chunked=true``, ``output_format="pcm_s16le"``, and ``low_latency=true``
+  in the ``params`` JSON string, then returns a ``S2StreamResult``.
+- Added ``streaming`` parameter to ``S2GenerateRequest.to_multipart_fields()`` for
+  injecting streaming flags without duplicating multipart-building logic.
+- Streaming lifecycle: HTTP connection stays open during chunk consumption; closes on
+  normal completion, backend error, or early consumer exit (``break`` from loop).
+- 15 new mocked streaming tests (62 total): progressive chunk yielding, deterministic
+  first-chunk-before-full-response proof, cleanup on normal/break/error paths, streaming
+  params verification, canonical field preservation, content_type access, input validation.
+- No real s2.cpp, CUDA, GPU, Docker, Wyoming streaming, or latency success claimed.
+- ``TTS_BACKEND=fake`` remains default; all existing 47 buffered/fake tests still pass.
+
 - Phase 5A.2: corrected multipart field names to match the canonical `rodrigomatta/s2.cpp` OpenAPI spec (`openapi/s2-openapi.yaml`).
 - Canonical emitted fields: `reference` (file part, was `prompt_audio`), `reference_text` (was `prompt_text`), `voice`, `voice_dir`.
 - `prompt_audio`, `prompt_text`, `reference_audio`, `ref_audio`, `ref_text` are accepted upstream aliases; the client normalises them to canonical names on outgoing requests.

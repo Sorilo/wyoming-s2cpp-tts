@@ -1,10 +1,11 @@
 """s2.cpp HTTP client for an already-running backend server.
 
 This module contains backend-client-only helpers for a separate s2.cpp HTTP
-``/generate`` endpoint. It supports the existing buffered JSON path and the
+``/generate`` endpoint. It supports the existing buffered JSON path, the
 Phase 5A.2 buffered multipart/form-data path using canonical upstream fields
-verified against the official target ``rodrigomatta/s2.cpp`` OpenAPI spec. It
-does not start, build, compile, package, or supervise s2.cpp, and it does not
+verified against the official target ``rodrigomatta/s2.cpp`` OpenAPI spec, and
+the Phase 5B streaming multipart path that yields audio chunks progressively.
+It does not start, build, compile, package, or supervise s2.cpp, and it does not
 download models.
 """
 
@@ -183,7 +184,7 @@ class S2GenerateRequest:
             payload["voice"] = self.voice
         return payload
 
-    def to_multipart_fields(self) -> dict[str, Any]:
+    def to_multipart_fields(self, streaming: bool = False) -> dict[str, Any]:
         """Convert to canonical s2.cpp multipart scalar fields.
 
         Verified against the official target ``rodrigomatta/s2.cpp``
@@ -211,6 +212,11 @@ class S2GenerateRequest:
             "output_format": self.output_format,
             "segment_sentences": self.segment_sentences,
         }
+        if streaming:
+            params["stream"] = True
+            params["chunked"] = True
+            params["output_format"] = "pcm_s16le"
+            params["low_latency"] = True
         fields: dict[str, Any] = {
             "text": self.text,
             "params": json.dumps(params),
@@ -230,6 +236,91 @@ class S2GenerateResult:
 
     audio: bytes
     content_type: str
+
+
+class S2StreamResult:
+    """Streaming iterator over progressive s2.cpp audio chunks.
+
+    Phase 5B adds this resource-safe context manager / iterator that yields
+    raw audio bytes from the backend response one chunk at a time *without*
+    buffering the entire response first. The HTTP connection remains open while
+    chunks are consumed and is closed on normal completion, backend error, or
+    early consumer exit.
+
+    Typical usage::
+
+        with client.generate_stream(request) as stream:
+            for chunk in stream:
+                process(chunk)
+    """
+
+    def __init__(self, http_request, timeout_seconds=60.0):
+        self._http_request = http_request
+        self._timeout_seconds = timeout_seconds
+        self._response = None
+        self._closed = False
+
+    def __enter__(self):
+        """Open the HTTP connection and return self as the iterator."""
+        try:
+            self._response = urlopen(
+                self._http_request, timeout=self._timeout_seconds
+            )
+        except urllib.error.URLError as exc:
+            raise S2ClientError(
+                f"s2.cpp /generate streaming failed: {exc}"
+            ) from exc
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Close the HTTP response on context exit.
+
+        Resources are released after normal completion, backend error, or
+        early consumer exit. Exceptions are NOT suppressed.
+        """
+        self._closed = True
+        if self._response is not None:
+            try:
+                self._response.close()
+            except Exception:
+                pass
+        return False
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self._closed or self._response is None:
+            raise StopIteration
+        try:
+            chunk = self._response.read(4096)
+        except Exception as exc:
+            self._closed = True
+            try:
+                self._response.close()
+            except Exception:
+                pass
+            self._response = None
+            raise S2ClientError(
+                f"s2.cpp streaming read failed: {exc}"
+            ) from exc
+
+        if not chunk:
+            try:
+                self._response.close()
+            except Exception:
+                pass
+            self._response = None
+            raise StopIteration
+        return chunk
+
+    @property
+    def content_type(self):
+        if self._response is None:
+            return "application/octet-stream"
+        return self._response.headers.get(
+            "Content-Type", "application/octet-stream"
+        )
 
 
 class S2Client:
@@ -275,6 +366,55 @@ class S2Client:
             },
         )
         return self._read_generate_response(http_request)
+
+    def generate_stream(self, request, files=None, boundary=None):
+        """POST multipart/form-data and yield audio chunks progressively.
+
+        Phase 5B: builds a canonical multipart request with streaming params
+        (``stream=true``, ``chunked=true``, ``output_format="pcm_s16le"``,
+        ``low_latency=true``) in the ``params`` JSON string. Returns a
+        ``S2StreamResult`` context manager / iterator.
+
+        The caller must consume the iterator inside a ``with`` block::
+
+            with client.generate_stream(request) as stream:
+                for chunk in stream:
+                    ...
+
+        Real backend streaming remains unverified until a real s2.cpp
+        backend is tested.
+        """
+        # Normalise reference-audio aliases to the canonical key.
+        _files = {}
+        if files:
+            for key, value in files.items():
+                if key in _REFERENCE_AUDIO_ALIASES:
+                    _files[_REFERENCE_AUDIO_FIELD] = value
+                else:
+                    _files[key] = value
+
+        has_reference = _REFERENCE_AUDIO_FIELD in _files
+        if has_reference and not request.prompt_text:
+            raise ValueError(
+                "reference requires reference_text (transcript for the"
+                " reference audio); accepted aliases: prompt_text, ref_text"
+            )
+
+        content_type, body = encode_multipart_form_data(
+            fields=request.to_multipart_fields(streaming=True),
+            files=_files,
+            boundary=boundary,
+        )
+        http_request = urllib.request.Request(
+            self.endpoint.generate_url,
+            data=body,
+            method="POST",
+            headers={
+                "Content-Type": content_type,
+                "Accept": "audio/L16, audio/wav, application/octet-stream, */*",
+            },
+        )
+        return S2StreamResult(http_request, self.timeout_seconds)
 
     def generate_multipart(
         self,

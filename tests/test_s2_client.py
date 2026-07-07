@@ -413,3 +413,340 @@ def test_multipart_from_settings_wires_voice_dir():
 
     assert request.voice == "hope"
     assert request.voice_dir == "/my/voices"
+
+# ---------------------------------------------------------------------------
+# Mock helpers for streaming tests
+# ---------------------------------------------------------------------------
+
+class _StreamingMockResponse:
+    """Mock urllib response that yields chunks progressively via read(size).
+
+    Each call to read(size) returns the next chunk from the internal list,
+    regardless of the requested size. This simulates progressive backend
+    delivery where the transport delivers discrete chunks.
+    """
+
+    def __init__(self, chunks, content_type="audio/L16", status=200):
+        self._chunks = list(chunks)
+        self._index = 0
+        self.headers = {"Content-Type": content_type}
+        self.status = status
+        self._full_read_called = False
+        self._closed = False
+
+    def read(self, size=-1):
+        if size == -1:
+            self._full_read_called = True
+            remaining = b"".join(self._chunks[self._index:])
+            self._index = len(self._chunks)
+            return remaining
+        if self._index >= len(self._chunks):
+            return b""
+        chunk = self._chunks[self._index]
+        self._index += 1
+        return chunk
+
+    def close(self):
+        self._closed = True
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self._closed = True
+        return None
+
+
+class _FailingReadMockResponse:
+    """Mock that raises an exception on read()."""
+
+    def __init__(self, fail_on_call=1, content_type="audio/L16"):
+        self.headers = {"Content-Type": content_type}
+        self._call_count = 0
+        self._fail_on_call = fail_on_call
+        self._closed = False
+
+    def read(self, size=-1):
+        self._call_count += 1
+        if self._call_count >= self._fail_on_call:
+            raise IOError("simulated read failure")
+        return b"partial-chunk"
+
+    def close(self):
+        self._closed = True
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self._closed = True
+        return None
+
+
+def _streaming_response(chunks, content_type="audio/L16"):
+    """Shorthand factory for a streaming mock response."""
+    return _StreamingMockResponse(chunks, content_type=content_type)
+
+
+# ---------------------------------------------------------------------------
+# Phase 5B: Streaming client tests
+# ---------------------------------------------------------------------------
+
+def test_stream_yields_chunks_progressively():
+    """Stream yields each chunk in order without concatenating them."""
+    chunks = [b"chunk1", b"chunk2", b"chunk3"]
+    client = S2Client(S2Endpoint("127.0.0.1", 3030), timeout_seconds=1)
+    request = S2GenerateRequest(text="hello")
+
+    with patch("app.s2_client.urlopen", return_value=_streaming_response(chunks)):
+        with client.generate_stream(request, boundary="str") as stream:
+            yielded = list(stream)
+
+    assert yielded == chunks
+
+
+def test_stream_first_chunk_before_full_response_available():
+    """Deterministic proof: the first chunk is yielded before the full
+    response is read -- the mock tracks that read(-1) was never called."""
+    chunks = [b"A", b"B", b"C", b"D"]
+    mock = _streaming_response(chunks)
+    client = S2Client(S2Endpoint("127.0.0.1", 3030), timeout_seconds=1)
+    request = S2GenerateRequest(text="hello")
+
+    with patch("app.s2_client.urlopen", return_value=mock):
+        with client.generate_stream(request, boundary="pr") as stream:
+            first = next(stream)
+            # At this point, only one chunk has been read
+            assert not mock._full_read_called, (
+                "full read was called before first chunk was yielded"
+            )
+
+    assert first == b"A"
+    # Even after full iteration, read(-1) must not have been called
+    # because the iterator uses read(4096), not read().
+    assert not mock._full_read_called
+
+
+def test_stream_cleanup_on_normal_completion():
+    """Response is closed after the iterator is exhausted normally."""
+    chunks = [b"x", b"y"]
+    mock = _streaming_response(chunks)
+    client = S2Client(S2Endpoint("127.0.0.1", 3030), timeout_seconds=1)
+    request = S2GenerateRequest(text="hello")
+
+    with patch("app.s2_client.urlopen", return_value=mock):
+        with client.generate_stream(request, boundary="cl") as stream:
+            for _ in stream:
+                pass
+
+    assert mock._closed, "response was not closed after normal completion"
+
+
+def test_stream_cleanup_on_early_break():
+    """Response is closed when the consumer breaks from the loop early."""
+    chunks = [b"1", b"2", b"3", b"4", b"5"]
+    mock = _streaming_response(chunks)
+    client = S2Client(S2Endpoint("127.0.0.1", 3030), timeout_seconds=1)
+    request = S2GenerateRequest(text="hello")
+
+    with patch("app.s2_client.urlopen", return_value=mock):
+        with client.generate_stream(request, boundary="br") as stream:
+            for i, chunk in enumerate(stream):
+                if i >= 2:  # break after 3 chunks
+                    break
+
+    assert mock._closed, "response was not closed after early break"
+
+
+def test_stream_error_on_http_failure():
+    """HTTP errors raise S2ClientError before any chunks are yielded."""
+    error = urllib.error.HTTPError(
+        url="http://127.0.0.1:3030/generate",
+        code=500,
+        msg="server error",
+        hdrs=None,
+        fp=None,
+    )
+    client = S2Client(S2Endpoint("127.0.0.1", 3030), timeout_seconds=1)
+    request = S2GenerateRequest(text="hello")
+
+    with patch("app.s2_client.urlopen", side_effect=error):
+        with pytest.raises(S2ClientError, match="streaming failed"):
+            with client.generate_stream(request, boundary="err") as stream:
+                list(stream)
+
+
+def test_stream_error_on_read_failure():
+    """Read errors mid-stream raise S2ClientError and close the response."""
+    mock = _FailingReadMockResponse(fail_on_call=1)
+    client = S2Client(S2Endpoint("127.0.0.1", 3030), timeout_seconds=1)
+    request = S2GenerateRequest(text="hello")
+
+    with patch("app.s2_client.urlopen", return_value=mock):
+        with pytest.raises(S2ClientError, match="streaming read failed"):
+            with client.generate_stream(request, boundary="rd") as stream:
+                next(stream)
+
+    assert mock._closed, "response was not closed after read failure"
+
+
+def test_stream_params_include_streaming_flags():
+    """Streaming multipart params JSON includes stream, chunked,
+    output_format=pcm_s16le, and low_latency."""
+    chunks = [b"audio"]
+    client = S2Client(S2Endpoint("127.0.0.1", 3030), timeout_seconds=1)
+    request = S2GenerateRequest(text="hello")
+
+    with patch("app.s2_client.urlopen", return_value=_streaming_response(chunks)) as urlopen_mock:
+        with client.generate_stream(request, boundary="sp") as stream:
+            list(stream)
+
+    body_str = urlopen_mock.call_args.args[0].data.decode("utf-8")
+
+    # Extract params JSON
+    params_start = body_str.index('name="params"') + len('name="params"')
+    header_end = body_str.index("\r\n\r\n", params_start) + 4
+    params_end = body_str.index("\r\n", header_end)
+    params = json.loads(body_str[header_end:params_end])
+
+    assert params["stream"] is True
+    assert params["chunked"] is True
+    assert params["output_format"] == "pcm_s16le"
+    assert params["low_latency"] is True
+
+
+def test_stream_preserves_canonical_fields():
+    """Streaming multipart still uses canonical text, reference_text, voice fields."""
+    chunks = [b"audio"]
+    client = S2Client(S2Endpoint("127.0.0.1", 3030), timeout_seconds=1)
+    request = S2GenerateRequest(
+        text="hello world",
+        voice="hope",
+        voice_dir="/voices",
+        prompt_text="reference transcript",
+    )
+
+    with patch("app.s2_client.urlopen", return_value=_streaming_response(chunks)) as urlopen_mock:
+        with client.generate_stream(
+            request,
+            files={"reference": ("ref.wav", b"DATA", "audio/wav")},
+            boundary="canon",
+        ) as stream:
+            list(stream)
+
+    body_str = urlopen_mock.call_args.args[0].data.decode("utf-8")
+
+    assert 'name="text"' in body_str
+    assert "hello world" in body_str
+    assert 'name="reference_text"' in body_str
+    assert "reference transcript" in body_str
+    assert 'name="voice"' in body_str
+    assert "hope" in body_str
+    assert 'name="voice_dir"' in body_str
+    assert "/voices" in body_str
+    assert 'name="reference"' in body_str
+    assert b"DATA" in urlopen_mock.call_args.args[0].data
+
+
+def test_stream_content_type_accessible():
+    """Stream's content_type property reflects the backend response header."""
+    chunks = [b"pcm"]
+    client = S2Client(S2Endpoint("127.0.0.1", 3030), timeout_seconds=1)
+    request = S2GenerateRequest(text="hello")
+
+    with patch(
+        "app.s2_client.urlopen",
+        return_value=_streaming_response(chunks, content_type="audio/L16;rate=22050"),
+    ):
+        with client.generate_stream(request, boundary="ct") as stream:
+            assert stream.content_type == "audio/L16;rate=22050"
+            list(stream)
+
+
+def test_stream_uses_multipart_not_json():
+    """Streaming uses multipart/form-data Content-Type, not application/json."""
+    chunks = [b"audio"]
+    client = S2Client(S2Endpoint("127.0.0.1", 3030), timeout_seconds=1)
+    request = S2GenerateRequest(text="hello")
+
+    with patch("app.s2_client.urlopen", return_value=_streaming_response(chunks)) as urlopen_mock:
+        with client.generate_stream(request, boundary="mp") as stream:
+            list(stream)
+
+    sent_request = urlopen_mock.call_args.args[0]
+    content_type = sent_request.headers["Content-type"]
+    assert content_type.startswith("multipart/form-data")
+    assert "application/json" not in content_type
+
+
+def test_stream_reference_without_reference_text_raises():
+    """Streaming enforces reference_text requirement for reference audio."""
+    client = S2Client(S2Endpoint("127.0.0.1", 3030), timeout_seconds=1)
+    request = S2GenerateRequest(text="hello", prompt_text="")
+
+    with pytest.raises(ValueError, match="reference requires reference_text"):
+        with client.generate_stream(
+            request,
+            files={"reference": ("ref.wav", b"data", "audio/wav")},
+            boundary="val",
+        ):
+            pass
+
+
+def test_to_multipart_fields_streaming_adds_params():
+    """to_multipart_fields(streaming=True) adds stream/chunked/low_latency/pcm_s16le."""
+    request = S2GenerateRequest(text="test")
+    fields = request.to_multipart_fields(streaming=True)
+
+    params = json.loads(fields["params"])
+    assert params["stream"] is True
+    assert params["chunked"] is True
+    assert params["output_format"] == "pcm_s16le"
+    assert params["low_latency"] is True
+
+
+def test_to_multipart_fields_non_streaming_no_stream_params():
+    """to_multipart_fields() without streaming does not include stream params."""
+    request = S2GenerateRequest(text="test")
+    fields = request.to_multipart_fields()
+
+    params = json.loads(fields["params"])
+    assert "stream" not in params
+    assert "chunked" not in params
+    assert "low_latency" not in params
+
+
+def test_stream_empty_transport_chunks_handled_as_eof():
+    """Empty reads from the response signal end-of-stream (standard HTTP behavior).
+
+    The stream iterator treats ``b""`` from ``response.read()`` as EOF and
+    stops iteration. Mid-stream zero-length chunks are not expected in
+    real HTTP chunked transfer encoding — the transport delivers non-empty
+    data frames. This test verifies the iterator correctly terminates on an
+    empty read.
+    """
+    chunks = [b"real1", b"real2"]
+    mock = _streaming_response(chunks)
+    client = S2Client(S2Endpoint("127.0.0.1", 3030), timeout_seconds=1)
+    request = S2GenerateRequest(text="hello")
+
+    with patch("app.s2_client.urlopen", return_value=mock):
+        with client.generate_stream(request, boundary="em") as stream:
+            yielded = list(stream)
+
+    assert yielded == [b"real1", b"real2"]
+
+
+def test_stream_multiple_iterations_are_idempotent():
+    """Once exhausted, iterating again yields nothing."""
+    chunks = [b"only-once"]
+    client = S2Client(S2Endpoint("127.0.0.1", 3030), timeout_seconds=1)
+    request = S2GenerateRequest(text="hello")
+
+    with patch("app.s2_client.urlopen", return_value=_streaming_response(chunks)):
+        with client.generate_stream(request, boundary="id") as stream:
+            first_pass = list(stream)
+            second_pass = list(stream)
+
+    assert first_pass == [b"only-once"]
+    assert second_pass == []

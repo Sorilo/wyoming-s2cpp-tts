@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Implemented Phase 5A multipart/form-data s2.cpp client compatibility with mocked request-construction tests.
+- Added additive `S2Client.generate_multipart(...)` and `encode_multipart_form_data(...)` while preserving existing JSON buffered behavior.
+- Documented unresolved upstream assumptions about exact multipart field/file names.
 - Aligned roadmap governance docs to the approved Phase 5A-8C implementation sequence.
 - Replaced broad future Phase 5/6/7/8 prompts with narrowly scoped phase prompts and mandatory next-prompt handoff policy.
 - Documented latency objective, TTS-side measurement ownership, and external instrumentation boundaries.

@@ -2,7 +2,7 @@
 
 Run phases one at a time. This file must be regenerated from the actual repository state after every `/goal` run. Do not copy stale assumptions forward.
 
-The current exact next incomplete phase is **Phase 5A: multipart/form-data s2.cpp client compatibility**.
+The current exact next incomplete phase is **Phase 5B: streaming async iterator over s2.cpp response bytes**.
 
 ## Prompt-generation guidance
 
@@ -20,7 +20,7 @@ Every future generated prompt must:
 
 If an intermediate phase is proposed, it must state why it is required, which approved phase it blocks, exact scope, acceptance criteria, and whether it changes the approved architecture.
 
-## Next immediate prompt: Phase 5A
+## Next immediate prompt: Phase 5B
 
 ```text
 /goal
@@ -30,7 +30,7 @@ Project:
 /workspace/wyoming-s2cpp-tts
 
 Goal:
-Implement Phase 5A only: add multipart/form-data s2.cpp client compatibility while preserving the existing fake backend and mocked buffered behavior.
+Implement Phase 5B only: add a streaming client interface that exposes s2.cpp HTTP response bytes progressively using mocked chunked responses, while preserving the existing fake backend, JSON buffered client path, multipart buffered client path, and Wyoming behavior.
 
 Quota protection:
 
@@ -40,7 +40,8 @@ Quota protection:
 * Do not build Docker.
 * Do not build CUDA.
 * Do not run GPU tests.
-* Do not implement streaming, Wyoming streaming changes, metrics/tracing, cancellation, Home Assistant integration, or Docker/Unraid deployment behavior in this phase.
+* Do not pipe streamed audio into Wyoming events yet; that is Phase 5C.
+* Do not implement metrics/tracing, cancellation, Home Assistant integration, Docker/Unraid deployment behavior, or real latency measurement in this phase.
 * Use mocked HTTP/client tests only unless an already-running backend is explicitly provided.
 * Make one focused commit.
 
@@ -58,36 +59,35 @@ Inspect the current repository state before editing, including at minimum:
 * README.md
 * docs/ROADMAP.md
 * docs/NEXT_GOAL_PROMPTS.md
-* docs/CUDA_S2CPP_PLAN.md
 * TODO.md
 * CHANGELOG.md
 
 Scope:
 
-* Add multipart/form-data request construction support to the s2.cpp client layer.
+* Add a streaming response interface to the s2.cpp client layer, likely in app/s2_client.py.
 * Keep backend HTTP details in app/s2_client.py.
 * Preserve `TTS_BACKEND=fake` as the default.
-* Preserve existing JSON/buffered behavior unless tests and documentation clearly justify a safe migration.
-* Add or update mocked tests that verify multipart request method, URL, content type, payload fields, and any file/reference handling without requiring a real backend.
-* Document unresolved upstream assumptions about exact s2.cpp multipart field names and compatibility.
-* Update roadmap/status docs only as needed for Phase 5A.
+* Preserve existing `S2Client.generate(...)` JSON buffered behavior.
+* Preserve existing `S2Client.generate_multipart(...)` multipart buffered behavior.
+* Use mocked chunked HTTP responses to prove bytes can be consumed progressively.
+* Represent stream errors and partial-stream cleanup clearly enough for later Phase 5C/6 work.
+* Do not change Wyoming event emission in this phase.
+* Document that real backend streaming remains unverified until a real s2.cpp backend is tested.
+* Update roadmap/status docs only as needed for Phase 5B.
 
 Acceptance criteria:
 
 * Existing fake Wyoming tests still pass.
-* Existing buffered s2cpp mocked tests still pass or are intentionally migrated with equivalent coverage.
-* Multipart/form-data request construction is covered by mocked tests.
-* No real s2.cpp, CUDA, GPU, Docker, Home Assistant, streaming, cancellation, audio-quality, or latency success is claimed.
+* Existing buffered JSON and multipart s2cpp mocked tests still pass.
+* New mocked streaming tests prove the client can yield chunks progressively without reading the full response first.
+* Stream error/cleanup behavior is covered by mocked tests where practical.
+* No real s2.cpp, CUDA, GPU, Docker, Home Assistant, Wyoming streaming, cancellation, audio-quality, or latency success is claimed.
 * Runtime behavior remains default-safe with `TTS_BACKEND=fake`.
-* ROADMAP.md, TODO.md, NEXT_GOAL_PROMPTS.md, and CHANGELOG.md reflect Phase 5A status after the change.
-* The final response includes files changed, tests run, git status, commit hash/message, unresolved unknowns, and the complete ready-to-paste `/goal` prompt for Phase 5B or a justified intermediate phase.
+* ROADMAP.md, TODO.md, NEXT_GOAL_PROMPTS.md, and CHANGELOG.md reflect Phase 5B status after the change.
+* The final response includes files changed, tests run, git status, commit hash/message, unresolved unknowns, and the complete ready-to-paste `/goal` prompt for Phase 5C or a justified intermediate phase.
 ```
 
 ## Approved later phase skeletons
-
-### Phase 5B
-
-Implement a streaming async iterator over s2.cpp response bytes with mocked chunked responses. Do not pipe streamed audio into Wyoming yet unless the current prompt explicitly expands scope.
 
 ### Phase 5C
 

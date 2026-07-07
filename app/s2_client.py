@@ -1,13 +1,15 @@
 """s2.cpp HTTP client for an already-running backend server.
 
-Phase 2 only adds a small client for a separate s2.cpp HTTP `/generate`
-endpoint. This module does not start, build, compile, package, or supervise
-s2.cpp, and it does not download models.
+This module contains backend-client-only helpers for a separate s2.cpp HTTP
+`/generate` endpoint. It supports the existing buffered JSON path and the Phase
+5A buffered multipart/form-data path. It does not start, build, compile,
+package, or supervise s2.cpp, and it does not download models.
 """
 
 from __future__ import annotations
 
 import json
+import uuid
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -17,6 +19,66 @@ from app.config import Settings
 
 # Imported as a module-level name so tests can patch app.s2_client.urlopen.
 urlopen = urllib.request.urlopen
+
+MultipartFiles = dict[str, tuple[str, bytes, str]]
+
+
+def _stringify_multipart_value(value: Any) -> str:
+    """Convert scalar payload values to form field strings.
+
+    Booleans intentionally use lowercase strings because typical multipart form
+    endpoints receive scalar values as text, not JSON tokens.
+    """
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def _quote_multipart_header_value(value: str) -> str:
+    """Quote a multipart header parameter value for deterministic tests."""
+    return value.replace("\\", "\\\\").replace('"', r'\"')
+
+
+def encode_multipart_form_data(
+    fields: dict[str, Any],
+    files: MultipartFiles | None = None,
+    boundary: str | None = None,
+) -> tuple[str, bytes]:
+    """Encode fields/files as multipart/form-data.
+
+    Phase 5A uses this for mocked request-construction compatibility only. The
+    exact upstream s2.cpp field names are still unverified, so callers should
+    keep tests explicit when adapting this later.
+    """
+    active_boundary = boundary or f"wyoming-s2cpp-tts-{uuid.uuid4().hex}"
+    chunks: list[bytes] = []
+
+    for name, value in fields.items():
+        chunks.append(f"--{active_boundary}\r\n".encode("utf-8"))
+        chunks.append(
+            (
+                "Content-Disposition: form-data; "
+                f'name="{_quote_multipart_header_value(name)}"\r\n\r\n'
+            ).encode("utf-8")
+        )
+        chunks.append(_stringify_multipart_value(value).encode("utf-8"))
+        chunks.append(b"\r\n")
+
+    for name, (filename, content, content_type) in (files or {}).items():
+        chunks.append(f"--{active_boundary}\r\n".encode("utf-8"))
+        chunks.append(
+            (
+                "Content-Disposition: form-data; "
+                f'name="{_quote_multipart_header_value(name)}"; '
+                f'filename="{_quote_multipart_header_value(filename)}"\r\n'
+                f"Content-Type: {content_type}\r\n\r\n"
+            ).encode("utf-8")
+        )
+        chunks.append(content)
+        chunks.append(b"\r\n")
+
+    chunks.append(f"--{active_boundary}--\r\n".encode("utf-8"))
+    return f"multipart/form-data; boundary={active_boundary}", b"".join(chunks)
 
 
 class S2ClientError(RuntimeError):
@@ -106,6 +168,15 @@ class S2GenerateRequest:
             payload["voice"] = self.voice
         return payload
 
+    def to_multipart_fields(self) -> dict[str, Any]:
+        """Convert to multipart scalar fields.
+
+        This intentionally mirrors the existing JSON payload keys for Phase 5A.
+        The exact upstream multipart field names are unresolved until verified
+        against a real s2.cpp backend.
+        """
+        return self.to_payload()
+
 
 @dataclass(frozen=True)
 class S2GenerateResult:
@@ -127,23 +198,8 @@ class S2Client:
         """Create a client from app settings."""
         return cls(S2Endpoint.from_settings(settings))
 
-    def generate(self, request: S2GenerateRequest) -> S2GenerateResult:
-        """POST to `/generate` and return raw audio bytes.
-
-        This intentionally buffers the response for Phase 2. Progressive
-        streaming belongs in Phase 5.
-        """
-        body = json.dumps(request.to_payload()).encode("utf-8")
-        http_request = urllib.request.Request(
-            self.endpoint.generate_url,
-            data=body,
-            method="POST",
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "audio/L16, audio/wav, application/octet-stream, */*",
-            },
-        )
-
+    def _read_generate_response(self, http_request: urllib.request.Request) -> S2GenerateResult:
+        """Send a prepared `/generate` request and return buffered audio."""
         try:
             with urlopen(http_request, timeout=self.timeout_seconds) as response:
                 audio = response.read()
@@ -155,3 +211,48 @@ class S2Client:
             raise S2ClientError(f"s2.cpp /generate failed: {exc}") from exc
 
         return S2GenerateResult(audio=audio, content_type=content_type)
+
+    def generate(self, request: S2GenerateRequest) -> S2GenerateResult:
+        """POST JSON to `/generate` and return raw audio bytes.
+
+        This intentionally buffers the response for Phase 2. Progressive
+        streaming belongs in Phase 5B/5C.
+        """
+        body = json.dumps(request.to_payload()).encode("utf-8")
+        http_request = urllib.request.Request(
+            self.endpoint.generate_url,
+            data=body,
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "audio/L16, audio/wav, application/octet-stream, */*",
+            },
+        )
+        return self._read_generate_response(http_request)
+
+    def generate_multipart(
+        self,
+        request: S2GenerateRequest,
+        files: MultipartFiles | None = None,
+        boundary: str | None = None,
+    ) -> S2GenerateResult:
+        """POST multipart/form-data to `/generate` and return raw audio bytes.
+
+        Phase 5A adds request-construction compatibility only. This method still
+        buffers the backend response and does not implement streaming.
+        """
+        content_type, body = encode_multipart_form_data(
+            fields=request.to_multipart_fields(),
+            files=files,
+            boundary=boundary,
+        )
+        http_request = urllib.request.Request(
+            self.endpoint.generate_url,
+            data=body,
+            method="POST",
+            headers={
+                "Content-Type": content_type,
+                "Accept": "audio/L16, audio/wav, application/octet-stream, */*",
+            },
+        )
+        return self._read_generate_response(http_request)

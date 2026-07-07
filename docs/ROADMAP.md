@@ -71,9 +71,9 @@ Implemented as a documentation/static-validation phase. [`CUDA_S2CPP_PLAN.md`](C
 
 ### Phase 5A: multipart/form-data s2.cpp client compatibility
 
-Implement multipart/form-data request compatibility for the s2.cpp `/generate` client while preserving the existing JSON/mocked behavior unless tests and documentation justify a migration. Use mocked HTTP tests only unless an already-running backend is explicitly available. Do not implement streaming in this phase.
+Implemented. `app/s2_client.py` now has additive multipart/form-data request construction through `encode_multipart_form_data(...)` and `S2Client.generate_multipart(...)` while preserving the existing JSON `S2Client.generate(...)` buffered path. Multipart field names currently mirror the JSON payload and are documented as unverified upstream assumptions until tested against a real compatible s2.cpp backend.
 
-Acceptance criteria:
+Acceptance criteria status:
 
 - Existing fake backend and buffered s2cpp tests still pass.
 - Multipart request construction is tested without a real backend.

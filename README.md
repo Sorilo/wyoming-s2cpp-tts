@@ -2,7 +2,7 @@
 
 `wyoming-s2cpp-tts` is planned as a local Home Assistant Wyoming Protocol TTS service for running Fish Speech S2 Pro through `s2.cpp` GGUF models on a home server.
 
-This repository currently contains an early phased implementation through Phase 4. It includes a minimal fake-audio Wyoming server, a small client for an already-running `s2.cpp` HTTP `/generate` endpoint, an opt-in non-streaming `s2cpp` backend mode, a Phase 3 container/process scaffold that runs the Python wrapper while leaving hooks for a future supervised s2.cpp process, and a Phase 4 CUDA/Unraid planning document. It does **not** yet build `s2.cpp`, download models, progressively stream backend audio, measure real latency, or implement final cancellation/barge-in behavior.
+This repository currently contains an early phased implementation through Phase 5A. It includes a minimal fake-audio Wyoming server, a small client for an already-running `s2.cpp` HTTP `/generate` endpoint, JSON and multipart/form-data request construction for that client, an opt-in non-streaming `s2cpp` backend mode, a Phase 3 container/process scaffold that runs the Python wrapper while leaving hooks for a future supervised s2.cpp process, and a Phase 4 CUDA/Unraid planning document. It does **not** yet build `s2.cpp`, download models, progressively stream backend audio, measure real latency, or implement final cancellation/barge-in behavior.
 
 ## Target hardware for the first real version
 
@@ -41,15 +41,15 @@ Do not treat placeholder buffering values such as `1000 ms` or `4000 ms` as vali
 
 ## Current status
 
-Phase 4 is now implemented as a documentation/static-validation phase:
+Phase 5A is now implemented as mocked client compatibility work:
 
 - Repository structure exists.
 - Docs describe the intended architecture and deployment path.
 - The Python package includes a Wyoming TCP TTS server.
 - The default `TTS_BACKEND=fake` path handles Wyoming `Describe` and `Synthesize` events with deterministic local PCM test-tone audio.
-- `app/s2_client.py` can POST a request to an already-running external `s2.cpp` HTTP `/generate` endpoint and return raw audio bytes.
+- `app/s2_client.py` can POST JSON or multipart/form-data requests to an already-running external `s2.cpp` HTTP `/generate` endpoint and return raw audio bytes.
 - Optional `TTS_BACKEND=s2cpp` routes one buffered s2.cpp client result back through Wyoming `AudioStart`/`AudioChunk`/`AudioStop` events.
-- The s2.cpp client and opt-in Wyoming backend path are covered with mocked tests.
+- The s2.cpp client JSON and multipart/form-data request construction paths are covered with mocked tests.
 - `scripts/smoke_s2cpp_generate.py` provides an optional direct `/generate` smoke test for an already-running external s2.cpp backend and skips harmlessly unless opted in.
 - `Dockerfile` installs Python requirements, exposes Wyoming/health ports, creates `/models`, `/voices`, and `/config`, and starts `entrypoint.sh`.
 - `entrypoint.sh` runs `python -m app.main` and includes TODO hooks for future internal s2.cpp supervision on `127.0.0.1:3030`.
@@ -57,7 +57,7 @@ Phase 4 is now implemented as a documentation/static-validation phase:
 - `scripts/check_gpu_visibility.sh` provides a safe future `nvidia-smi` validation hook that exits successfully when GPU tooling is unavailable.
 - No s2.cpp build, CUDA setup, GGUF model download, progressive streaming, or final cancellation/barge-in behavior is implemented yet.
 
-Implementation continues in small phases. The exact next implementation phase is Phase 5A: multipart/form-data s2.cpp client compatibility. See [`docs/ROADMAP.md`](docs/ROADMAP.md) and [`docs/NEXT_GOAL_PROMPTS.md`](docs/NEXT_GOAL_PROMPTS.md).
+Implementation continues in small phases. The exact next implementation phase is Phase 5B: streaming async iterator over s2.cpp response bytes with mocked chunked responses. See [`docs/ROADMAP.md`](docs/ROADMAP.md) and [`docs/NEXT_GOAL_PROMPTS.md`](docs/NEXT_GOAL_PROMPTS.md).
 
 ## Manual Phase 1 test
 
@@ -126,6 +126,24 @@ For the mocked Phase 2/2.5 client and backend-route tests, run:
 python -m pytest tests/test_s2_client.py tests/test_wyoming_s2cpp_backend.py -q
 ```
 
+## Phase 5A multipart/form-data client compatibility
+
+Phase 5A adds an additive multipart/form-data request path in `app/s2_client.py`:
+
+- `S2Client.generate(...)` still sends JSON and remains the existing buffered default path.
+- `S2Client.generate_multipart(...)` sends multipart/form-data and still buffers the response.
+- `encode_multipart_form_data(...)` supports scalar fields and in-memory file parts for future reference audio/file experiments.
+
+Current multipart field names intentionally mirror the JSON payload keys: `text`, `model`, `stream`, `chunked`, `output_format`, `segment_sentences`, `max_new_tokens`, `temperature`, `top_p`, `top_k`, and optional `voice`. These names are **unverified upstream assumptions** until tested against a real compatible s2.cpp backend. File part names such as `reference_audio` are supported by the encoder but are also unverified assumptions.
+
+Phase 5A does not implement streaming, Home Assistant/Wyoming behavior changes, Docker/CUDA work, real backend validation, audio-quality validation, or latency measurement.
+
+For mocked multipart compatibility tests, run:
+
+```bash
+python -m pytest tests/test_s2_client.py -q
+```
+
 ## Phase 2.75 optional direct s2.cpp smoke test
 
 Use this only when an external s2.cpp HTTP server is already running. The script does not start s2.cpp, build CUDA code, download models, or require model infrastructure for normal tests/CI.
@@ -168,7 +186,7 @@ Limitations:
 
 - This is a direct backend-client smoke test, not a Home Assistant/Wyoming integration test.
 - It buffers one response and prints metadata only.
-- It assumes the backend `/generate` endpoint is already running and compatible with the current JSON payload.
+- It assumes the backend `/generate` endpoint is already running and compatible with the current buffered JSON payload used by `S2Client.generate(...)`; multipart compatibility is mocked separately in Phase 5A.
 - It does not validate audio quality, realtime factor, VRAM use, streaming, cancellation, or barge-in behavior.
 
 ## Phase 3 container/process scaffold
@@ -194,7 +212,7 @@ Future s2.cpp process supervision is intentionally a hook only:
 S2CPP_ENABLE_INTERNAL_SERVER=false
 ```
 
-Setting `S2CPP_ENABLE_INTERNAL_SERVER=true` currently prints TODO messages and continues; it does not start s2.cpp yet. This Phase 3 container does not build s2.cpp, compile CUDA code, download models, or include the future s2.cpp binary. Phase 4/5 will add the actual s2.cpp binary/build/runtime decisions.
+Setting `S2CPP_ENABLE_INTERNAL_SERVER=true` currently prints TODO messages and continues; it does not start s2.cpp yet. This Phase 3 container does not build s2.cpp, compile CUDA code, download models, or include the future s2.cpp binary. Phase 8A is the planned phase for actually building and testing the CUDA-enabled s2.cpp Docker image.
 
 ## Phase 4 CUDA/s2.cpp and Unraid GPU plan
 

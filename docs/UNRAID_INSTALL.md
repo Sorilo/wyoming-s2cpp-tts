@@ -62,15 +62,16 @@ That mode validates the Wyoming container path with deterministic fake audio bef
 
 ## NVIDIA GPU notes
 
-This service is intended to use one NVIDIA RTX 3080 10 GB for the first real version. Do not assume an exact Unraid NVIDIA setup until verified.
+This service is intended to use one NVIDIA RTX 3080 10 GB for the first real version. Do not assume an exact Unraid NVIDIA setup until verified. See [`CUDA_S2CPP_PLAN.md`](CUDA_S2CPP_PLAN.md) for the Phase 4 CUDA/s2.cpp plan and the current untested assumptions.
 
 General checks for a future implementation:
 
 1. Install/configure the Unraid NVIDIA plugin or equivalent supported NVIDIA runtime path.
 2. Confirm the GPU is visible on the host with `nvidia-smi`.
 3. Configure the container runtime/extra parameters according to the verified Unraid NVIDIA setup.
-4. Pass only the intended GPU to the container when possible.
-5. Confirm `nvidia-smi` works inside the container before debugging TTS.
+4. Run `scripts/check_gpu_visibility.sh` inside the future GPU-enabled container.
+5. Confirm the script reports `nvidia-smi` success and shows the expected device.
+6. Confirm `nvidia-smi` works inside the container before debugging TTS.
 
 Typical future environment variables may include:
 

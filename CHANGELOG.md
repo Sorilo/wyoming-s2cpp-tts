@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Implemented Phase 4 CUDA/s2.cpp and Unraid NVIDIA runtime plan without building or downloading models.
+- Added `docs/CUDA_S2CPP_PLAN.md` with untested build assumptions, s2.cpp server flag references, and future Dockerfile shape.
+- Added safe `scripts/check_gpu_visibility.sh` for future in-container `nvidia-smi` validation.
+- Added Dockerfile Phase 4 TODO placeholders for future CUDA/s2.cpp multi-stage build.
 - Implemented Phase 3 Dockerfile/entrypoint process scaffold for running the Python Wyoming wrapper in a container.
 - Added future `S2CPP_ENABLE_INTERNAL_SERVER` hook/TODOs for supervised s2.cpp startup on `127.0.0.1:3030`.
 - Documented Phase 3 Unraid path, port, and environment variable expectations.

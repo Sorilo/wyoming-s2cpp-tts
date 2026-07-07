@@ -26,7 +26,7 @@ Implemented at the container/process-structure level. The Dockerfile installs Py
 
 ## Phase 4: CUDA/s2.cpp build and Unraid GPU support
 
-Add the CUDA-capable s2.cpp build path, NVIDIA runtime notes, and Unraid GPU setup validation. Verify with `nvidia-smi` and a tiny synthesis test.
+Implemented as a documentation/static-validation phase. [`CUDA_S2CPP_PLAN.md`](CUDA_S2CPP_PLAN.md) records the untested future CUDA/s2.cpp build plan, relevant `sinfisum/s2pro-gguf` server flags, NVIDIA/Unraid runtime variables, and explicit non-claims. `scripts/check_gpu_visibility.sh` provides a safe `nvidia-smi` check that exits successfully when GPU tooling is unavailable.
 
 ## Phase 5: streaming TTS and low time-to-first-audio
 

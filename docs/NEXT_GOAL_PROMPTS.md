@@ -1,39 +1,33 @@
 # Next Hermes `/goal` prompts
 
-Run these phases one at a time. Keep each run small. Phase 3 is complete; the next immediate goal is Phase 4: document and, only if clearly safe, lightly validate the CUDA/s2.cpp build and Unraid GPU runtime path. Do not download large models.
+Run these phases one at a time. Keep each run small. Phase 4 is complete as a documentation/static-validation phase; the next immediate goal is Phase 5 streaming plumbing with mocks unless a real backend is already available.
 
-## Next immediate prompt: Phase 4
+## Next immediate prompt: Phase 5
 
 ```text
 /goal
-You are Hermes, acting as a senior local-AI/Unraid GPU container engineer.
+You are Hermes, acting as a senior Python/Home Assistant Wyoming Protocol engineer.
 
 Project: /workspace/wyoming-s2cpp-tts
 
-Quota protection: Keep this run small. Do not download GGUF models. Do not perform long CUDA builds. Do not run Docker builds unless they are explicitly cheap and safe. Prefer documentation, scripts, and static checks over heavy build work.
+Quota protection: Keep this run small. Do not download GGUF models. Do not perform CUDA builds. Do not run Docker builds unless explicitly cheap and safe. Use mocked backend responses if no real s2.cpp server is available.
 
-Goal: Implement Phase 4 only: research and add a precise CUDA/s2.cpp build and Unraid NVIDIA runtime plan for this repo, with lightweight validation hooks where possible.
+Goal: Implement Phase 5 only: add streaming TTS plumbing from s2.cpp HTTP output to Wyoming audio chunks, focusing on low time-to-first-audio and measurement hooks.
 
 Requirements:
-- Inspect the current Phase 3 Dockerfile/entrypoint and docs first.
-- Keep fake backend as default and keep all tests passing.
-- Do not vendor s2.cpp or download models.
-- Do not claim CUDA/s2.cpp build success unless actually tested.
-- Add docs for the intended future CUDA base image/build path and Unraid NVIDIA runtime settings.
-- Add a lightweight script or checklist for verifying GPU visibility (`nvidia-smi`) inside a future container.
-- Add placeholders/TODOs in Dockerfile or docs for where the s2.cpp binary/build stage will go.
-- Keep `/models`, `/voices`, `/config`, `10200`, `8088`, and internal `3030` conventions intact.
+- Inspect the current Phase 4 docs, s2_client, and wyoming_server implementation first.
+- Keep `TTS_BACKEND=fake` as default and keep all tests passing.
+- Do not build/vendor s2.cpp or download models.
+- Do not claim real streaming backend success unless actually tested against a running backend.
+- Add/adjust client interfaces so mocked chunked backend audio can be converted progressively into Wyoming `AudioStart`/`AudioChunk`/`AudioStop`.
+- Include WAV-header handling if the mocked backend uses WAV; otherwise clearly document raw PCM assumptions.
+- Add lightweight timing/measurement hooks for time-to-first-audio and bytes/chunks emitted.
+- Preserve existing buffered `s2cpp` mode or migrate it safely with tests.
+- Use tests with mocked streaming responses; do not require GPU/model infrastructure.
 - Run the cheapest relevant tests/static checks available.
 - Make one git commit with a clear message.
 
 Final response: summarize files changed, tests run, git status, and the next recommended prompt.
-```
-
-## Phase 5 prompt
-
-```text
-/goal
-Implement Phase 5 for /workspace/wyoming-s2cpp-tts: add streaming TTS plumbing from s2.cpp HTTP output to Wyoming audio chunks. Focus on low time-to-first-audio, WAV-header handling if needed, chunk sizing, and measurement hooks. Use mocks if the real backend is unavailable. Commit the change.
 ```
 
 ## Phase 6 prompt

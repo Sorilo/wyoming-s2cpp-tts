@@ -35,7 +35,7 @@ The Python wrapper is responsible for translating Home Assistant/Wyoming TTS req
 
 ## Current status
 
-Phase 3 is now implemented at a container/process-structure level:
+Phase 4 is now implemented as a documentation/static-validation phase:
 
 - Repository structure exists.
 - Docs describe the intended architecture and deployment path.
@@ -47,6 +47,8 @@ Phase 3 is now implemented at a container/process-structure level:
 - `scripts/smoke_s2cpp_generate.py` provides an optional direct `/generate` smoke test for an already-running external s2.cpp backend and skips harmlessly unless opted in.
 - `Dockerfile` installs Python requirements, exposes Wyoming/health ports, creates `/models`, `/voices`, and `/config`, and starts `entrypoint.sh`.
 - `entrypoint.sh` runs `python -m app.main` and includes TODO hooks for future internal s2.cpp supervision on `127.0.0.1:3030`.
+- `docs/CUDA_S2CPP_PLAN.md` documents the untested future CUDA/s2.cpp build plan, Unraid NVIDIA runtime variables, and GPU visibility checklist.
+- `scripts/check_gpu_visibility.sh` provides a safe future `nvidia-smi` validation hook that exits successfully when GPU tooling is unavailable.
 - No s2.cpp build, CUDA setup, GGUF model download, progressive streaming, or final cancellation/barge-in behavior is implemented yet.
 
 Implementation continues in small phases. See [`docs/ROADMAP.md`](docs/ROADMAP.md) and [`docs/NEXT_GOAL_PROMPTS.md`](docs/NEXT_GOAL_PROMPTS.md).
@@ -187,6 +189,18 @@ S2CPP_ENABLE_INTERNAL_SERVER=false
 ```
 
 Setting `S2CPP_ENABLE_INTERNAL_SERVER=true` currently prints TODO messages and continues; it does not start s2.cpp yet. This Phase 3 container does not build s2.cpp, compile CUDA code, download models, or include the future s2.cpp binary. Phase 4/5 will add the actual s2.cpp binary/build/runtime decisions.
+
+## Phase 4 CUDA/s2.cpp and Unraid GPU plan
+
+See [`docs/CUDA_S2CPP_PLAN.md`](docs/CUDA_S2CPP_PLAN.md) for the current future build/runtime plan. Phase 4 added documentation and validation hooks only:
+
+- A future multi-stage CUDA Dockerfile shape is documented but not enabled.
+- The relevant external s2.cpp reference found was `sinfisum/s2pro-gguf`; its Linux/Unraid build has not been tested here.
+- The planned server flags include `--server`, `--model`, `--tokenizer`, `--ngl 36`, and `--cuda 0`, subject to Linux verification.
+- Future Unraid/NVIDIA variables include `NVIDIA_VISIBLE_DEVICES` and `NVIDIA_DRIVER_CAPABILITIES=compute,utility`.
+- `scripts/check_gpu_visibility.sh` can be run inside a future GPU-enabled container to check `nvidia-smi` safely.
+
+No CUDA/s2.cpp build success is claimed by this repo yet.
 
 ## GitHub remote
 

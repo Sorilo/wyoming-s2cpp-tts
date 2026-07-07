@@ -71,7 +71,7 @@ Implemented as a documentation/static-validation phase. [`CUDA_S2CPP_PLAN.md`](C
 
 ### Phase 5A: multipart/form-data s2.cpp client compatibility
 
-Implemented. `app/s2_client.py` now has additive multipart/form-data request construction through `encode_multipart_form_data(...)` and `S2Client.generate_multipart(...)` while preserving the existing JSON `S2Client.generate(...)` buffered path. Multipart field names currently mirror the JSON payload and are documented as unverified upstream assumptions until tested against a real compatible s2.cpp backend.
+Implemented. `app/s2_client.py` now has additive multipart/form-data request construction through `encode_multipart_form_data(...)` and `S2Client.generate_multipart(...)` while preserving the existing JSON `S2Client.generate(...)` buffered path. **Phase 5A.1 corrected the multipart field names** against the upstream reference client (sinfisum/s2pro-gguf s2_test_client.py); the canonical fields are now `text`, `params` (one JSON string), optional `prompt_text`, and optional `prompt_audio` file part.
 
 Acceptance criteria status:
 
@@ -79,6 +79,32 @@ Acceptance criteria status:
 - Multipart request construction is tested without a real backend.
 - Required fields/files are documented, including unresolved upstream assumptions.
 - No real s2.cpp, CUDA, GPU, or latency success is claimed.
+
+### Phase 5A.1: verify and correct s2.cpp multipart request shape
+
+Implemented. Verified the upstream s2.cpp POST /generate multipart/form-data contract against the official reference client at `sinfisum/s2pro-gguf` (`s2_test_client.py`, commit `0cd2864`, retrieved 2026-07-07). The canonical multipart fields are:
+
+- `text` — required top-level string field
+- `params` — one JSON-encoded string containing generation settings (`temperature`, `top_p`, `top_k`, `max_new_tokens`, `output_format`, `segment_sentences`)
+- `prompt_text` — optional string field; transcript for reference audio
+- `prompt_audio` — optional file part (filename, bytes, media type); reference audio for voice cloning
+
+Individual generation settings (`model`, `voice`, `stream`, `chunked`, `output_format`, `temperature`, etc.) are NOT top-level multipart fields — they belong inside the `params` JSON string. Input validation rejects `prompt_audio` without `prompt_text`.
+
+Compatibility is validated against upstream documentation/source and mocked tests only. Real s2.cpp compatibility remains unverified until Phase 5.5.
+
+Acceptance criteria status:
+
+- Canonical multipart fields verified against upstream reference client.
+- `params` is a single JSON string, not flattened fields.
+- `prompt_audio` file part and `prompt_text` field are paired correctly.
+- Empty optional fields are omitted.
+- Invalid reference-audio combinations raise `ValueError`.
+- Existing JSON-buffered and fake Wyoming tests still pass.
+- 16 s2_client tests pass (4 JSON-buffered + 12 multipart/encoder).
+- Full 42-test suite passes.
+- No real s2.cpp, CUDA, GPU, Docker, or latency success claimed.
+
 
 ### Phase 5B: streaming async iterator over s2.cpp response bytes
 

@@ -2,8 +2,9 @@
 
 This module contains backend-client-only helpers for a separate s2.cpp HTTP
 `/generate` endpoint. It supports the existing buffered JSON path and the Phase
-5A buffered multipart/form-data path. It does not start, build, compile,
-package, or supervise s2.cpp, and it does not download models.
+5A.1 buffered multipart/form-data path using the verified canonical upstream
+multipart fields. It does not start, build, compile, package, or supervise
+s2.cpp, and it does not download models.
 """
 
 from __future__ import annotations
@@ -46,9 +47,8 @@ def encode_multipart_form_data(
 ) -> tuple[str, bytes]:
     """Encode fields/files as multipart/form-data.
 
-    Phase 5A uses this for mocked request-construction compatibility only. The
-    exact upstream s2.cpp field names are still unverified, so callers should
-    keep tests explicit when adapting this later.
+    Phase 5A.1 verified the canonical upstream s2.cpp multipart fields
+    against the reference client in sinfisum/s2pro-gguf.
     """
     active_boundary = boundary or f"wyoming-s2cpp-tts-{uuid.uuid4().hex}"
     chunks: list[bytes] = []
@@ -110,10 +110,13 @@ class S2Endpoint:
 
 @dataclass(frozen=True)
 class S2GenerateRequest:
-    """Request payload for s2.cpp `/generate`.
+    """Request payload for s2.cpp ``/generate``.
 
-    The exact upstream endpoint shape may evolve as s2.cpp is verified. Keep the
-    payload explicit and tested so later phases can adapt it safely.
+    The JSON payload shape (``to_payload``) is the existing Phase 2 buffered
+    format. The multipart format (``to_multipart_fields``) was verified against
+    the upstream s2.cpp reference client (``sinfisum/s2pro-gguf``
+    ``s2_test_client.py``) in Phase 5A.1 and uses the canonical fields:
+    ``text``, ``params`` (one JSON string), and optional ``prompt_text``.
     """
 
     text: str
@@ -127,6 +130,7 @@ class S2GenerateRequest:
     temperature: float = 0.58
     top_p: float = 0.88
     top_k: int = 40
+    prompt_text: str = ""
 
     @classmethod
     def from_settings(
@@ -134,6 +138,7 @@ class S2GenerateRequest:
         text: str,
         settings: Settings,
         voice: str | None = None,
+        prompt_text: str = "",
     ) -> "S2GenerateRequest":
         """Create a generation request from app settings."""
         return cls(
@@ -148,6 +153,7 @@ class S2GenerateRequest:
             temperature=settings.s2_temperature,
             top_p=settings.s2_top_p,
             top_k=settings.s2_top_k,
+            prompt_text=prompt_text,
         )
 
     def to_payload(self) -> dict[str, Any]:
@@ -169,18 +175,39 @@ class S2GenerateRequest:
         return payload
 
     def to_multipart_fields(self) -> dict[str, Any]:
-        """Convert to multipart scalar fields.
+        """Convert to canonical s2.cpp multipart scalar fields.
 
-        This intentionally mirrors the existing JSON payload keys for Phase 5A.
-        The exact upstream multipart field names are unresolved until verified
-        against a real s2.cpp backend.
+        Verified against the upstream reference client at
+        ``sinfisum/s2pro-gguf`` (``s2_test_client.py``).  The canonical
+        format uses ``text`` as a required string field and ``params`` as a
+        single JSON-encoded string holding generation settings.  When
+        reference-audio cloning is requested, ``prompt_text`` accompanies
+        the ``prompt_audio`` file part.
+
+        Individual settings such as ``stream``, ``chunked``,
+        ``output_format``, ``model``, and ``voice`` are NOT top-level
+        multipart fields.
         """
-        return self.to_payload()
+        params: dict[str, Any] = {
+            "temperature": self.temperature,
+            "top_p": self.top_p,
+            "top_k": self.top_k,
+            "max_new_tokens": self.max_new_tokens,
+            "output_format": self.output_format,
+            "segment_sentences": self.segment_sentences,
+        }
+        fields: dict[str, Any] = {
+            "text": self.text,
+            "params": json.dumps(params),
+        }
+        if self.prompt_text:
+            fields["prompt_text"] = self.prompt_text
+        return fields
 
 
 @dataclass(frozen=True)
 class S2GenerateResult:
-    """Raw result returned by the external s2.cpp `/generate` endpoint."""
+    """Raw result returned by the external s2.cpp ``/generate`` endpoint."""
 
     audio: bytes
     content_type: str
@@ -199,7 +226,7 @@ class S2Client:
         return cls(S2Endpoint.from_settings(settings))
 
     def _read_generate_response(self, http_request: urllib.request.Request) -> S2GenerateResult:
-        """Send a prepared `/generate` request and return buffered audio."""
+        """Send a prepared ``/generate`` request and return buffered audio."""
         try:
             with urlopen(http_request, timeout=self.timeout_seconds) as response:
                 audio = response.read()
@@ -213,7 +240,7 @@ class S2Client:
         return S2GenerateResult(audio=audio, content_type=content_type)
 
     def generate(self, request: S2GenerateRequest) -> S2GenerateResult:
-        """POST JSON to `/generate` and return raw audio bytes.
+        """POST JSON to ``/generate`` and return raw audio bytes.
 
         This intentionally buffers the response for Phase 2. Progressive
         streaming belongs in Phase 5B/5C.
@@ -236,11 +263,20 @@ class S2Client:
         files: MultipartFiles | None = None,
         boundary: str | None = None,
     ) -> S2GenerateResult:
-        """POST multipart/form-data to `/generate` and return raw audio bytes.
+        """POST multipart/form-data to ``/generate`` and return raw audio bytes.
 
-        Phase 5A adds request-construction compatibility only. This method still
-        buffers the backend response and does not implement streaming.
+        Phase 5A.1 uses the verified canonical upstream fields.  When
+        ``files`` includes ``prompt_audio``, the caller must also provide
+        ``prompt_text`` on the request or a ``ValueError`` is raised.
+        This method still buffers the backend response and does not
+        implement streaming.
         """
+        has_prompt_audio = files and "prompt_audio" in files
+        if has_prompt_audio and not request.prompt_text:
+            raise ValueError(
+                "prompt_audio requires prompt_text (reference transcript)"
+            )
+
         content_type, body = encode_multipart_form_data(
             fields=request.to_multipart_fields(),
             files=files,

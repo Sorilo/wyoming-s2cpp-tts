@@ -4,6 +4,12 @@ Run phases one at a time. This file must be regenerated from the actual reposito
 
 The current exact next incomplete phase is **Phase 5B: streaming async iterator over s2.cpp response bytes**.
 
+## Completed intermediate phases
+
+### Phase 5A.1 (completed 2026-07-07)
+
+Verified and corrected the s2.cpp multipart/form-data request shape against the upstream reference client (sinfisum/s2pro-gguf s2_test_client.py, commit 0cd2864). Canonical fields: `text`, `params` (JSON string), `prompt_text`, `prompt_audio`. Generation settings are inside `params`, not top-level multipart fields.
+
 ## Prompt-generation guidance
 
 Every future generated prompt must:
@@ -16,7 +22,7 @@ Every future generated prompt must:
 - state which claims remain unverified;
 - require one focused commit;
 - require status/documentation updates;
-- require the final response to include the following phase’s complete ready-to-paste prompt.
+- require the final response to include the following phase's complete ready-to-paste prompt.
 
 If an intermediate phase is proposed, it must state why it is required, which approved phase it blocks, exact scope, acceptance criteria, and whether it changes the approved architecture.
 
@@ -30,7 +36,15 @@ Project:
 /workspace/wyoming-s2cpp-tts
 
 Goal:
-Implement Phase 5B only: add a streaming client interface that exposes s2.cpp HTTP response bytes progressively using mocked chunked responses, while preserving the existing fake backend, JSON buffered client path, multipart buffered client path, and Wyoming behavior.
+Implement Phase 5B only: add a streaming client interface that exposes s2.cpp HTTP response bytes progressively using mocked chunked responses, while preserving the existing fake backend, JSON buffered client path, Phase 5A.1 canonical multipart buffered client path, and Wyoming behavior.
+
+Current repository state (post Phase 5A.1):
+- app/s2_client.py: S2Client.generate() (JSON), S2Client.generate_multipart() (canonical multipart with text+params+prompt_text/prompt_audio), encode_multipart_form_data().
+- S2GenerateRequest.to_multipart_fields() returns {"text", "params": json_string} with optional "prompt_text".
+- S2GenerateRequest.to_payload() preserves the JSON format unchanged.
+- Input validation: prompt_audio without prompt_text raises ValueError.
+- 42 tests pass (16 s2_client, 4 Wyoming, 3 smoke, etc.).
+- TTS_BACKEND=fake remains default.
 
 Quota protection:
 
@@ -44,6 +58,7 @@ Quota protection:
 * Do not implement metrics/tracing, cancellation, Home Assistant integration, Docker/Unraid deployment behavior, or real latency measurement in this phase.
 * Use mocked HTTP/client tests only unless an already-running backend is explicitly provided.
 * Make one focused commit.
+* Do not change multipart field names or flatten params — the Phase 5A.1 canonical format is verified.
 
 Repository inspection requirement:
 
@@ -51,7 +66,7 @@ Inspect the current repository state before editing, including at minimum:
 
 * git status and recent git history
 * app/config.py
-* app/s2_client.py
+* app/s2_client.py (note: canonical multipart format from Phase 5A.1)
 * app/wyoming_server.py
 * tests/test_s2_client.py
 * tests/test_wyoming_s2cpp_backend.py
@@ -65,10 +80,11 @@ Inspect the current repository state before editing, including at minimum:
 Scope:
 
 * Add a streaming response interface to the s2.cpp client layer, likely in app/s2_client.py.
+* The streaming method should accept stream/chunked/output_format/low_latency options (see config.py: S2_STREAM, S2_CHUNKED, S2_OUTPUT_FORMAT, LOW_LATENCY_MODE) and add them to the multipart `params` JSON string when requested, without duplicating multipart-building logic.
 * Keep backend HTTP details in app/s2_client.py.
 * Preserve `TTS_BACKEND=fake` as the default.
 * Preserve existing `S2Client.generate(...)` JSON buffered behavior.
-* Preserve existing `S2Client.generate_multipart(...)` multipart buffered behavior.
+* Preserve existing `S2Client.generate_multipart(...)` canonical multipart buffered behavior (text + params JSON string, prompt_text/prompt_audio).
 * Use mocked chunked HTTP responses to prove bytes can be consumed progressively.
 * Represent stream errors and partial-stream cleanup clearly enough for later Phase 5C/6 work.
 * Do not change Wyoming event emission in this phase.
@@ -78,7 +94,7 @@ Scope:
 Acceptance criteria:
 
 * Existing fake Wyoming tests still pass.
-* Existing buffered JSON and multipart s2cpp mocked tests still pass.
+* Existing buffered JSON and canonical multipart s2cpp mocked tests still pass.
 * New mocked streaming tests prove the client can yield chunks progressively without reading the full response first.
 * Stream error/cleanup behavior is covered by mocked tests where practical.
 * No real s2.cpp, CUDA, GPU, Docker, Home Assistant, Wyoming streaming, cancellation, audio-quality, or latency success is claimed.

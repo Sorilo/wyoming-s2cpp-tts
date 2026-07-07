@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Phase 5A.1: verified and corrected the s2.cpp multipart/form-data request shape against the upstream reference client (sinfisum/s2pro-gguf s2_test_client.py).
+- Canonical multipart fields are now: `text` (required string), `params` (one JSON string with generation settings), optional `prompt_text`, and optional `prompt_audio` file part.
+- Generation settings are no longer flattened into individual multipart fields (`model`, `voice`, `stream`, `chunked` etc. are NOT top-level).
+- Added `prompt_text` field to `S2GenerateRequest` and input validation: `prompt_audio` without `prompt_text` raises `ValueError`.
+- Added comprehensive canonical-format multipart tests (16 total s2_client tests, all passing).
+- Compatibility validated against upstream documentation/source and mocked tests only; real s2.cpp compatibility remains unverified until Phase 5.5.
+- Preserved `TTS_BACKEND=fake` default, all existing JSON-buffered and fake Wyoming behavior.
+- Documented upstream API source, multipart fields, and unresolved assumptions.
 - Implemented Phase 5A multipart/form-data s2.cpp client compatibility with mocked request-construction tests.
 - Added additive `S2Client.generate_multipart(...)` and `encode_multipart_form_data(...)` while preserving existing JSON buffered behavior.
 - Documented unresolved upstream assumptions about exact multipart field/file names.

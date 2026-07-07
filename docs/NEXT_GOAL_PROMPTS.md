@@ -100,11 +100,21 @@ Scope:
 * Document that real backend streaming remains unverified until a real s2.cpp backend is tested.
 * Update roadmap/status docs only as needed for Phase 5B.
 
+Streaming lifecycle requirements:
+
+* Implement the streaming result as an async iterator or equivalent resource-safe interface.
+* Do not call a full-response read method before yielding chunks -- no implementation path may reconstruct the complete streamed body before exposing the first chunk.
+* The HTTP response and client resources must remain open while chunks are consumed and close after normal completion, backend error, or early consumer exit.
+* Preserve chunk order and ignore empty transport chunks where appropriate.
+* Do not implement broader cancellation or queue policy in this phase, but structure cleanup so Phase 6 can add cancellation safely.
+
 Acceptance criteria:
 
 * Existing fake Wyoming tests still pass.
 * Existing buffered JSON and canonical multipart s2cpp mocked tests still pass.
 * New mocked streaming tests prove the client can yield chunks progressively without reading the full response first.
+* A deterministic mocked test proves that the first chunk is yielded before the complete response or later chunks become available.
+* Tests prove response cleanup after normal completion, streaming failure, and early iterator close/break where practical.
 * Stream error/cleanup behavior is covered by mocked tests where practical.
 * No real s2.cpp, CUDA, GPU, Docker, Home Assistant, Wyoming streaming, cancellation, audio-quality, or latency success is claimed.
 * Runtime behavior remains default-safe with `TTS_BACKEND=fake`.

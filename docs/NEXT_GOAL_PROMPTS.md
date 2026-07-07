@@ -1,8 +1,8 @@
 # Next Hermes `/goal` prompts
 
-Run these phases one at a time. Keep each run small. Do **not** start the CUDA/s2.cpp build until the Wyoming server works with fake/test audio. Phase 1 is complete; the next immediate goal is Phase 2.
+Run these phases one at a time. Keep each run small. Do **not** start the CUDA/s2.cpp build until the Wyoming server works with fake/test audio and the backend client path is proven. Phase 2 is complete at the backend-client level; the next immediate goal is a small Phase 2.5 integration step.
 
-## Next immediate prompt: Phase 2
+## Next immediate prompt: Phase 2.5
 
 ```text
 /goal
@@ -12,17 +12,18 @@ Project: /workspace/wyoming-s2cpp-tts
 
 Quota protection: Keep this run small. Do not build s2.cpp, do not download models, do not run Docker builds, and do not implement final streaming/cancellation yet.
 
-Goal: Implement Phase 2 only: connect the Python wrapper to an already-running s2.cpp HTTP /generate endpoint while keeping the Phase 1 fake Wyoming server working.
+Goal: Implement Phase 2.5 only: wire the tested s2.cpp HTTP client into the Wyoming TTS path as an opt-in non-streaming backend mode, while keeping the Phase 1 fake PCM mode as the default fallback/test mode.
 
 Requirements:
-- Inspect the existing Phase 1 implementation first.
-- Keep Home Assistant/Wyoming behavior isolated in app/wyoming_server.py.
-- Implement backend-client code in app/s2_client.py.
-- Do not start, build, compile, or package s2.cpp in this phase.
-- Do not download GGUF models.
-- Add tests with mocked HTTP responses for the s2.cpp client.
-- Document how to point S2_HOST/S2_PORT at an external test server.
-- Keep fake PCM mode available as a fallback/test mode.
+- Inspect the existing Phase 1 Wyoming server and Phase 2 s2_client implementation first.
+- Keep Home Assistant/Wyoming protocol behavior in app/wyoming_server.py.
+- Keep backend HTTP details in app/s2_client.py.
+- Add a small config switch such as TTS_BACKEND=fake|s2cpp, defaulting to fake.
+- When TTS_BACKEND=fake, all existing fake Wyoming tests must keep passing.
+- When TTS_BACKEND=s2cpp, convert one buffered s2.cpp client result into Wyoming AudioStart/AudioChunk/AudioStop events.
+- Use mocked s2.cpp responses in tests; do not require a real backend.
+- Do not implement progressive streaming, cancellation, Docker packaging, CUDA builds, or model downloads.
+- Document the backend mode switch and limitations clearly.
 - Run the cheapest relevant tests available.
 - Make one git commit with a clear message.
 

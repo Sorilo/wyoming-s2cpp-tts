@@ -8,6 +8,7 @@ which defaults are intended for the first RTX 3080 target.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 
 
 WYOMING_URI = "tcp://0.0.0.0:10200"
@@ -75,3 +76,16 @@ class Settings:
     fake_tts_duration_ms: int = FAKE_TTS_DURATION_MS
     fake_tts_chunk_ms: int = FAKE_TTS_CHUNK_MS
     log_level: str = LOG_LEVEL
+
+    @classmethod
+    def from_env(cls) -> "Settings":
+        """Load minimal Phase 2 environment overrides.
+
+        Only `S2_HOST` and `S2_PORT` are parsed for now so an already-running
+        external s2.cpp HTTP server can be targeted without changing code.
+        Broader environment/profile loading belongs in a later hardening phase.
+        """
+        return cls(
+            s2_host=os.getenv("S2_HOST", S2_HOST),
+            s2_port=int(os.getenv("S2_PORT", str(S2_PORT))),
+        )

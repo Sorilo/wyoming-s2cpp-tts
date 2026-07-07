@@ -10,7 +10,11 @@ Implemented. The service can run a minimal Wyoming TCP fake TTS server that hand
 
 ## Phase 2: connect wrapper to existing s2.cpp HTTP `/generate`
 
-Add a thin client for a separately running s2.cpp HTTP server. Prove one request/response path with small text and saved/returned audio.
+Implemented at the backend-client level. `app/s2_client.py` can POST JSON to an already-running external `/generate` endpoint and return raw audio bytes. The Wyoming server still uses fake PCM; routing backend audio through Wyoming is deferred to Phase 2.5.
+
+## Phase 2.5: opt-in non-streaming s2.cpp backend mode
+
+Wire the tested s2.cpp client into the Wyoming `Synthesize` path behind a config switch, while keeping fake PCM as the default fallback/test mode. Convert one buffered backend response into Wyoming audio events. Do not implement final progressive streaming or cancellation yet.
 
 ## Phase 3: Docker container with s2.cpp supervised process
 

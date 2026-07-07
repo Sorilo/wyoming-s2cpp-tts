@@ -1,40 +1,32 @@
 # Next Hermes `/goal` prompts
 
-Run these phases one at a time. Keep each run small. Do **not** start the CUDA/s2.cpp build until the Wyoming server works with fake/test audio, the backend client path is proven, and the container/process structure is in place. Phase 2.75 is complete; the next immediate goal is Phase 3 container structure/supervision placeholders.
+Run these phases one at a time. Keep each run small. Phase 3 is complete; the next immediate goal is Phase 4: document and, only if clearly safe, lightly validate the CUDA/s2.cpp build and Unraid GPU runtime path. Do not download large models.
 
-## Next immediate prompt: Phase 3
+## Next immediate prompt: Phase 4
 
 ```text
 /goal
-You are Hermes, acting as a senior Python/Home Assistant Wyoming Protocol engineer.
+You are Hermes, acting as a senior local-AI/Unraid GPU container engineer.
 
 Project: /workspace/wyoming-s2cpp-tts
 
-Quota protection: Keep this run small. Do not build s2.cpp, do not download models, do not compile CUDA, and do not implement final streaming/cancellation yet.
+Quota protection: Keep this run small. Do not download GGUF models. Do not perform long CUDA builds. Do not run Docker builds unless they are explicitly cheap and safe. Prefer documentation, scripts, and static checks over heavy build work.
 
-Goal: Implement Phase 3 only: turn the placeholder Dockerfile and entrypoint into a container/process structure that can run the Python Wyoming wrapper and leave clear supervised-process hooks for a future s2.cpp server.
+Goal: Implement Phase 4 only: research and add a precise CUDA/s2.cpp build and Unraid NVIDIA runtime plan for this repo, with lightweight validation hooks where possible.
 
 Requirements:
-- Inspect the current Phase 2.75 implementation first.
+- Inspect the current Phase 3 Dockerfile/entrypoint and docs first.
 - Keep fake backend as default and keep all tests passing.
-- Do not build, compile, download, or vendor s2.cpp.
-- Do not run a Docker build unless it is extremely cheap and clearly safe; prefer static/smoke checks.
-- Update Dockerfile and entrypoint.sh to install Python requirements and run `python -m app.main`.
-- Add TODO/supervision hooks for future s2.cpp startup on 127.0.0.1:3030.
-- Keep Unraid WebUI Add Container compatibility in mind: env vars, ports 10200/8088, paths /models /voices /config.
-- Add lightweight tests or script checks for entrypoint behavior where possible without Docker/GPU/model infrastructure.
-- Document what the container can and cannot do yet.
-- Run the cheapest relevant tests available.
+- Do not vendor s2.cpp or download models.
+- Do not claim CUDA/s2.cpp build success unless actually tested.
+- Add docs for the intended future CUDA base image/build path and Unraid NVIDIA runtime settings.
+- Add a lightweight script or checklist for verifying GPU visibility (`nvidia-smi`) inside a future container.
+- Add placeholders/TODOs in Dockerfile or docs for where the s2.cpp binary/build stage will go.
+- Keep `/models`, `/voices`, `/config`, `10200`, `8088`, and internal `3030` conventions intact.
+- Run the cheapest relevant tests/static checks available.
 - Make one git commit with a clear message.
 
 Final response: summarize files changed, tests run, git status, and the next recommended prompt.
-```
-
-## Phase 4 prompt
-
-```text
-/goal
-Implement Phase 4 for /workspace/wyoming-s2cpp-tts: research and add the tested CUDA/s2.cpp build path and Unraid NVIDIA runtime instructions. Only build if explicitly safe in this run and no large model downloads are required. Verify GPU visibility with nvidia-smi where available. Keep documentation precise about what was actually tested. Commit the change.
 ```
 
 ## Phase 5 prompt

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Implemented Phase 3 Dockerfile/entrypoint process scaffold for running the Python Wyoming wrapper in a container.
+- Added future `S2CPP_ENABLE_INTERNAL_SERVER` hook/TODOs for supervised s2.cpp startup on `127.0.0.1:3030`.
+- Documented Phase 3 Unraid path, port, and environment variable expectations.
+- Added static tests for Dockerfile, entrypoint, and container capability docs.
 - Implemented Phase 2.75 optional direct s2.cpp `/generate` smoke-test script that skips harmlessly unless opted in.
 - Added mocked tests for the smoke helper success, skip, and unavailable outcomes.
 - Documented direct smoke-test inputs, outputs, and limitations.

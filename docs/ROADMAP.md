@@ -22,7 +22,7 @@ Implemented. `scripts/smoke_s2cpp_generate.py` uses `Settings.from_env()`, `TTS_
 
 ## Phase 3: Docker container with s2.cpp supervised process
 
-Package the Python wrapper and s2.cpp server startup into one container process model. Add process supervision and clean shutdown behavior.
+Implemented at the container/process-structure level. The Dockerfile installs Python requirements, copies runtime code, creates `/models`, `/voices`, and `/config`, exposes `10200`/`8088`, and runs `entrypoint.sh`. The entrypoint starts `python -m app.main` and includes TODO hooks for future internal s2.cpp supervision on `127.0.0.1:3030`; it does not build or start s2.cpp yet.
 
 ## Phase 4: CUDA/s2.cpp build and Unraid GPU support
 

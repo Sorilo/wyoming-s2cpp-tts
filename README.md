@@ -2,7 +2,7 @@
 
 `wyoming-s2cpp-tts` is planned as a local Home Assistant Wyoming Protocol TTS service for running Fish Speech S2 Pro through `s2.cpp` GGUF models on a home server.
 
-This repository currently contains an early phased implementation. It includes a minimal fake-audio Wyoming server, a small client for an already-running `s2.cpp` HTTP `/generate` endpoint, and an opt-in non-streaming `s2cpp` backend mode that can route one buffered backend response through Wyoming audio events. It does **not** yet build `s2.cpp`, download models, package the final container, progressively stream backend audio, or implement final cancellation/barge-in behavior.
+This repository currently contains an early phased implementation. It includes a minimal fake-audio Wyoming server, a small client for an already-running `s2.cpp` HTTP `/generate` endpoint, an opt-in non-streaming `s2cpp` backend mode, and a Phase 3 container/process scaffold that runs the Python wrapper while leaving hooks for a future supervised s2.cpp process. It does **not** yet build `s2.cpp`, download models, progressively stream backend audio, or implement final cancellation/barge-in behavior.
 
 ## Target hardware for the first real version
 
@@ -35,7 +35,7 @@ The Python wrapper is responsible for translating Home Assistant/Wyoming TTS req
 
 ## Current status
 
-Phase 2.75 is now implemented at an optional external-smoke-test level:
+Phase 3 is now implemented at a container/process-structure level:
 
 - Repository structure exists.
 - Docs describe the intended architecture and deployment path.
@@ -45,7 +45,9 @@ Phase 2.75 is now implemented at an optional external-smoke-test level:
 - Optional `TTS_BACKEND=s2cpp` routes one buffered s2.cpp client result back through Wyoming `AudioStart`/`AudioChunk`/`AudioStop` events.
 - The s2.cpp client and opt-in Wyoming backend path are covered with mocked tests.
 - `scripts/smoke_s2cpp_generate.py` provides an optional direct `/generate` smoke test for an already-running external s2.cpp backend and skips harmlessly unless opted in.
-- No s2.cpp build, CUDA setup, GGUF model download, Docker build, progressive streaming, or final cancellation/barge-in behavior is implemented yet.
+- `Dockerfile` installs Python requirements, exposes Wyoming/health ports, creates `/models`, `/voices`, and `/config`, and starts `entrypoint.sh`.
+- `entrypoint.sh` runs `python -m app.main` and includes TODO hooks for future internal s2.cpp supervision on `127.0.0.1:3030`.
+- No s2.cpp build, CUDA setup, GGUF model download, progressive streaming, or final cancellation/barge-in behavior is implemented yet.
 
 Implementation continues in small phases. See [`docs/ROADMAP.md`](docs/ROADMAP.md) and [`docs/NEXT_GOAL_PROMPTS.md`](docs/NEXT_GOAL_PROMPTS.md).
 
@@ -160,6 +162,31 @@ Limitations:
 - It buffers one response and prints metadata only.
 - It assumes the backend `/generate` endpoint is already running and compatible with the current JSON payload.
 - It does not validate audio quality, realtime factor, VRAM use, streaming, cancellation, or barge-in behavior.
+
+## Phase 3 container/process scaffold
+
+The Phase 3 Dockerfile is now a runnable Python-wrapper container scaffold:
+
+- Installs `requirements.txt`.
+- Copies `app/`, `scripts/`, and `entrypoint.sh`.
+- Creates `/models`, `/voices`, and `/config` for Unraid appdata mappings.
+- Exposes `10200/tcp` for Wyoming and `8088/tcp` for a future health/debug endpoint.
+- Starts `entrypoint.sh`, which runs `python -m app.main`.
+
+Default container behavior is still safe fake audio:
+
+```text
+TTS_BACKEND=fake
+WYOMING_URI=tcp://0.0.0.0:10200
+```
+
+Future s2.cpp process supervision is intentionally a hook only:
+
+```text
+S2CPP_ENABLE_INTERNAL_SERVER=false
+```
+
+Setting `S2CPP_ENABLE_INTERNAL_SERVER=true` currently prints TODO messages and continues; it does not start s2.cpp yet. This Phase 3 container does not build s2.cpp, compile CUDA code, download models, or include the future s2.cpp binary. Phase 4/5 will add the actual s2.cpp binary/build/runtime decisions.
 
 ## GitHub remote
 

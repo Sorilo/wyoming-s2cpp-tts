@@ -20,9 +20,9 @@ from wyoming.info import Attribution, Describe, Info, TtsProgram, TtsVoice
 from wyoming.server import AsyncEventHandler, AsyncTcpServer
 from wyoming.tts import Synthesize
 
-from app.audio import PCM_CHANNELS, PCM_WIDTH_BYTES, chunk_pcm_s16le, pcm_s16le_test_tone
+from app.audio import PCM_CHANNELS, PCM_WIDTH_BYTES, StreamingPCMRechunker, chunk_pcm_s16le, pcm_s16le_test_tone
 from app.config import Settings
-from app.s2_client import S2Client, S2GenerateRequest
+from app.s2_client import S2Client, S2ClientError, S2GenerateRequest
 
 
 class S2GenerateClient(Protocol):
@@ -154,6 +154,99 @@ def synthesize_s2cpp_tts_events(
     result = client.generate(request)
     return _pcm_to_audio_events(result.audio, audio_config)
 
+
+
+_STREAM_EOF = object()
+
+
+def _read_stream_chunk(stream):
+    """Read one chunk from a synchronous stream iterator.
+
+    Returns ``_STREAM_EOF`` sentinel on ``StopIteration`` so the result can
+    safely be transported through ``run_in_executor`` / ``asyncio.to_thread``
+    (Python 3.13 raises ``RuntimeError`` when ``StopIteration`` is raised
+    across a ``Future`` boundary).
+    """
+    try:
+        return next(stream)
+    except StopIteration:
+        return _STREAM_EOF
+
+
+
+async def synthesize_s2cpp_streaming_tts_events(
+    client: S2Client,
+    request: S2GenerateRequest,
+    config: FakeTtsConfig,
+):
+    """Yield Wyoming audio events progressively from a streaming s2.cpp backend.
+
+    Phase 5C: Consumes ``S2StreamResult`` one transport chunk at a time via
+    ``asyncio.to_thread`` (so blocking ``response.read()`` calls never block
+    the event loop).  A ``StreamingPCMRechunker`` handles PCM frame alignment
+    across arbitrary HTTP chunk boundaries and produces frame-aligned
+    ``AudioChunk`` payloads with frame-derived timestamps.
+
+    Yields:
+        ``AudioStart`` → one or more ``AudioChunk`` → ``AudioStop`` on success.
+
+    On any error (backend failure, PCM validation, early consumer exit) the
+    stream is cleaned up and the exception propagates — no successful
+    ``AudioStop`` is emitted.
+    """
+    rechunker = StreamingPCMRechunker(
+        sample_rate=config.sample_rate,
+        chunk_ms=config.chunk_ms,
+        width=config.width,
+        channels=config.channels,
+    )
+
+    yield AudioStart(
+        rate=config.sample_rate,
+        width=config.width,
+        channels=config.channels,
+    ).event()
+
+    try:
+        with client.generate_stream(request) as stream:
+            while True:
+                try:
+                    chunk = await asyncio.to_thread(_read_stream_chunk, stream)
+                except S2ClientError:
+                    raise
+                if chunk is _STREAM_EOF:
+                    break
+
+                for audio_bytes, timestamp_ms in rechunker.feed(chunk):
+                    yield AudioChunk(
+                        rate=config.sample_rate,
+                        width=config.width,
+                        channels=config.channels,
+                        audio=audio_bytes,
+                        timestamp=timestamp_ms,
+                    ).event()
+
+        # Stream exhausted normally — flush any remaining complete frames.
+        for audio_bytes, timestamp_ms in rechunker.flush():
+            yield AudioChunk(
+                rate=config.sample_rate,
+                width=config.width,
+                channels=config.channels,
+                audio=audio_bytes,
+                timestamp=timestamp_ms,
+            ).event()
+
+        yield AudioStop(
+            timestamp=int(
+                rechunker.cumulative_frames * 1000 / config.sample_rate
+            )
+        ).event()
+
+    except GeneratorExit:
+        # Consumer closed the async generator early.  The ``with`` block's
+        # ``__exit__`` already cleaned up the stream; re-raise so the caller
+        # sees a clean close.
+        raise
 
 class SingleWorkerSynthesisQueue:
     """Bounded one-worker queue gate for initial single-active-synthesis policy."""

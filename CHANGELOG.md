@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- Phase 5C: implemented streamed audio to Wyoming events with mocked streaming tests.
+- Added ``StreamingPCMRechunker`` in ``app/audio.py`` — bounded streaming rechunker that
+  handles partial PCM frames across HTTP transport boundaries, combines/splits transport
+  chunks into Wyoming-sized ``AudioChunk`` payloads, computes timestamps from cumulative
+  emitted PCM frames, and raises ``ValueError`` on final incomplete frames.
+- Added ``synthesize_s2cpp_streaming_tts_events()`` in ``app/wyoming_server.py`` — async
+  generator that drives ``S2StreamResult`` via ``asyncio.to_thread`` (blocking HTTP reads
+  never run on the event loop), feeds the rechunker, and emits ``AudioStart`` →
+  progressive ``AudioChunk`` → ``AudioStop`` events.
+- Added ``_read_stream_chunk`` / ``_STREAM_EOF`` sentinel pattern to safely transport
+  ``StopIteration`` through ``run_in_executor`` in Python 3.13.
+- Error semantics: backend failures propagate ``S2ClientError`` without emitting
+  ``AudioStop``; final incomplete PCM frames raise ``ValueError``; stream cleanup
+  on normal completion, error, and early consumer exit (async generator ``aclose()``).
+- 28 new mocked tests (90 total): rechunker frame alignment, carry-over, combining,
+  splitting, timestamps, incomplete-frame rejection; Wyoming event ordering,
+  progressive emission, PCM preservation, error propagation, stream lifecycle,
+  thread offloading, no complete buffering.
+- Existing buffered ``synthesize_s2cpp_tts_events()``, ``synthesize_fake_tts_events()``,
+  and ``FakeTtsEventHandler`` preserved; ``TTS_BACKEND=fake`` remains default.
+- No real s2.cpp, CUDA, GPU, Docker, Home Assistant, cancellation, or latency success
+  claimed — Phase 5C is validated with mocked streams only.
+
 - Phase 5B: implemented streaming client interface for progressive s2.cpp audio delivery.
 - Added ``S2StreamResult`` class — a resource-safe context manager / iterator that yields
   backend response bytes one chunk at a time via ``response.read(4096)`` without buffering

@@ -183,14 +183,33 @@ Acceptance criteria status:
 
 ### Phase 5C: streamed audio to Wyoming events
 
-Pipe streamed backend audio into Wyoming `AudioStart`, `AudioChunk`, and `AudioStop` events with mocked streaming tests.
+Implemented. ``app/wyoming_server.py`` has ``synthesize_s2cpp_streaming_tts_events()``, an async generator that consumes ``S2StreamResult`` via ``asyncio.to_thread`` (blocking HTTP reads offloaded from the event loop), feeds a ``StreamingPCMRechunker`` for frame-aligned Wyoming chunks with frame-derived timestamps, and emits ``AudioStart`` → progressive ``AudioChunk`` → ``AudioStop``. ``app/audio.py`` has ``StreamingPCMRechunker`` for bounded, frame-aligned PCM rechunking across arbitrary HTTP transport boundaries.
 
-Acceptance criteria:
+Acceptance criteria status:
 
-- Fake backend remains default.
-- Mocked streamed raw PCM is emitted progressively as Wyoming chunks.
-- WAV-header handling is implemented if mocked/backend format requires it; otherwise raw PCM assumptions are clearly documented.
-- Existing buffered behavior is preserved or safely migrated with tests.
+- Fake backend remains default. ✅
+- ``AudioStart`` emitted before first ``AudioChunk``. ✅
+- Progressive ``AudioChunk`` events before full backend stream consumed. ✅
+- PCM sample/frame boundaries handled across arbitrary HTTP chunk boundaries (partial frames carried over). ✅
+- All emitted ``AudioChunk`` payloads are frame-aligned. ✅
+- Audio data preserved exactly once, in order, without dropping or duplicating. ✅
+- Backend chunks combined into Wyoming chunks when below ``chunk_ms`` threshold. ✅
+- Backend chunks split across multiple Wyoming chunks when above threshold. ✅
+- Timestamps derived from cumulative complete PCM frames emitted, not transport chunk boundaries. ✅
+- Timestamp progression correct across irregular transport chunk sizes. ✅
+- Final incomplete PCM frame raises ``ValueError`` (explicit, tested decision — no silent discard). ✅
+- Backend stream error: closes stream, propagates ``S2ClientError``, no successful ``AudioStop`` emitted. ✅
+- Normal stream exhaustion: closes stream cleanly, flush + ``AudioStop``. ✅
+- Early consumer exit (async generator ``aclose()``): closes underlying stream. ✅
+- Rechunking/PCM-validation failure: closes stream. ✅
+- Blocking ``response.read()`` calls offloaded via ``asyncio.to_thread``, not run on event loop. ✅
+- No complete-response buffering; bounded carry-over only. ✅
+- No unbounded queue or unbounded read-ahead. ✅
+- Existing buffered ``synthesize_s2cpp_tts_events()``, ``synthesize_fake_tts_events()``, and ``FakeTtsEventHandler`` preserved. ✅
+- ``TTS_BACKEND=fake`` remains default. ✅
+- 28 new mocked streaming-to-Wyoming tests; 90 total tests pass. ✅
+- No real s2.cpp, CUDA, GPU, Docker, Home Assistant, cancellation, or latency success claimed. ✅
+- Real s2.cpp streaming, Home Assistant/Wyoming end-to-end behavior, cancellation, and barge-in policy remain unverified.
 
 ### Phase 5D: TTS-side metrics and structured tracing
 

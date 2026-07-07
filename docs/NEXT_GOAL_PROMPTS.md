@@ -2,7 +2,7 @@
 
 Run phases one at a time. This file must be regenerated from the actual repository state after every `/goal` run. Do not copy stale assumptions forward.
 
-The current exact next incomplete phase is **Phase 5C: streamed audio to Wyoming events**.
+The current exact next incomplete phase is **Phase 5D: TTS-side metrics and structured tracing**.
 
 ## Completed intermediate phases
 
@@ -13,6 +13,10 @@ Verified the s2.cpp multipart/form-data structure against the sinfisum/s2pro-ggu
 ### Phase 5A.2 (completed 2026-07-07)
 
 Corrected outgoing multipart field names to the canonical `rodrigomatta/s2.cpp` OpenAPI spec (`openapi/s2-openapi.yaml`). Canonical fields: `text`, `params`, `reference` (file part), `reference_text`, `voice`, `voice_dir`. Aliases (`prompt_audio`, `prompt_text`, etc.) are normalised to canonical names. Saved voice profiles (`.s2voice`) supported via `voice`/`voice_dir`.
+
+### Phase 5C (completed 2026-07-07)
+
+Implemented streamed audio-to-Wyoming-events conversion. Added ``StreamingPCMRechunker`` in ``app/audio.py`` for bounded frame-aligned PCM rechunking across arbitrary HTTP transport boundaries with frame-derived timestamps. Added ``synthesize_s2cpp_streaming_tts_events()`` async generator in ``app/wyoming_server.py`` that consumes ``S2StreamResult`` via ``asyncio.to_thread`` (blocking reads offloaded from event loop), feeds the rechunker, and emits ``AudioStart`` → progressive ``AudioChunk`` → ``AudioStop``. Added ``_STREAM_EOF`` sentinel pattern for safe ``StopIteration`` transport through ``run_in_executor``. Error semantics: backend errors propagate without ``AudioStop``; final incomplete PCM frames raise ``ValueError``; stream cleanup on normal/error/early-exit paths. 28 new mocked tests (90 total) cover frame alignment, carry-over, combining/splitting, timestamps, incomplete-frame rejection, event ordering, PCM preservation, error propagation, stream lifecycle, thread offloading, no buffering. Existing buffered/fake behavior preserved; ``TTS_BACKEND=fake`` remains default. No real s2.cpp streaming, Home Assistant, cancellation, or latency success claimed.
 
 ### Phase 5B (completed 2026-07-07)
 
@@ -35,7 +39,7 @@ Every future generated prompt must:
 
 If an intermediate phase is proposed, it must state why it is required, which approved phase it blocks, exact scope, acceptance criteria, and whether it changes the approved architecture.
 
-## Next immediate prompt: Phase 5C
+## Next immediate prompt: Phase 5D
 
 ```text
 /goal
@@ -45,76 +49,90 @@ Project:
 /workspace/wyoming-s2cpp-tts
 
 Goal:
-Implement Phase 5C only: pipe streamed backend audio from the Phase 5B ``S2StreamResult`` iterator into Wyoming ``AudioStart``, ``AudioChunk``, and ``AudioStop`` events with mocked streaming tests, while preserving the existing fake backend, buffered JSON/multipart paths, and Wyoming behavior.
+Implement Phase 5D only: add TTS-side metrics and structured tracing for the Wyoming service — request start, first backend byte, first Wyoming audio chunk, total emitted bytes, emitted chunk count, request/stream duration, and trace/request identifiers where practical. Preserve the existing fake backend, buffered JSON/multipart paths, Phase 5B streaming client, Phase 5C streaming-to-Wyoming path, and all existing Wyoming behavior.
 
-Current repository state (post Phase 5B):
-- ``app/s2_client.py``: ``S2Client.generate()`` (JSON buffered), ``S2Client.generate_multipart()`` (canonical multipart buffered), ``S2Client.generate_stream()`` (canonical multipart streaming via ``S2StreamResult`` iterator), ``encode_multipart_form_data()``.
-- ``S2StreamResult`` is a context manager / iterator yielding chunks via ``response.read(4096)``; resources close on normal completion, error, or early break.
-- ``S2GenerateRequest.to_multipart_fields(streaming=True)`` injects ``stream``/``chunked``/``low_latency``/``pcm_s16le`` into ``params`` JSON.
-- 62 tests pass (4 JSON, 17 multipart/encoder, 15 streaming, 4 Wyoming, 3 smoke, 19 other).
-- ``TTS_BACKEND=fake`` remains default.
-- Wyoming server (``app/wyoming_server.py``) currently only supports buffered audio via ``synthesize_s2cpp_tts_events()`` and ``synthesize_fake_tts_events()``.
+Current repository state (post Phase 5C):
+- 90 tests pass (4 JSON, 17 multipart/encoder, 15 streaming-client, 10 rechunker, 18 streaming-Wyoming, 4 Wyoming, 3 smoke, 19 other).
+- ``app/wyoming_server.py``: ``synthesize_fake_tts_events()``, ``synthesize_s2cpp_tts_events()`` (buffered), ``synthesize_s2cpp_streaming_tts_events()`` (async generator, streaming), ``FakeTtsEventHandler``, ``SingleWorkerSynthesisQueue``.
+- ``app/audio.py``: ``StreamingPCMRechunker`` for progressive PCM frame alignment across transport boundaries.
+- ``app/s2_client.py``: ``S2Client.generate()``, ``generate_multipart()``, ``generate_stream()``, ``S2StreamResult``.
+- ``TTS_BACKEND=fake`` remains the default.
 
 Quota protection:
 
-* Keep this run small.
+* Keep this run small and focused.
 * Do not download GGUF models, tokenizers, or voices.
 * Do not build, vendor, clone, or run s2.cpp.
-* Do not build Docker.
-* Do not build CUDA.
+* Do not build Docker or CUDA.
 * Do not run GPU tests.
-* Do not implement metrics/tracing, cancellation, Home Assistant integration, Docker/Unraid deployment behavior, or real latency measurement in this phase.
-* Use mocked HTTP/client tests only unless an already-running backend is explicitly provided.
-* Make one focused commit.
-* Do not change multipart field names or flatten params — the Phase 5A.2 canonical format is verified.
+* Do not contact or test a real s2.cpp backend.
+* Do not implement cancellation, barge-in, Home Assistant integration, Docker/Unraid deployment behavior, audio-quality validation, or real latency measurement.
+* Do not change multipart field names or flatten params.
+* Do not perform unrelated refactoring.
+* Make one focused implementation commit.
 
 Repository inspection requirement:
 
 Inspect the current repository state before editing, including at minimum:
 
-* git status and recent git history
-* app/s2_client.py (note: ``S2StreamResult``, ``generate_stream()``, ``to_multipart_fields(streaming=...)``)
-* app/wyoming_server.py (note: ``synthesize_s2cpp_tts_events()``, ``synthesize_fake_tts_events()``, ``_pcm_to_audio_events()``, ``FakeTtsEventHandler``)
-* app/audio.py (PCM chunking helpers)
-* tests/test_s2_client.py (15 streaming tests)
-* tests/test_wyoming_s2cpp_backend.py
-* tests/test_wyoming_server.py
-* docs/ROADMAP.md
-* docs/NEXT_GOAL_PROMPTS.md
-* TODO.md
-* CHANGELOG.md
+* ``git status`` and recent Git history
+* ``app/wyoming_server.py`` (note: ``FakeTtsEventHandler``, ``SingleWorkerSynthesisQueue``, all three synthesis functions)
+* ``app/audio.py`` (note: ``StreamingPCMRechunker``)
+* ``app/s2_client.py``
+* ``app/config.py``
+* Existing test structure for patterns to follow
 
 Scope:
 
-* Add a function (e.g., ``synthesize_s2cpp_streaming_tts_events()``) that consumes the ``S2StreamResult`` iterator and emits Wyoming ``AudioStart``, progressive ``AudioChunk``, and ``AudioStop`` events.
-* Use the existing ``_pcm_to_audio_events()`` pattern or a new streaming variant that emits one ``AudioChunk`` per yielded audio chunk, with correct timestamps, rate, width, and channels.
-* Keep backend HTTP/chunking details in ``app/s2_client.py``.
+* Add TTS-side metrics/structured tracing for:
+  - request start timestamp
+  - first backend byte timestamp
+  - first Wyoming audio chunk timestamp
+  - total emitted audio bytes
+  - emitted chunk count
+  - request/stream duration
+  - trace/request identifier where practical
+
+* This repository can directly measure TTS request receipt, backend first byte, Wyoming first audio chunk, emitted bytes/chunks, cancellation, and request duration. STT, LLM, VAD, and actual playback timestamps require external instrumentation — clearly distinguish locally measurable timestamps from those that require Home Assistant or upstream instrumentation.
+
+* The metrics implementation should work for both the buffered and streaming s2cpp paths as well as the fake backend path.
+
+* Keep metrics collection lightweight and non-blocking.
+
+* Tests must be mocked/fake — no real backend, no real Home Assistant.
+
+* Document which timestamps are locally measurable and which require external instrumentation.
+
 * Preserve ``TTS_BACKEND=fake`` as the default.
-* Preserve existing buffered ``synthesize_s2cpp_tts_events()`` and ``synthesize_fake_tts_events()``.
-* Preserve existing ``FakeTtsEventHandler`` behavior for the fake backend path.
-* Do NOT modify the Wyoming ``FakeTtsEventHandler`` to use streaming in this phase — the streaming path is a new, separate function tested independently.
-* Use mocked ``S2StreamResult`` (or patched ``S2Client``) to prove Wyoming events are emitted progressively.
-* Document that real Wyoming streaming behavior remains unverified until tested against a real s2.cpp backend and Home Assistant pipeline.
-* Update roadmap/status docs only as needed for Phase 5C.
+
+* Preserve all existing behavior and tests.
 
 Acceptance criteria:
 
-* Existing fake Wyoming tests still pass.
-* Existing buffered JSON, canonical multipart, and Phase 5B streaming s2cpp mocked tests still pass.
-* New mocked streaming-to-Wyoming tests prove that audio chunks from ``S2StreamResult`` are converted to progressive ``AudioChunk`` events.
-* A test proves that ``AudioStart`` is emitted before the first ``AudioChunk``, and ``AudioStop`` after the last.
-* Timestamps in ``AudioChunk`` events increment logically across chunks.
-* Tests prove event emission stops cleanly on stream exhaustion, stream error, and early consumer exit where practical.
-* No real s2.cpp, CUDA, GPU, Docker, Home Assistant Wyoming streaming, cancellation, audio-quality, or latency success is claimed.
-* Runtime behavior remains default-safe with ``TTS_BACKEND=fake``.
-* ROADMAP.md, TODO.md, NEXT_GOAL_PROMPTS.md, and CHANGELOG.md reflect Phase 5C status after the change.
-* The final response includes files changed, tests run, git status, commit hash/message, unresolved unknowns, and the complete ready-to-paste ``/goal`` prompt for Phase 5D or a justified intermediate phase.
+* Existing fake, buffered, and streaming tests still pass (90 total).
+* New mocked tests prove metrics are collected for fake, buffered s2cpp, and streaming s2cpp paths.
+* Metrics/timestamps are correct: request start < first backend byte < first Wyoming chunk.
+* Total bytes and chunk counts are accurate.
+* This repository clearly distinguishes locally measurable TTS timestamps from STT/LLM/VAD/playback timestamps that require external instrumentation.
+* No end-to-end latency claims are made without an actual end-to-end harness.
+* No real s2.cpp, CUDA, GPU, Docker, Home Assistant, cancellation, or latency success is claimed.
+* ROADMAP.md, TODO.md, NEXT_GOAL_PROMPTS.md, and CHANGELOG.md reflect Phase 5D status.
+* The final response includes the complete ready-to-paste /goal prompt for Phase 5.5 or a justified intermediate phase.
+
+Checks:
+
+* Run focused Phase 5D tests first.
+* Run all existing inexpensive tests.
+* Review the final diff for accidental runtime-handler replacement, Phase 6 cancellation/queue work, Docker/CUDA work, Home Assistant integration, or unrelated refactoring.
+* Make one focused implementation commit.
+* Leave the working tree clean.
 ```
+
 ## Approved later phase skeletons
 
-### Phase 5C
+### Phase 5C ✅ (completed 2026-07-07)
 
-Pipe streamed backend audio into Wyoming `AudioStart`, `AudioChunk`, and `AudioStop` events with mocked streaming tests. Include WAV-header handling if required by mocked/backend format.
+Implemented. Pipe streamed backend audio into Wyoming `AudioStart`, `AudioChunk`, and `AudioStop` events with mocked streaming tests. Include WAV-header handling if required by mocked/backend format.
 
 ### Phase 5D
 

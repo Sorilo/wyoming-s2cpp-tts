@@ -76,10 +76,35 @@ The final design should optimize for low time-to-first-audio:
 - Emit `AudioStart`, repeated audio chunks, and `AudioStop` rather than waiting for a full file.
 - Keep a small configurable startup buffer for stability.
 
-Initial planned buffer knobs:
+Initial placeholder buffer knobs currently exist in configuration:
 
 - `S2_STREAM_START_BUFFER_MS=1000`
 - `S2_STREAM_START_BUFFER_MS_STABLE=4000`
+
+These values are configurable placeholders, not benchmarked production defaults. They must remain benchmark-driven and should not be treated as validated until real streaming and latency measurements exist.
+
+## Latency measurement ownership
+
+The aspirational end-to-end target is under 2 seconds from detected end-of-speech through first audible playback for short, warm-path requests, including VAD endpointing.
+
+This repository can directly measure:
+
+- TTS request receipt / `tts_request_start_at`
+- backend first byte / `tts_first_backend_byte_at`
+- first Wyoming audio chunk / `wyoming_first_audio_chunk_at`
+- emitted bytes and chunk count
+- cancellation and cleanup timing
+- request or stream duration
+
+The following require external instrumentation or a correlated end-to-end harness:
+
+- `stt_done_at`
+- `llm_request_start_at`
+- `llm_first_token_at`
+- `llm_first_sentence_at`
+- `ha_first_playback_at`
+
+`ha_first_playback_at` may require satellite, player, Home Assistant, or client-side instrumentation and may not always be precisely measurable.
 
 ## Cancellation and barge-in-friendly behavior
 

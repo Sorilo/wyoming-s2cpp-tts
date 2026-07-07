@@ -1,14 +1,20 @@
 # Home Assistant setup draft
 
-This guide is for the future working service. The current repository scaffold does not yet run a real Wyoming TTS server.
+This guide is for validating the current Wyoming boundary and, later, the real Fish Speech S2 Pro service. The current repository can run a Wyoming TTS server with the safe default `TTS_BACKEND=fake`; that returns deterministic test-tone audio, not real speech. Real s2.cpp inference, progressive streaming, cancellation/barge-in validation, and final Home Assistant end-to-end latency measurement are not implemented yet.
 
 ## Add the Wyoming integration
 
-1. In Home Assistant, go to **Settings -> Devices & services**.
-2. Select **Add Integration**.
-3. Search for **Wyoming Protocol**.
-4. Enter the host/IP of the Unraid server running this container.
-5. Enter port `10200`.
+1. Start the service in fake mode:
+
+   ```bash
+   python -m app.main
+   ```
+
+2. In Home Assistant, go to **Settings -> Devices & services**.
+3. Select **Add Integration**.
+4. Search for **Wyoming Protocol**.
+5. Enter the host/IP of the machine running this service.
+6. Enter port `10200`.
 
 ## Assist pipeline
 
@@ -20,8 +26,21 @@ After Home Assistant discovers or connects to the Wyoming service:
 4. Test with a short phrase, for example:
 
 ```text
-Hello from the local Fish Speech S2 Pro Wyoming TTS service.
+Hello from the local Wyoming test TTS service.
 ```
+
+Expected current behavior in fake mode: Home Assistant receives deterministic test-tone audio. Do not treat this as real Fish Speech, s2.cpp, streaming, audio-quality, cancellation, or latency validation.
+
+## Future real-backend validation
+
+Real Home Assistant validation belongs after the approved streaming/cancellation/backend phases. The final end-to-end test should document, where measurable:
+
+- Assist pipeline connection.
+- STT-to-conversation-to-TTS operation.
+- streamed playback.
+- audio correctness.
+- cancellation/barge-in behavior where supported.
+- TTS-side and end-to-end latency timestamps.
 
 ## Barge-in note
 

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Aligned roadmap governance docs to the approved Phase 5A-8C implementation sequence.
+- Replaced broad future Phase 5/6/7/8 prompts with narrowly scoped phase prompts and mandatory next-prompt handoff policy.
+- Documented latency objective, TTS-side measurement ownership, and external instrumentation boundaries.
+- Reconciled TODOs with the v0.1 roadmap and moved multi-worker/multi-model/multi-GPU/hardware-upgrade work to post-v0.1 future work.
+- Corrected stale Home Assistant/Unraid status language without changing runtime behavior.
 - Implemented Phase 4 CUDA/s2.cpp and Unraid NVIDIA runtime plan without building or downloading models.
 - Added `docs/CUDA_S2CPP_PLAN.md` with untested build assumptions, s2.cpp server flag references, and future Dockerfile shape.
 - Added safe `scripts/check_gpu_visibility.sh` for future in-container `nvidia-smi` validation.

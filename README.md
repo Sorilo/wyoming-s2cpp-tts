@@ -2,7 +2,7 @@
 
 `wyoming-s2cpp-tts` is planned as a local Home Assistant Wyoming Protocol TTS service for running Fish Speech S2 Pro through `s2.cpp` GGUF models on a home server.
 
-This repository currently contains an early phased implementation. It includes a minimal fake-audio Wyoming server, a small client for an already-running `s2.cpp` HTTP `/generate` endpoint, an opt-in non-streaming `s2cpp` backend mode, and a Phase 3 container/process scaffold that runs the Python wrapper while leaving hooks for a future supervised s2.cpp process. It does **not** yet build `s2.cpp`, download models, progressively stream backend audio, or implement final cancellation/barge-in behavior.
+This repository currently contains an early phased implementation through Phase 4. It includes a minimal fake-audio Wyoming server, a small client for an already-running `s2.cpp` HTTP `/generate` endpoint, an opt-in non-streaming `s2cpp` backend mode, a Phase 3 container/process scaffold that runs the Python wrapper while leaving hooks for a future supervised s2.cpp process, and a Phase 4 CUDA/Unraid planning document. It does **not** yet build `s2.cpp`, download models, progressively stream backend audio, measure real latency, or implement final cancellation/barge-in behavior.
 
 ## Target hardware for the first real version
 
@@ -18,7 +18,7 @@ The first model target is:
 /models/s2-pro-q6_k.gguf
 ```
 
-This `q6_k` target is intended as a realistic starting point for a single 10 GB RTX 3080. Future model choices may include `s2-pro-q8_0.gguf` for quality if VRAM allows, or `s2-pro-q4_k_m.gguf` as a lower-VRAM fallback.
+This `q6_k` target is intended as a realistic starting point for a single 10 GB RTX 3080. Future model choices may include `s2-pro-q8_0.gguf` for quality if VRAM allows, or `s2-pro-q4_k_m.gguf` as a lower-VRAM fallback. A possible later TTS hardware upgrade is an NVIDIA RTX 5080 16 GB, but hardware-upgrade benchmarking is post-v0.1 work.
 
 ## Planned final architecture
 
@@ -32,6 +32,12 @@ Home Assistant Assist pipeline
 ```
 
 The Python wrapper is responsible for translating Home Assistant/Wyoming TTS requests into s2.cpp HTTP requests, then returning audio to the Wyoming client. The final design should stream PCM chunks where possible, avoid unnecessary full-audio buffering, and cancel synthesis when the client disconnects.
+
+## Latency objective
+
+The aspirational end-to-end target is under 2 seconds from detected end-of-speech through first audible playback for short, warm-path requests, including VAD endpointing. This repo can directly measure TTS-side timestamps such as request receipt, backend first byte, Wyoming first audio chunk, emitted bytes/chunks, cancellation, and request duration. STT, LLM, VAD, and actual playback timestamps require Home Assistant/upstream/client instrumentation or a correlated end-to-end test harness.
+
+Do not treat placeholder buffering values such as `1000 ms` or `4000 ms` as validated production defaults, and do not claim end-to-end latency until it is actually measured.
 
 ## Current status
 
@@ -51,7 +57,7 @@ Phase 4 is now implemented as a documentation/static-validation phase:
 - `scripts/check_gpu_visibility.sh` provides a safe future `nvidia-smi` validation hook that exits successfully when GPU tooling is unavailable.
 - No s2.cpp build, CUDA setup, GGUF model download, progressive streaming, or final cancellation/barge-in behavior is implemented yet.
 
-Implementation continues in small phases. See [`docs/ROADMAP.md`](docs/ROADMAP.md) and [`docs/NEXT_GOAL_PROMPTS.md`](docs/NEXT_GOAL_PROMPTS.md).
+Implementation continues in small phases. The exact next implementation phase is Phase 5A: multipart/form-data s2.cpp client compatibility. See [`docs/ROADMAP.md`](docs/ROADMAP.md) and [`docs/NEXT_GOAL_PROMPTS.md`](docs/NEXT_GOAL_PROMPTS.md).
 
 ## Manual Phase 1 test
 

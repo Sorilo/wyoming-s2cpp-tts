@@ -1,6 +1,6 @@
 # Unraid install draft
 
-This is a draft for a future published Docker image. As of Phase 3, the container structure can run the Python Wyoming wrapper with the default fake backend, but it still does **not** build/start s2.cpp, download models, or provide final GPU TTS.
+This is a draft for a future published Docker image. As of Phase 4, the container structure can run the Python Wyoming wrapper with the default fake backend and has a documented CUDA/s2.cpp/Unraid GPU plan, but it still does **not** build/start s2.cpp, download models, provide final GPU TTS, or validate the final Unraid WebUI deployment.
 
 ## Planned Unraid WebUI Add Container settings
 
@@ -82,4 +82,4 @@ S2_GPU_INDEX=0
 S2_GPU_LAYERS=36
 ```
 
-Exact GPU runtime settings should be documented after they are tested on the target Unraid server.
+Exact GPU runtime settings should be documented after they are tested on the target Unraid server. Final Unraid WebUI template validation is Phase 8B and must cover GPU passthrough, ports, mounts, permissions, startup, process supervision, health checks, shutdown, restart behavior, and persistence.

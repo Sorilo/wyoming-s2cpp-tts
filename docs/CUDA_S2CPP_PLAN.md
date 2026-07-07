@@ -31,7 +31,7 @@ This project should adapt those flags cautiously for Linux only after the actual
 
 ## Intended future Linux container shape
 
-The current Dockerfile should remain Python-wrapper-only until a future phase proves the s2.cpp Linux build. The likely future structure is a multi-stage Dockerfile:
+The current Dockerfile should remain Python-wrapper-only until Phase 8A proves the s2.cpp Linux/CUDA build. The likely future structure is a multi-stage Dockerfile:
 
 ```Dockerfile
 # PHASE 4 TODO, not enabled yet:
@@ -106,6 +106,10 @@ scripts/check_gpu_visibility.sh
 ```
 
 This script is safe on non-GPU systems. It reports `status=unavailable` and exits `0` when `nvidia-smi` is missing so normal CI/local tests do not require GPU infrastructure.
+
+## Hardware expansion note
+
+The initial baseline remains one NVIDIA RTX 3080 10 GB and one active s2.cpp synthesis. A possible later RTX 5080 16 GB upgrade, multi-worker scheduling, multi-model routing, or multi-GPU routing is post-v0.1 work and should not be introduced before the single-worker v0.1 baseline is stable.
 
 ## What Phase 4 did not verify
 

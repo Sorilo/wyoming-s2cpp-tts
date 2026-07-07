@@ -1,52 +1,134 @@
 # Next Hermes `/goal` prompts
 
-Run these phases one at a time. Keep each run small. Phase 4 is complete as a documentation/static-validation phase; the next immediate goal is Phase 5 streaming plumbing with mocks unless a real backend is already available.
+Run phases one at a time. This file must be regenerated from the actual repository state after every `/goal` run. Do not copy stale assumptions forward.
 
-## Next immediate prompt: Phase 5
+The current exact next incomplete phase is **Phase 5A: multipart/form-data s2.cpp client compatibility**.
+
+## Prompt-generation guidance
+
+Every future generated prompt must:
+
+- name the exact next incomplete phase or a justified narrowly scoped intermediate phase;
+- include `/workspace/wyoming-s2cpp-tts` as the project path;
+- include quota/risk protections appropriate to the phase;
+- require inspection of repository areas touched by the phase, not just one file;
+- define exact scope, exclusions, acceptance criteria, and tests;
+- state which claims remain unverified;
+- require one focused commit;
+- require status/documentation updates;
+- require the final response to include the following phase’s complete ready-to-paste prompt.
+
+If an intermediate phase is proposed, it must state why it is required, which approved phase it blocks, exact scope, acceptance criteria, and whether it changes the approved architecture.
+
+## Next immediate prompt: Phase 5A
 
 ```text
 /goal
 You are Hermes, acting as a senior Python/Home Assistant Wyoming Protocol engineer.
 
-Project: /workspace/wyoming-s2cpp-tts
+Project:
+/workspace/wyoming-s2cpp-tts
 
-Quota protection: Keep this run small. Do not download GGUF models. Do not perform CUDA builds. Do not run Docker builds unless explicitly cheap and safe. Use mocked backend responses if no real s2.cpp server is available.
+Goal:
+Implement Phase 5A only: add multipart/form-data s2.cpp client compatibility while preserving the existing fake backend and mocked buffered behavior.
 
-Goal: Implement Phase 5 only: add streaming TTS plumbing from s2.cpp HTTP output to Wyoming audio chunks, focusing on low time-to-first-audio and measurement hooks.
+Quota protection:
 
-Requirements:
-- Inspect the current Phase 4 docs, s2_client, and wyoming_server implementation first.
-- Keep `TTS_BACKEND=fake` as default and keep all tests passing.
-- Do not build/vendor s2.cpp or download models.
-- Do not claim real streaming backend success unless actually tested against a running backend.
-- Add/adjust client interfaces so mocked chunked backend audio can be converted progressively into Wyoming `AudioStart`/`AudioChunk`/`AudioStop`.
-- Include WAV-header handling if the mocked backend uses WAV; otherwise clearly document raw PCM assumptions.
-- Add lightweight timing/measurement hooks for time-to-first-audio and bytes/chunks emitted.
-- Preserve existing buffered `s2cpp` mode or migrate it safely with tests.
-- Use tests with mocked streaming responses; do not require GPU/model infrastructure.
-- Run the cheapest relevant tests/static checks available.
-- Make one git commit with a clear message.
+* Keep this run small.
+* Do not download GGUF models, tokenizers, or voices.
+* Do not build, vendor, clone, or run s2.cpp.
+* Do not build Docker.
+* Do not build CUDA.
+* Do not run GPU tests.
+* Do not implement streaming, Wyoming streaming changes, metrics/tracing, cancellation, Home Assistant integration, or Docker/Unraid deployment behavior in this phase.
+* Use mocked HTTP/client tests only unless an already-running backend is explicitly provided.
+* Make one focused commit.
 
-Final response: summarize files changed, tests run, git status, and the next recommended prompt.
+Repository inspection requirement:
+
+Inspect the current repository state before editing, including at minimum:
+
+* git status and recent git history
+* app/config.py
+* app/s2_client.py
+* app/wyoming_server.py
+* tests/test_s2_client.py
+* tests/test_wyoming_s2cpp_backend.py
+* scripts/smoke_s2cpp_generate.py
+* README.md
+* docs/ROADMAP.md
+* docs/NEXT_GOAL_PROMPTS.md
+* docs/CUDA_S2CPP_PLAN.md
+* TODO.md
+* CHANGELOG.md
+
+Scope:
+
+* Add multipart/form-data request construction support to the s2.cpp client layer.
+* Keep backend HTTP details in app/s2_client.py.
+* Preserve `TTS_BACKEND=fake` as the default.
+* Preserve existing JSON/buffered behavior unless tests and documentation clearly justify a safe migration.
+* Add or update mocked tests that verify multipart request method, URL, content type, payload fields, and any file/reference handling without requiring a real backend.
+* Document unresolved upstream assumptions about exact s2.cpp multipart field names and compatibility.
+* Update roadmap/status docs only as needed for Phase 5A.
+
+Acceptance criteria:
+
+* Existing fake Wyoming tests still pass.
+* Existing buffered s2cpp mocked tests still pass or are intentionally migrated with equivalent coverage.
+* Multipart/form-data request construction is covered by mocked tests.
+* No real s2.cpp, CUDA, GPU, Docker, Home Assistant, streaming, cancellation, audio-quality, or latency success is claimed.
+* Runtime behavior remains default-safe with `TTS_BACKEND=fake`.
+* ROADMAP.md, TODO.md, NEXT_GOAL_PROMPTS.md, and CHANGELOG.md reflect Phase 5A status after the change.
+* The final response includes files changed, tests run, git status, commit hash/message, unresolved unknowns, and the complete ready-to-paste `/goal` prompt for Phase 5B or a justified intermediate phase.
 ```
 
-## Phase 6 prompt
+## Approved later phase skeletons
 
-```text
-/goal
-Implement Phase 6 for /workspace/wyoming-s2cpp-tts: add cancellation and barge-in-friendly behavior. Handle Wyoming client disconnects, backend cancellation/timeouts when possible, queue cleanup, and tests for cancelled requests. Document Home Assistant/satellite limits. Commit the change.
-```
+### Phase 5B
 
-## Phase 7 prompt
+Implement a streaming async iterator over s2.cpp response bytes with mocked chunked responses. Do not pipe streamed audio into Wyoming yet unless the current prompt explicitly expands scope.
 
-```text
-/goal
-Implement Phase 7 for /workspace/wyoming-s2cpp-tts: harden tests, troubleshooting docs, release notes, and v0.1 tagging criteria. Do not tag a release unless the working behavior has been verified. Commit the change.
-```
+### Phase 5C
 
-## Phase 8 prompt
+Pipe streamed backend audio into Wyoming `AudioStart`, `AudioChunk`, and `AudioStop` events with mocked streaming tests. Include WAV-header handling if required by mocked/backend format.
 
-```text
-/goal
-Plan Phase 8 for /workspace/wyoming-s2cpp-tts: future hardware upgrades, multi-worker scheduling, multi-model profiles, q8/q4 fallback policy, and benchmarking methodology. Prefer docs and tests over implementation unless the v0.1 baseline is already stable. Commit any doc updates.
-```
+### Phase 5D
+
+Add TTS-side metrics and structured tracing for request start, first backend byte, first Wyoming audio chunk, emitted bytes/chunks, duration, and trace/request identifiers where practical.
+
+### Phase 5.5
+
+Run a real external s2.cpp smoke test outside the final Docker image only when an already-running backend and required files are available.
+
+### Phase 6A
+
+Handle Wyoming client disconnects and backend cancellation where supported.
+
+### Phase 6B
+
+Implement queue cancellation, backend busy handling, timeout policy, and policy for a new request arriving during active speech.
+
+### Phase 6C
+
+Test barge-in-friendly behavior using Home Assistant when available or simulated disconnect/cancellation tests otherwise.
+
+### Phase 7A
+
+Add comprehensive protocol, queue, error, cancellation, integration tests, and troubleshooting documentation.
+
+### Phase 7B
+
+Create v0.1 release checklist and tagging criteria. Do not tag v0.1 unless required behavior has actually been verified.
+
+### Phase 8A
+
+Build and test the CUDA-enabled s2.cpp Docker image.
+
+### Phase 8B
+
+Finalize the Unraid WebUI template/documentation and validate GPU passthrough, ports, mounts, permissions, startup, process supervision, health checks, shutdown, restart behavior, and persistence.
+
+### Phase 8C
+
+Run the final Home Assistant end-to-end test including Assist pipeline connection, real STT-to-conversation-to-TTS operation, streamed playback, audio correctness, cancellation/barge-in behavior where supported, and latency measurements where measurable.

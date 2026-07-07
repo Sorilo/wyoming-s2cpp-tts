@@ -11,12 +11,12 @@
 -->
 <Container version="2">
   <Name>s2cpp-backend</Name>
-  <Repository>ghcr.io/YOUR_GITHUB_USER/s2cpp-backend:edge</Repository>
+  <Repository>ghcr.io/sorilo/wyoming-s2cpp-tts-backend:edge</Repository>
   <Registry>https://ghcr.io</Registry>
   <Network>custom</Network>
   <Privileged>false</Privileged>
-  <Support>https://github.com/YOUR_GITHUB_USER/wyoming-s2cpp-tts</Support>
-  <Project>https://github.com/YOUR_GITHUB_USER/wyoming-s2cpp-tts</Project>
+  <Support>https://github.com/sorilo/wyoming-s2cpp-tts</Support>
+  <Project>https://github.com/sorilo/wyoming-s2cpp-tts</Project>
   <Overview>
 Standalone CUDA-enabled rodrigomatta/s2.cpp HTTP backend for Fish Speech S2 Pro TTS.
 
@@ -29,8 +29,8 @@ CUDA base: nvidia/cuda:12.4.1-runtime-ubuntu22.04
   </Overview>
   <Category>Productivity</Category>
   <WebUI>http://[IP]:[PORT:3031]/</WebUI>
-  <TemplateURL>https://raw.githubusercontent.com/YOUR_GITHUB_USER/wyoming-s2cpp-tts/main/unraid/my-s2cpp-backend.xml</TemplateURL>
-  <Icon>https://raw.githubusercontent.com/YOUR_GITHUB_USER/wyoming-s2cpp-tts/main/unraid/s2cpp-icon.png</Icon>
+  <TemplateURL>https://raw.githubusercontent.com/sorilo/wyoming-s2cpp-tts/main/unraid/my-s2cpp-backend.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/sorilo/wyoming-s2cpp-tts/main/unraid/s2cpp-icon.png</Icon>
   <ExtraParams>--runtime=nvidia --gpus all</ExtraParams>
 
   <!-- GPU configuration -->

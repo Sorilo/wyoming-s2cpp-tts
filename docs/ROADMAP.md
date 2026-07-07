@@ -211,23 +211,47 @@ Acceptance criteria status:
 - No real s2.cpp, CUDA, GPU, Docker, Home Assistant, cancellation, or latency success claimed. ✅
 - Real s2.cpp streaming, Home Assistant/Wyoming end-to-end behavior, cancellation, and barge-in policy remain unverified.
 
-### Phase 5D: TTS-side metrics and structured tracing
+### Phase 5D: TTS-side metrics and structured tracing ✅
 
-Add TTS-side metrics and structured tracing for:
+Implemented. Added lightweight structured TTS metrics and tracing via
+``app/metrics.py`` (``SynthesisMetrics`` dataclass + ``MetricsCollector``)
+wired into all three synthesis paths — fake, buffered s2.cpp, and streaming
+s2.cpp. Every path records request start, first backend data, first Wyoming
+AudioChunk, emitted bytes/chunks, terminal status, and monotonic duration.
 
-- request start
-- first backend byte
-- first Wyoming audio chunk
-- total emitted bytes
-- emitted chunk count
-- request/stream duration
-- trace/request identifier where practical
+Key design decisions:
 
-Acceptance criteria:
+* Monotonic nanoseconds (``time.monotonic_ns``) for all durations; tests
+  inject deterministic fake clocks via dependency injection.
+* Buffered s2.cpp ``first_backend_data_ns`` records the moment the
+  *completed* buffered response is available — explicitly documented as
+  NOT the literal first network byte.
+* Streaming path records the first non-empty ``S2StreamResult`` chunk;
+  documented as first backend data observed by this process, not proof of
+  first network byte arriving at host.
+* ``MetricsCollector`` is request-local and concurrency-safe (no global
+  mutable state). Each synthesis function accepts an optional collector;
+  when none is supplied, one is created internally and metrics are logged
+  as structured info-level log messages.
+* Metrics finalize exactly once on success, error (backend/PCM exception),
+  early consumer close, and observed cancellation. Original exceptions
+  and cancellation propagate — never swallowed.
+* Log output intentionally excludes request text, raw audio bytes,
+  reference-audio paths, and credentials.
+* ``"first Wyoming chunk"`` means the chunk was produced by this repository
+  — it does not mean transmitted over Wyoming socket, received by Home
+  Assistant, decoded by a satellite, or played through a speaker.
 
-- Metrics/traces are tested with fake or mocked backend paths.
-- This repository clearly distinguishes locally measurable TTS timestamps from STT/LLM/VAD/playback timestamps that require external instrumentation.
-- No end-to-end latency claims are made without an actual end-to-end harness.
+Acceptance criteria status:
+
+- Mocks/fake paths tested. ✅ (38 new tests: 12 collector unit, 6 fake,
+  5 buffered, 10 streaming, 5 lifecycle/cancellation; 128 total tests pass)
+- Locally measurable TTS timestamps distinguished from STT/LLM/VAD/playback. ✅
+- No end-to-end latency claims made. ✅
+- Existing 90 tests still pass. ✅
+- ``TTS_BACKEND=fake`` remains default; runtime handler unchanged. ✅
+- No real s2.cpp, CUDA, GPU, Docker, Home Assistant, or latency success
+  claimed. ✅
 
 ### Phase 5.5: real external s2.cpp smoke test outside final Docker image
 

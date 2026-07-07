@@ -19,7 +19,7 @@
 11a. Phase 5A.1: verify and correct the exact s2.cpp multipart request shape against upstream reference client; use canonical `text` + `params` (JSON string) + `prompt_text`/`prompt_audio` fields. ✅
 12. Phase 5B: implement a streaming async iterator over s2.cpp response bytes with mocked chunked responses. ✅
 13. Phase 5C: pipe streamed audio into Wyoming `AudioStart`/`AudioChunk`/`AudioStop` events with mocked streaming tests. ✅
-14. Phase 5D: add TTS-side metrics and structured tracing for request start, first backend byte, first Wyoming audio chunk, emitted bytes/chunks, request duration, and trace/request identifiers where practical.
+14. Phase 5D: add TTS-side metrics and structured tracing for request start, first backend byte, first Wyoming audio chunk, emitted bytes/chunks, request duration, and trace/request identifiers where practical. ✅
 15. Phase 5.5: run an opt-in real external s2.cpp smoke test outside the final Docker image when backend/model/tokenizer prerequisites are actually available.
 16. Phase 6A: handle Wyoming client disconnects and backend cancellation where supported.
 17. Phase 6B: implement queue cancellation, backend busy handling, timeout policy, and policy for a new request arriving during active speech.

@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+- Phase 5D: implemented lightweight structured TTS metrics and tracing.
+- Added ``app/metrics.py`` with ``SynthesisMetrics`` frozen dataclass (request_id,
+  trace_id, backend_type, synthesis_mode, monotonic timestamps for request start,
+  first backend data, first AudioChunk, terminal, emitted bytes/chunks, terminal
+  status, error type, duration) and ``MetricsCollector`` mutable per-request
+  collector with dependency-injectable clock for deterministic tests.
+- Wired metrics into ``synthesize_fake_tts_events()`` (fake path),
+  ``synthesize_s2cpp_tts_events()`` (buffered s2.cpp), and
+  ``synthesize_s2cpp_streaming_tts_events()`` (streaming s2.cpp). All three
+  accept an optional ``MetricsCollector``; when none is supplied, one is created
+  internally and metrics are logged as structured info messages.
+- Metrics finalize exactly once on success, backend/PCM exception, early
+  consumer close (``GeneratorExit`` / ``asyncio.CancelledError``), and observed
+  coroutine cancellation. Original exceptions and cancellation propagate — never
+  swallowed.
+- Timestamp semantics: monotonic nanoseconds (``time.monotonic_ns``) for all
+  durations. Buffered ``first_backend_data_ns`` is documented as post-buffer
+  availability, not network first byte. Streaming ``first_backend_data_ns`` is
+  first non-empty chunk observed by this process. ``first_audio_chunk_ns`` means
+  produced by this repository — not transmitted over Wyoming, received by HA,
+  decoded by satellite, or played through speaker.
+- Privacy: log output and metrics snapshots exclude request text, raw audio,
+  reference-audio paths, and credentials.
+- 38 new tests (12 collector unit, 6 fake metrics, 5 buffered metrics, 10
+  streaming metrics, 5 lifecycle/cancellation); 128 total tests pass.
+- ``TTS_BACKEND=fake`` remains default; runtime handler unchanged; no real
+  s2.cpp, CUDA, GPU, Docker, Home Assistant, cancellation, or latency success
+  claimed.
+
 - Phase 5C: implemented streamed audio to Wyoming events with mocked streaming tests.
 - Added ``StreamingPCMRechunker`` in ``app/audio.py`` — bounded streaming rechunker that
   handles partial PCM frames across HTTP transport boundaries, combines/splits transport

@@ -2,7 +2,7 @@
 
 Run phases one at a time. This file must be regenerated from the actual repository state after every `/goal` run. Do not copy stale assumptions forward.
 
-The current exact next incomplete phase is **Phase 5D: TTS-side metrics and structured tracing**.
+The current exact next incomplete phase is **Phase 5.5: real external s2.cpp smoke test outside the final Docker image**.
 
 ## Completed intermediate phases
 
@@ -39,7 +39,13 @@ Every future generated prompt must:
 
 If an intermediate phase is proposed, it must state why it is required, which approved phase it blocks, exact scope, acceptance criteria, and whether it changes the approved architecture.
 
-## Next immediate prompt: Phase 5D
+## Next immediate prompt: Phase 5D ✅ (completed 2026-07-07)
+
+Implemented. Added ``app/metrics.py`` with ``SynthesisMetrics`` and ``MetricsCollector``. All three synthesis paths (fake, buffered, streaming) accept an optional ``MetricsCollector``. 38 new tests; 128 total pass.
+
+---
+
+### Phase 5.5: real external s2.cpp smoke test (prompt follows)
 
 ```text
 /goal
@@ -49,26 +55,28 @@ Project:
 /workspace/wyoming-s2cpp-tts
 
 Goal:
-Implement Phase 5D only: add TTS-side metrics and structured tracing for the Wyoming service — request start, first backend byte, first Wyoming audio chunk, total emitted bytes, emitted chunk count, request/stream duration, and trace/request identifiers where practical. Preserve the existing fake backend, buffered JSON/multipart paths, Phase 5B streaming client, Phase 5C streaming-to-Wyoming path, and all existing Wyoming behavior.
+Implement Phase 5.5 only: run a real external s2.cpp smoke test outside the final Docker image. Verify that an already-running s2.cpp backend with required model/tokenizer files can actually produce audio through the client code, and document the results.
 
-Current repository state (post Phase 5C):
-- 90 tests pass (4 JSON, 17 multipart/encoder, 15 streaming-client, 10 rechunker, 18 streaming-Wyoming, 4 Wyoming, 3 smoke, 19 other).
-- ``app/wyoming_server.py``: ``synthesize_fake_tts_events()``, ``synthesize_s2cpp_tts_events()`` (buffered), ``synthesize_s2cpp_streaming_tts_events()`` (async generator, streaming), ``FakeTtsEventHandler``, ``SingleWorkerSynthesisQueue``.
-- ``app/audio.py``: ``StreamingPCMRechunker`` for progressive PCM frame alignment across transport boundaries.
+Current repository state (post Phase 5D):
+- 128 tests pass (90 existing + 38 Phase 5D metrics tests).
+- ``app/metrics.py``: ``SynthesisMetrics`` (frozen dataclass) + ``MetricsCollector`` (mutable per-request collector with DI clock).
+- ``app/wyoming_server.py``: ``synthesize_fake_tts_events()``, ``synthesize_s2cpp_tts_events()``, ``synthesize_s2cpp_streaming_tts_events()`` — all accept optional ``MetricsCollector``.
+- ``app/audio.py``: ``StreamingPCMRechunker``.
 - ``app/s2_client.py``: ``S2Client.generate()``, ``generate_multipart()``, ``generate_stream()``, ``S2StreamResult``.
 - ``TTS_BACKEND=fake`` remains the default.
+- Existing smoke-test script: ``scripts/smoke_s2cpp_generate.py``.
 
 Quota protection:
 
-* Keep this run small and focused.
+* This is an opt-in smoke test — skip harmlessly when no backend is available.
 * Do not download GGUF models, tokenizers, or voices.
 * Do not build, vendor, clone, or run s2.cpp.
 * Do not build Docker or CUDA.
-* Do not run GPU tests.
-* Do not contact or test a real s2.cpp backend.
-* Do not implement cancellation, barge-in, Home Assistant integration, Docker/Unraid deployment behavior, audio-quality validation, or real latency measurement.
-* Do not change multipart field names or flatten params.
+* Do not run GPU tests beyond what the backend already uses.
+* Do not implement cancellation, barge-in, Home Assistant integration, or latency benchmarking.
+* Do not change multipart field names, params structure, or audio semantics.
 * Do not perform unrelated refactoring.
+* Do not change ``TTS_BACKEND=fake`` default behavior.
 * Make one focused implementation commit.
 
 Repository inspection requirement:
@@ -76,54 +84,47 @@ Repository inspection requirement:
 Inspect the current repository state before editing, including at minimum:
 
 * ``git status`` and recent Git history
-* ``app/wyoming_server.py`` (note: ``FakeTtsEventHandler``, ``SingleWorkerSynthesisQueue``, all three synthesis functions)
-* ``app/audio.py`` (note: ``StreamingPCMRechunker``)
+* ``scripts/smoke_s2cpp_generate.py``
 * ``app/s2_client.py``
 * ``app/config.py``
-* Existing test structure for patterns to follow
 
 Scope:
 
-* Add TTS-side metrics/structured tracing for:
-  - request start timestamp
-  - first backend byte timestamp
-  - first Wyoming audio chunk timestamp
-  - total emitted audio bytes
-  - emitted chunk count
-  - request/stream duration
-  - trace/request identifier where practical
+* Extend the existing ``scripts/smoke_s2cpp_generate.py`` (or create a new companion script) to test the real s2.cpp backend when available.
 
-* This repository can directly measure TTS request receipt, backend first byte, Wyoming first audio chunk, emitted bytes/chunks, cancellation, and request duration. STT, LLM, VAD, and actual playback timestamps require external instrumentation — clearly distinguish locally measurable timestamps from those that require Home Assistant or upstream instrumentation.
+* If a real backend is available (``TTS_BACKEND=s2cpp`` and reachable endpoint):
+  - Send a buffered JSON request
+  - Send a buffered multipart request
+  - Send a streaming multipart request and consume chunks
+  - For each: record content type, byte count, and whether audio was received
+  - Report results as structured output (JSON or human-readable)
 
-* The metrics implementation should work for both the buffered and streaming s2cpp paths as well as the fake backend path.
+* If no backend is available:
+  - Exit successfully with ``status=skipped`` or ``status=unavailable``
+  - Do not fail CI or local test suites
 
-* Keep metrics collection lightweight and non-blocking.
+* Document which parts of the result were actually verified (audio received vs. playable vs. correct-sounding).
 
-* Tests must be mocked/fake — no real backend, no real Home Assistant.
+* This is a direct backend-client smoke test, not a Home Assistant/Wyoming integration test. Do not attempt to play audio, validate speech quality, measure latency, or connect to HA.
 
-* Document which timestamps are locally measurable and which require external instrumentation.
-
-* Preserve ``TTS_BACKEND=fake`` as the default.
-
-* Preserve all existing behavior and tests.
+* Do not change the existing ``smoke_s2cpp_generate.py`` behavior for the JSON path unless it's a bug fix.
 
 Acceptance criteria:
 
-* Existing fake, buffered, and streaming tests still pass (90 total).
-* New mocked tests prove metrics are collected for fake, buffered s2cpp, and streaming s2cpp paths.
-* Metrics/timestamps are correct: request start < first backend byte < first Wyoming chunk.
-* Total bytes and chunk counts are accurate.
-* This repository clearly distinguishes locally measurable TTS timestamps from STT/LLM/VAD/playback timestamps that require external instrumentation.
-* No end-to-end latency claims are made without an actual end-to-end harness.
-* No real s2.cpp, CUDA, GPU, Docker, Home Assistant, cancellation, or latency success is claimed.
-* ROADMAP.md, TODO.md, NEXT_GOAL_PROMPTS.md, and CHANGELOG.md reflect Phase 5D status.
-* The final response includes the complete ready-to-paste /goal prompt for Phase 5.5 or a justified intermediate phase.
+* Opt-in smoke test: skips harmlessly when no backend is available.
+* Results document exact backend endpoint, payload mode, content type, byte count, and whether audio bytes were received.
+* Streaming test proves chunks are received progressively (not all at end).
+* No Docker/CUDA build success is inferred from this smoke test.
+* No real-time playability, audio quality, or latency claims unless actually verified.
+* Existing 128 tests still pass.
+* Existing ``TTS_BACKEND=fake`` behavior unchanged.
+* ``ROADMAP.md``, ``TODO.md``, ``NEXT_GOAL_PROMPTS.md``, and ``CHANGELOG.md`` reflect Phase 5.5 status.
+* The final response includes the complete ready-to-paste ``/goal`` prompt for Phase 6A or a justified intermediate phase.
 
 Checks:
 
-* Run focused Phase 5D tests first.
-* Run all existing inexpensive tests.
-* Review the final diff for accidental runtime-handler replacement, Phase 6 cancellation/queue work, Docker/CUDA work, Home Assistant integration, or unrelated refactoring.
+* Run only existing inexpensive tests (no new test required for the smoke script unless adding cleanup/regression coverage).
+* Review the final diff for accidental runtime-handler replacement, Phase 6 work, Docker/CUDA work, Home Assistant integration, or unrelated refactoring.
 * Make one focused implementation commit.
 * Leave the working tree clean.
 ```
@@ -134,9 +135,9 @@ Checks:
 
 Implemented. Pipe streamed backend audio into Wyoming `AudioStart`, `AudioChunk`, and `AudioStop` events with mocked streaming tests. Include WAV-header handling if required by mocked/backend format.
 
-### Phase 5D
+### Phase 5D ✅ (completed 2026-07-07)
 
-Add TTS-side metrics and structured tracing for request start, first backend byte, first Wyoming audio chunk, emitted bytes/chunks, duration, and trace/request identifiers where practical.
+Implemented. Added ``app/metrics.py`` with ``SynthesisMetrics`` / ``MetricsCollector``, wired into all three synthesis paths. 38 new tests; 128 total pass.
 
 ### Phase 5.5
 

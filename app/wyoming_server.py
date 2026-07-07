@@ -22,6 +22,9 @@ from wyoming.tts import Synthesize
 
 from app.audio import PCM_CHANNELS, PCM_WIDTH_BYTES, StreamingPCMRechunker, chunk_pcm_s16le, pcm_s16le_test_tone
 from app.config import Settings
+import sys
+
+from app.metrics import MetricsCollector
 from app.s2_client import S2Client, S2ClientError, S2GenerateRequest
 
 
@@ -35,7 +38,11 @@ class S2GenerateClient(Protocol):
 S2ClientFactory = Callable[[Settings], S2GenerateClient]
 
 
-def _pcm_to_audio_events(pcm: bytes, config: "FakeTtsConfig") -> list[Event]:
+def _pcm_to_audio_events(
+    pcm: bytes,
+    config: "FakeTtsConfig",
+    metrics: MetricsCollector | None = None,
+) -> list[Event]:
     """Convert buffered raw PCM s16le audio into Wyoming audio events."""
     events: list[Event] = [
         AudioStart(
@@ -45,6 +52,7 @@ def _pcm_to_audio_events(pcm: bytes, config: "FakeTtsConfig") -> list[Event]:
         ).event()
     ]
 
+    emitted_any = False
     timestamp_ms = 0
     for chunk in chunk_pcm_s16le(
         pcm,
@@ -53,6 +61,10 @@ def _pcm_to_audio_events(pcm: bytes, config: "FakeTtsConfig") -> list[Event]:
         width=config.width,
         channels=config.channels,
     ):
+        if not emitted_any and metrics is not None:
+            metrics.record_first_audio_chunk()
+            emitted_any = True
+
         events.append(
             AudioChunk(
                 rate=config.sample_rate,
@@ -62,6 +74,8 @@ def _pcm_to_audio_events(pcm: bytes, config: "FakeTtsConfig") -> list[Event]:
                 timestamp=timestamp_ms,
             ).event()
         )
+        if metrics is not None:
+            metrics.record_emitted_chunk(len(chunk))
         timestamp_ms += config.chunk_ms
 
     events.append(AudioStop(timestamp=timestamp_ms).event())
@@ -125,16 +139,31 @@ def build_info_event() -> Event:
 def synthesize_fake_tts_events(
     text: str,
     config: FakeTtsConfig | None = None,
+    metrics: MetricsCollector | None = None,
 ) -> list[Event]:
     """Synthesize deterministic fake PCM as Wyoming audio events."""
-    fake_config = config or FakeTtsConfig()
-    pcm = pcm_s16le_test_tone(
-        text=text,
-        duration_ms=fake_config.duration_ms,
-        sample_rate=fake_config.sample_rate,
-    )
+    if metrics is None:
+        metrics = MetricsCollector(backend_type="fake", synthesis_mode="fake")
 
-    return _pcm_to_audio_events(pcm, fake_config)
+    fake_config = config or FakeTtsConfig()
+
+    try:
+        pcm = pcm_s16le_test_tone(
+            text=text,
+            duration_ms=fake_config.duration_ms,
+            sample_rate=fake_config.sample_rate,
+        )
+
+        if pcm:
+            # Synthetic test tone is the "backend data" for the fake path.
+            metrics.record_first_backend_data()
+
+        events = _pcm_to_audio_events(pcm, fake_config, metrics=metrics)
+        metrics.finalize("success")
+        return events
+    except Exception:
+        metrics.finalize("error", type(sys.exc_info()[1]).__name__)
+        raise
 
 
 def synthesize_s2cpp_tts_events(
@@ -142,17 +171,45 @@ def synthesize_s2cpp_tts_events(
     client: S2GenerateClient,
     settings: Settings,
     config: FakeTtsConfig | None = None,
+    metrics: MetricsCollector | None = None,
 ) -> list[Event]:
     """Synthesize via an already-running s2.cpp backend and emit Wyoming events.
 
     This Phase 2.5 bridge intentionally buffers the backend response before
     converting it to Wyoming audio. Progressive streaming is reserved for a
     later phase.
+
+    .. important::
+
+        ``first_backend_data_ns`` records the moment the *completed*
+        non-empty buffered response becomes available to the synthesis
+        layer — it is **not** the literal first network byte arriving at
+        the host.  The buffered API cannot observe the first network byte.
     """
+    if metrics is None:
+        metrics = MetricsCollector(backend_type="s2cpp", synthesis_mode="buffered")
+
     audio_config = config or FakeTtsConfig.from_settings(settings)
     request = S2GenerateRequest.from_settings(text=text, settings=settings)
-    result = client.generate(request)
-    return _pcm_to_audio_events(result.audio, audio_config)
+
+    try:
+        result = client.generate(request)
+
+        # Buffered path: record when completed buffered response is available.
+        # This is NOT the literal first network byte — the multipart response
+        # was fully buffered before this point.
+        if result.audio:
+            metrics.record_first_backend_data()
+
+        events = _pcm_to_audio_events(result.audio, audio_config, metrics=metrics)
+        metrics.finalize("success")
+        return events
+    except S2ClientError:
+        metrics.finalize("error", "S2ClientError")
+        raise
+    except Exception:
+        metrics.finalize("error", type(sys.exc_info()[1]).__name__)
+        raise
 
 
 
@@ -178,6 +235,7 @@ async def synthesize_s2cpp_streaming_tts_events(
     client: S2Client,
     request: S2GenerateRequest,
     config: FakeTtsConfig,
+    metrics: MetricsCollector | None = None,
 ):
     """Yield Wyoming audio events progressively from a streaming s2.cpp backend.
 
@@ -193,7 +251,13 @@ async def synthesize_s2cpp_streaming_tts_events(
     On any error (backend failure, PCM validation, early consumer exit) the
     stream is cleaned up and the exception propagates — no successful
     ``AudioStop`` is emitted.
+
+    Metrics are finalized on all paths (success, error, early close,
+    cancellation).
     """
+    if metrics is None:
+        metrics = MetricsCollector(backend_type="s2cpp", synthesis_mode="streaming")
+
     rechunker = StreamingPCMRechunker(
         sample_rate=config.sample_rate,
         chunk_ms=config.chunk_ms,
@@ -207,6 +271,8 @@ async def synthesize_s2cpp_streaming_tts_events(
         channels=config.channels,
     ).event()
 
+    backend_data_observed = False
+
     try:
         with client.generate_stream(request) as stream:
             while True:
@@ -217,7 +283,13 @@ async def synthesize_s2cpp_streaming_tts_events(
                 if chunk is _STREAM_EOF:
                     break
 
+                # First non-empty backend chunk observed by this process.
+                if not backend_data_observed and chunk:
+                    metrics.record_first_backend_data()
+                    backend_data_observed = True
+
                 for audio_bytes, timestamp_ms in rechunker.feed(chunk):
+                    metrics.record_first_audio_chunk()
                     yield AudioChunk(
                         rate=config.sample_rate,
                         width=config.width,
@@ -225,9 +297,11 @@ async def synthesize_s2cpp_streaming_tts_events(
                         audio=audio_bytes,
                         timestamp=timestamp_ms,
                     ).event()
+                    metrics.record_emitted_chunk(len(audio_bytes))
 
         # Stream exhausted normally — flush any remaining complete frames.
         for audio_bytes, timestamp_ms in rechunker.flush():
+            metrics.record_first_audio_chunk()
             yield AudioChunk(
                 rate=config.sample_rate,
                 width=config.width,
@@ -235,6 +309,7 @@ async def synthesize_s2cpp_streaming_tts_events(
                 audio=audio_bytes,
                 timestamp=timestamp_ms,
             ).event()
+            metrics.record_emitted_chunk(len(audio_bytes))
 
         yield AudioStop(
             timestamp=int(
@@ -242,10 +317,19 @@ async def synthesize_s2cpp_streaming_tts_events(
             )
         ).event()
 
-    except GeneratorExit:
-        # Consumer closed the async generator early.  The ``with`` block's
-        # ``__exit__`` already cleaned up the stream; re-raise so the caller
-        # sees a clean close.
+        metrics.finalize("success")
+
+    except (GeneratorExit, asyncio.CancelledError) as exc:
+        # Consumer closed the async generator early or the task was
+        # cancelled.  The ``with`` block's ``__exit__`` already cleaned
+        # up the stream; finalize then re-raise.
+        metrics.finalize("cancelled")
+        raise
+    except S2ClientError:
+        metrics.finalize("error", "S2ClientError")
+        raise
+    except Exception:
+        metrics.finalize("error", type(sys.exc_info()[1]).__name__)
         raise
 
 class SingleWorkerSynthesisQueue:

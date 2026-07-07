@@ -2,7 +2,7 @@
 
 `wyoming-s2cpp-tts` is planned as a local Home Assistant Wyoming Protocol TTS service for running Fish Speech S2 Pro through `s2.cpp` GGUF models on a home server.
 
-This repository currently contains an early phased implementation through Phase 5A. It includes a minimal fake-audio Wyoming server, a small client for an already-running `s2.cpp` HTTP `/generate` endpoint, JSON and multipart/form-data request construction for that client, an opt-in non-streaming `s2cpp` backend mode, a Phase 3 container/process scaffold that runs the Python wrapper while leaving hooks for a future supervised s2.cpp process, and a Phase 4 CUDA/Unraid planning document. It does **not** yet build `s2.cpp`, download models, progressively stream backend audio, measure real latency, or implement final cancellation/barge-in behavior.
+This repository currently contains an early phased implementation through Phase 5D — including lightweight structured TTS metrics and tracing across all three synthesis paths (fake, buffered s2.cpp, streaming s2.cpp). It includes a minimal fake-audio Wyoming server, a small client for an already-running `s2.cpp` HTTP `/generate` endpoint, JSON and multipart/form-data request construction for that client, an opt-in non-streaming `s2cpp` backend mode, a Phase 3 container/process scaffold that runs the Python wrapper while leaving hooks for a future supervised s2.cpp process, and a Phase 4 CUDA/Unraid planning document. It does **not** yet build `s2.cpp`, download models, progressively stream backend audio, measure real latency, or implement final cancellation/barge-in behavior.
 
 ## Target hardware for the first real version
 
@@ -41,21 +41,23 @@ Do not treat placeholder buffering values such as `1000 ms` or `4000 ms` as vali
 
 ## Current status
 
-Phase 5A is now implemented as mocked client compatibility work:
+Phase 5D is now implemented:
 
-- Repository structure exists.
+- Repository structure exists with 128 passing tests.
 - Docs describe the intended architecture and deployment path.
 - The Python package includes a Wyoming TCP TTS server.
 - The default `TTS_BACKEND=fake` path handles Wyoming `Describe` and `Synthesize` events with deterministic local PCM test-tone audio.
-- `app/s2_client.py` can POST JSON or multipart/form-data requests to an already-running external `s2.cpp` HTTP `/generate` endpoint and return raw audio bytes.
+- `app/s2_client.py` can POST JSON, multipart/form-data, or create streaming iterators for an already-running external `s2.cpp` HTTP `/generate` endpoint.
 - Optional `TTS_BACKEND=s2cpp` routes one buffered s2.cpp client result back through Wyoming `AudioStart`/`AudioChunk`/`AudioStop` events.
-- The s2.cpp client JSON and multipart/form-data request construction paths are covered with mocked tests.
-- `scripts/smoke_s2cpp_generate.py` provides an optional direct `/generate` smoke test for an already-running external s2.cpp backend and skips harmlessly unless opted in.
+- `app/wyoming_server.py` has a streaming async generator (`synthesize_s2cpp_streaming_tts_events()`) that yields progressive Wyoming audio events with PCM frame-aligned rechunking.
+- `app/audio.py` has `StreamingPCMRechunker` for bounded frame-aligned PCM rechunking across arbitrary HTTP transport boundaries.
+- `app/metrics.py` provides `SynthesisMetrics` (frozen dataclass) and `MetricsCollector` (mutable per-request collector with DI clock) wired into all three synthesis paths — request start, first backend data, first Wyoming chunk, emitted bytes/chunks, terminal status, and monotonic duration.
+- `scripts/smoke_s2cpp_generate.py` provides an optional direct `/generate` smoke test.
 - `Dockerfile` installs Python requirements, exposes Wyoming/health ports, creates `/models`, `/voices`, and `/config`, and starts `entrypoint.sh`.
 - `entrypoint.sh` runs `python -m app.main` and includes TODO hooks for future internal s2.cpp supervision on `127.0.0.1:3030`.
-- `docs/CUDA_S2CPP_PLAN.md` documents the untested future CUDA/s2.cpp build plan, Unraid NVIDIA runtime variables, and GPU visibility checklist.
-- `scripts/check_gpu_visibility.sh` provides a safe future `nvidia-smi` validation hook that exits successfully when GPU tooling is unavailable.
-- No s2.cpp build, CUDA setup, GGUF model download, progressive streaming, or final cancellation/barge-in behavior is implemented yet.
+- `docs/CUDA_S2CPP_PLAN.md` documents the untested future CUDA/s2.cpp build plan.
+- `scripts/check_gpu_visibility.sh` provides a safe future `nvidia-smi` validation hook.
+- No s2.cpp build, CUDA setup, GGUF model download, Home Assistant integration, real latency measurement, or final cancellation/barge-in behavior is implemented yet.
 
 Implementation continues in small phases. The exact next implementation phase is Phase 5B: streaming async iterator over s2.cpp response bytes with mocked chunked responses. See [`docs/ROADMAP.md`](docs/ROADMAP.md) and [`docs/NEXT_GOAL_PROMPTS.md`](docs/NEXT_GOAL_PROMPTS.md).
 

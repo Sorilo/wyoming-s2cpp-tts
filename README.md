@@ -35,15 +35,39 @@ The Python wrapper is responsible for translating Home Assistant/Wyoming TTS req
 
 ## Current status
 
-Phase 0 is complete when this scaffold is committed:
+Phase 1 is now implemented at a minimal level:
 
 - Repository structure exists.
 - Docs describe the intended architecture and deployment path.
-- Python package skeleton exists.
-- Dockerfile and entrypoint are placeholders only.
-- Tests are basic placeholders for future behavior.
+- The Python package includes a Wyoming TCP fake TTS server.
+- The fake server handles Wyoming `Describe` and `Synthesize` events.
+- Synthesis returns deterministic local PCM test-tone audio only.
+- No s2.cpp, CUDA, GGUF model, Docker build, or real Fish Speech inference is implemented yet.
 
-Implementation comes in small phases. See [`docs/ROADMAP.md`](docs/ROADMAP.md) and [`docs/NEXT_GOAL_PROMPTS.md`](docs/NEXT_GOAL_PROMPTS.md).
+Implementation continues in small phases. See [`docs/ROADMAP.md`](docs/ROADMAP.md) and [`docs/NEXT_GOAL_PROMPTS.md`](docs/NEXT_GOAL_PROMPTS.md).
+
+## Manual Phase 1 test
+
+Install the small Python requirements, then start the fake Wyoming server:
+
+```bash
+python -m pip install -r requirements.txt
+python -m app.main
+```
+
+Expected startup message:
+
+```text
+Fake Wyoming TTS server listening on tcp://0.0.0.0:10200
+```
+
+In Home Assistant, add a Wyoming Protocol integration pointing at the host running this service on port `10200`, then select it as a TTS engine in an Assist pipeline. A synthesis request should return a deterministic test tone, not real speech.
+
+For a local automated protocol check, run:
+
+```bash
+python -m pytest tests/test_wyoming_server.py -q
+```
 
 ## GitHub remote
 

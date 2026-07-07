@@ -6,7 +6,7 @@ Create this repository scaffold, architecture docs, roadmap, Docker placeholders
 
 ## Phase 1: minimal Wyoming server with fake PCM/test audio
 
-Implement a real Wyoming TCP server that accepts TTS requests and returns deterministic fake/test PCM audio. Do not involve s2.cpp yet.
+Implemented. The service can run a minimal Wyoming TCP fake TTS server that handles `Describe` and `Synthesize`, returning deterministic local PCM test-tone audio without touching s2.cpp or model inference.
 
 ## Phase 2: connect wrapper to existing s2.cpp HTTP `/generate`
 

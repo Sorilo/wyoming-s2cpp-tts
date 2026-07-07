@@ -1,21 +1,18 @@
-"""Application entrypoint placeholder.
+"""Application entrypoint for the Phase 1 fake Wyoming TTS server.
 
-Future phases will start the Wyoming TCP server, health endpoint, and s2.cpp
-process supervision from here. Phase 0 intentionally does not run a service.
+This starts deterministic fake/test PCM only. Later phases will supervise s2.cpp
+and route real Fish Speech audio through this Wyoming boundary.
 """
 
 from __future__ import annotations
 
 from app.config import Settings
+from app.wyoming_server import run_server
 
 
 def main() -> int:
-    """Print a safe scaffold-only message and exit."""
-    settings = Settings()
-    print("wyoming-s2cpp-tts scaffold only")
-    print(f"planned Wyoming URI: {settings.wyoming_uri}")
-    print(f"planned s2.cpp endpoint: http://{settings.s2_host}:{settings.s2_port}")
-    print(f"planned model: {settings.s2_model}")
+    """Run the Phase 1 fake Wyoming TTS server."""
+    run_server(Settings())
     return 0
 
 

@@ -1,8 +1,8 @@
 # Next Hermes `/goal` prompts
 
-Run these phases one at a time. Keep each run small. Do **not** start the CUDA/s2.cpp build until the Wyoming server works with fake/test audio.
+Run these phases one at a time. Keep each run small. Do **not** start the CUDA/s2.cpp build until the Wyoming server works with fake/test audio. Phase 1 is complete; the next immediate goal is Phase 2.
 
-## Next immediate prompt: Phase 1
+## Next immediate prompt: Phase 2
 
 ```text
 /goal
@@ -10,18 +10,19 @@ You are Hermes, acting as a senior Python/Home Assistant Wyoming Protocol engine
 
 Project: /workspace/wyoming-s2cpp-tts
 
-Quota protection: Keep this run small. Do not build s2.cpp, do not download models, do not run Docker builds, and do not implement the final Fish Speech integration yet.
+Quota protection: Keep this run small. Do not build s2.cpp, do not download models, do not run Docker builds, and do not implement final streaming/cancellation yet.
 
-Goal: Implement Phase 1 only: a minimal Wyoming Protocol TTS server that listens on tcp://0.0.0.0:10200 and returns deterministic fake/test PCM audio for a synthesis request.
+Goal: Implement Phase 2 only: connect the Python wrapper to an already-running s2.cpp HTTP /generate endpoint while keeping the Phase 1 fake Wyoming server working.
 
 Requirements:
-- Inspect the existing scaffold first.
-- Use the Python package under app/.
-- Keep configuration in app/config.py.
-- Implement only enough Wyoming behavior to prove Home Assistant/client compatibility with fake audio.
-- Add or update tests for config, fake PCM generation, and single-worker queue behavior.
-- Add a short manual test section to README or docs.
-- Do not touch CUDA, s2.cpp builds, GGUF downloads, or real model inference.
+- Inspect the existing Phase 1 implementation first.
+- Keep Home Assistant/Wyoming behavior isolated in app/wyoming_server.py.
+- Implement backend-client code in app/s2_client.py.
+- Do not start, build, compile, or package s2.cpp in this phase.
+- Do not download GGUF models.
+- Add tests with mocked HTTP responses for the s2.cpp client.
+- Document how to point S2_HOST/S2_PORT at an external test server.
+- Keep fake PCM mode available as a fallback/test mode.
 - Run the cheapest relevant tests available.
 - Make one git commit with a clear message.
 

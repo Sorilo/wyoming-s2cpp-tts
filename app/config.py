@@ -34,6 +34,9 @@ BARGE_IN_FRIENDLY = True
 CANCEL_ON_CLIENT_DISCONNECT = True
 CANCEL_ON_NEW_REQUEST = False
 MAX_QUEUE_SIZE = 3
+FAKE_TTS_SAMPLE_RATE = 22050
+FAKE_TTS_DURATION_MS = 600
+FAKE_TTS_CHUNK_MS = 100
 LOG_LEVEL = "info"
 
 
@@ -68,4 +71,7 @@ class Settings:
     cancel_on_client_disconnect: bool = CANCEL_ON_CLIENT_DISCONNECT
     cancel_on_new_request: bool = CANCEL_ON_NEW_REQUEST
     max_queue_size: int = MAX_QUEUE_SIZE
+    fake_tts_sample_rate: int = FAKE_TTS_SAMPLE_RATE
+    fake_tts_duration_ms: int = FAKE_TTS_DURATION_MS
+    fake_tts_chunk_ms: int = FAKE_TTS_CHUNK_MS
     log_level: str = LOG_LEVEL

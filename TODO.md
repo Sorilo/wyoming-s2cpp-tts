@@ -2,10 +2,10 @@
 
 ## Must have for v0.1
 
-1. Create scaffold and initial commit.
-2. Implement minimal Wyoming server with fake/test PCM.
+1. Create scaffold and initial commit. ✅
+2. Implement minimal Wyoming server with fake/test PCM. ✅
 3. Add basic config loading from environment variables.
-4. Add single-worker bounded queue.
+4. Add single-worker bounded queue. ✅
 5. Add direct s2.cpp HTTP client with mocked tests.
 6. Prove one external s2.cpp request path before packaging.
 7. Add container startup flow for Python wrapper plus s2.cpp process.

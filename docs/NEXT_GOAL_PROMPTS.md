@@ -8,7 +8,11 @@ The current exact next incomplete phase is **Phase 5B: streaming async iterator 
 
 ### Phase 5A.1 (completed 2026-07-07)
 
-Verified and corrected the s2.cpp multipart/form-data request shape against the upstream reference client (sinfisum/s2pro-gguf s2_test_client.py, commit 0cd2864). Canonical fields: `text`, `params` (JSON string), `prompt_text`, `prompt_audio`. Generation settings are inside `params`, not top-level multipart fields.
+Verified the s2.cpp multipart/form-data structure against the sinfisum/s2pro-gguf reference client. Established that generation settings belong inside a single `params` JSON string, not as flattened multipart fields.
+
+### Phase 5A.2 (completed 2026-07-07)
+
+Corrected outgoing multipart field names to the canonical `rodrigomatta/s2.cpp` OpenAPI spec (`openapi/s2-openapi.yaml`). Canonical fields: `text`, `params`, `reference` (file part), `reference_text`, `voice`, `voice_dir`. Aliases (`prompt_audio`, `prompt_text`, etc.) are normalised to canonical names. Saved voice profiles (`.s2voice`) supported via `voice`/`voice_dir`.
 
 ## Prompt-generation guidance
 
@@ -36,14 +40,19 @@ Project:
 /workspace/wyoming-s2cpp-tts
 
 Goal:
-Implement Phase 5B only: add a streaming client interface that exposes s2.cpp HTTP response bytes progressively using mocked chunked responses, while preserving the existing fake backend, JSON buffered client path, Phase 5A.1 canonical multipart buffered client path, and Wyoming behavior.
+Implement Phase 5B only: add a streaming client interface that exposes s2.cpp HTTP response bytes progressively using mocked chunked responses, while preserving the existing fake backend, JSON buffered client path, Phase 5A.2 canonical multipart buffered client path, and Wyoming behavior.
 
-Current repository state (post Phase 5A.1):
-- app/s2_client.py: S2Client.generate() (JSON), S2Client.generate_multipart() (canonical multipart with text+params+prompt_text/prompt_audio), encode_multipart_form_data().
-- S2GenerateRequest.to_multipart_fields() returns {"text", "params": json_string} with optional "prompt_text".
+Current repository state (post Phase 5A.2):
+- app/s2_client.py: S2Client.generate() (JSON), S2Client.generate_multipart() (canonical multipart with text+params+reference_text/reference+voice+voice_dir), encode_multipart_form_data().
+- Canonical multipart fields match rodrigomatta/s2.cpp OpenAPI spec: reference (file), reference_text, voice, voice_dir.
+- Alias normalisation: prompt_audio/prompt_text/reference_audio/ref_audio/ref_text → canonical reference/reference_text.
+- S2GenerateRequest has internal prompt_text (backward compat), voice, and voice_dir fields.
 - S2GenerateRequest.to_payload() preserves the JSON format unchanged.
-- Input validation: prompt_audio without prompt_text raises ValueError.
-- 42 tests pass (16 s2_client, 4 Wyoming, 3 smoke, etc.).
+- S2GenerateRequest.to_multipart_fields() emits canonical field names only.
+- Input validation: reference (or alias) without reference_text/prompt_text raises ValueError.
+- voice and reference can coexist; voice works independently.
+- Buffered multipart does not silently add stream/chunked/low_latency to params.
+- 47 tests pass (21 s2_client, 4 Wyoming, 3 smoke, etc.).
 - TTS_BACKEND=fake remains default.
 
 Quota protection:
@@ -58,7 +67,7 @@ Quota protection:
 * Do not implement metrics/tracing, cancellation, Home Assistant integration, Docker/Unraid deployment behavior, or real latency measurement in this phase.
 * Use mocked HTTP/client tests only unless an already-running backend is explicitly provided.
 * Make one focused commit.
-* Do not change multipart field names or flatten params — the Phase 5A.1 canonical format is verified.
+* Do not change multipart field names or flatten params — the Phase 5A.2 canonical format is verified.
 
 Repository inspection requirement:
 
@@ -66,7 +75,7 @@ Inspect the current repository state before editing, including at minimum:
 
 * git status and recent git history
 * app/config.py
-* app/s2_client.py (note: canonical multipart format from Phase 5A.1)
+* app/s2_client.py (note: canonical multipart format from Phase 5A.2)
 * app/wyoming_server.py
 * tests/test_s2_client.py
 * tests/test_wyoming_s2cpp_backend.py
@@ -80,11 +89,11 @@ Inspect the current repository state before editing, including at minimum:
 Scope:
 
 * Add a streaming response interface to the s2.cpp client layer, likely in app/s2_client.py.
-* The streaming method should accept stream/chunked/output_format/low_latency options (see config.py: S2_STREAM, S2_CHUNKED, S2_OUTPUT_FORMAT, LOW_LATENCY_MODE) and add them to the multipart `params` JSON string when requested, without duplicating multipart-building logic.
+* The streaming method should add `stream=true`, `chunked=true`, `output_format="pcm_s16le"`, and `low_latency=true` to the multipart `params` JSON string when streaming is requested, without duplicating multipart-building logic.
 * Keep backend HTTP details in app/s2_client.py.
 * Preserve `TTS_BACKEND=fake` as the default.
 * Preserve existing `S2Client.generate(...)` JSON buffered behavior.
-* Preserve existing `S2Client.generate_multipart(...)` canonical multipart buffered behavior (text + params JSON string, prompt_text/prompt_audio).
+* Preserve existing `S2Client.generate_multipart(...)` canonical multipart buffered behavior (text + params JSON string, reference/reference_text, voice/voice_dir).
 * Use mocked chunked HTTP responses to prove bytes can be consumed progressively.
 * Represent stream errors and partial-stream cleanup clearly enough for later Phase 5C/6 work.
 * Do not change Wyoming event emission in this phase.

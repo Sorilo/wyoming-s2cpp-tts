@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Phase 5A.2: corrected multipart field names to match the canonical `rodrigomatta/s2.cpp` OpenAPI spec (`openapi/s2-openapi.yaml`).
+- Canonical emitted fields: `reference` (file part, was `prompt_audio`), `reference_text` (was `prompt_text`), `voice`, `voice_dir`.
+- `prompt_audio`, `prompt_text`, `reference_audio`, `ref_audio`, `ref_text` are accepted upstream aliases; the client normalises them to canonical names on outgoing requests.
+- Added `voice` as a canonical top-level multipart field for saved `.s2voice` profiles.
+- Added `voice_dir` as a canonical top-level multipart field.
+- `voice` and `voice_dir` are also wired through `S2GenerateRequest.from_settings()` from `config.py`.
+- Input validation: `reference` (or alias) without `reference_text`/`prompt_text` raises `ValueError`.
+- Buffered multipart requests do not silently enable `stream`, `chunked`, or `low_latency`.
+- 21 s2_client tests, full 47-test suite passes.
 - Phase 5A.1: verified and corrected the s2.cpp multipart/form-data request shape against the upstream reference client (sinfisum/s2pro-gguf s2_test_client.py).
 - Canonical multipart fields are now: `text` (required string), `params` (one JSON string with generation settings), optional `prompt_text`, and optional `prompt_audio` file part.
 - Generation settings are no longer flattened into individual multipart fields (`model`, `voice`, `stream`, `chunked` etc. are NOT top-level).

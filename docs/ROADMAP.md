@@ -71,7 +71,7 @@ Implemented as a documentation/static-validation phase. [`CUDA_S2CPP_PLAN.md`](C
 
 ### Phase 5A: multipart/form-data s2.cpp client compatibility
 
-Implemented. `app/s2_client.py` now has additive multipart/form-data request construction through `encode_multipart_form_data(...)` and `S2Client.generate_multipart(...)` while preserving the existing JSON `S2Client.generate(...)` buffered path. **Phase 5A.1 corrected the multipart field names** against the upstream reference client (sinfisum/s2pro-gguf s2_test_client.py); the canonical fields are now `text`, `params` (one JSON string), optional `prompt_text`, and optional `prompt_audio` file part.
+Implemented. `app/s2_client.py` now has additive multipart/form-data request construction through `encode_multipart_form_data(...)` and `S2Client.generate_multipart(...)` while preserving the existing JSON `S2Client.generate(...)` buffered path. **Phase 5A.1** verified the multipart field structure against the sinfisum/s2pro-gguf reference client. **Phase 5A.2** corrected the emitted field names to the canonical `rodrigomatta/s2.cpp` OpenAPI spec: `reference` (file part, was `prompt_audio`), `reference_text` (was `prompt_text`), plus `voice` and `voice_dir`. Aliases (`prompt_audio`, `prompt_text`, `reference_audio`, `ref_audio`, `ref_text`) are normalised internally.
 
 Acceptance criteria status:
 
@@ -82,27 +82,90 @@ Acceptance criteria status:
 
 ### Phase 5A.1: verify and correct s2.cpp multipart request shape
 
-Implemented. Verified the upstream s2.cpp POST /generate multipart/form-data contract against the official reference client at `sinfisum/s2pro-gguf` (`s2_test_client.py`, commit `0cd2864`, retrieved 2026-07-07). The canonical multipart fields are:
+Implemented. Verified the s2.cpp POST /generate multipart/form-data structure against the `sinfisum/s2pro-gguf` reference client (`s2_test_client.py`, commit `0cd2864`, retrieved 2026-07-07). Established that generation settings belong inside a single `params` JSON string, not as flattened multipart fields.
+
+**Phase 5A.2 corrected the emitted field names** to match the actual project target `rodrigomatta/s2.cpp`.
+
+---
+
+### Phase 5A.2: align multipart fields with rodrigomatta/s2.cpp canonical spec
+
+Implemented. Corrected the outgoing multipart field names to match the official target `rodrigomatta/s2.cpp` (`openapi/s2-openapi.yaml`). The canonical multipart fields are:
 
 - `text` — required top-level string field
-- `params` — one JSON-encoded string containing generation settings (`temperature`, `top_p`, `top_k`, `max_new_tokens`, `output_format`, `segment_sentences`)
-- `prompt_text` — optional string field; transcript for reference audio
-- `prompt_audio` — optional file part (filename, bytes, media type); reference audio for voice cloning
+- `params` — one JSON-encoded string containing generation settings
+- `reference` — optional file part (filename, bytes, media type); reference audio for voice cloning
+- `reference_text` — optional string field; required when `reference` is present
+- `voice` — optional top-level string field; saved `.s2voice` profile id or path
+- `voice_dir` — optional top-level string field; directory used when `voice` is an id
 
-Individual generation settings (`model`, `voice`, `stream`, `chunked`, `output_format`, `temperature`, etc.) are NOT top-level multipart fields — they belong inside the `params` JSON string. Input validation rejects `prompt_audio` without `prompt_text`.
+Accepted upstream aliases (`prompt_audio`, `reference_audio`, `ref_audio` for `reference`; `ref_text`, `prompt_text` for `reference_text`; `voice_id`, `voice_profile` for `voice`) are normalised to canonical names on outgoing requests. The internal `prompt_text` field on `S2GenerateRequest` is preserved as a backward-compatible property.
 
-Compatibility is validated against upstream documentation/source and mocked tests only. Real s2.cpp compatibility remains unverified until Phase 5.5.
+Generation settings (`model`, `stream`, `chunked`, `output_format`, `temperature`, `top_p`, `top_k`, `max_new_tokens`, `segment_sentences`) are NOT top-level multipart fields — they belong inside the `params` JSON string.
+
+Input validation rejects `reference` (or its aliases) without `reference_text`/`prompt_text`. `voice` can be used independently without reference audio, and both can be provided together.
+
+Buffered multipart requests do not silently enable `stream`, `chunked`, `low_latency`, or raw PCM output.
+
+Compatibility is validated against the official `rodrigomatta/s2.cpp` OpenAPI spec (`openapi/s2-openapi.yaml`) and mocked tests only. Real s2.cpp compatibility remains unverified until Phase 5.5.
 
 Acceptance criteria status:
 
-- Canonical multipart fields verified against upstream reference client.
-- `params` is a single JSON string, not flattened fields.
-- `prompt_audio` file part and `prompt_text` field are paired correctly.
+- Canonical emitted fields match `rodrigomatta/s2.cpp` OpenAPI spec.
+- Alias normalisation: `prompt_audio` → `reference`, `prompt_text` → `reference_text`.
+- `voice` and `voice_dir` emitted as canonical top-level fields when configured.
+- `reference` without `reference_text` raises `ValueError`.
+- `voice` without reference audio is supported.
+- `voice` and `reference` can be provided together (no client-side conflict).
 - Empty optional fields are omitted.
-- Invalid reference-audio combinations raise `ValueError`.
+- Buffered requests do not add `stream`/`chunked`/`low_latency` to `params`.
 - Existing JSON-buffered and fake Wyoming tests still pass.
-- 16 s2_client tests pass (4 JSON-buffered + 12 multipart/encoder).
-- Full 42-test suite passes.
+- 21 s2_client tests pass (4 JSON-buffered + 17 multipart/encoder).
+- Full 47-test suite passes.
+- No real s2.cpp, CUDA, GPU, Docker, or latency success claimed.
+
+### Phase 5A.1: verify and correct s2.cpp multipart request shape
+
+Implemented. Verified the s2.cpp POST /generate multipart/form-data structure against the `sinfisum/s2pro-gguf` reference client (`s2_test_client.py`, commit `0cd2864`, retrieved 2026-07-07). Established that generation settings belong inside a single `params` JSON string, not as flattened multipart fields.
+
+**Phase 5A.2 corrected the emitted field names** to match the actual project target `rodrigomatta/s2.cpp`.
+
+---
+
+### Phase 5A.2: align multipart fields with rodrigomatta/s2.cpp canonical spec
+
+Implemented. Corrected the outgoing multipart field names to match the official target `rodrigomatta/s2.cpp` (`openapi/s2-openapi.yaml`). The canonical multipart fields are:
+
+- `text` — required top-level string field
+- `params` — one JSON-encoded string containing generation settings
+- `reference` — optional file part (filename, bytes, media type); reference audio for voice cloning
+- `reference_text` — optional string field; required when `reference` is present
+- `voice` — optional top-level string field; saved `.s2voice` profile id or path
+- `voice_dir` — optional top-level string field; directory used when `voice` is an id
+
+Accepted upstream aliases (`prompt_audio`, `reference_audio`, `ref_audio` for `reference`; `ref_text`, `prompt_text` for `reference_text`; `voice_id`, `voice_profile` for `voice`) are normalised to canonical names on outgoing requests. The internal `prompt_text` field on `S2GenerateRequest` is preserved as a backward-compatible property.
+
+Generation settings (`model`, `stream`, `chunked`, `output_format`, `temperature`, `top_p`, `top_k`, `max_new_tokens`, `segment_sentences`) are NOT top-level multipart fields — they belong inside the `params` JSON string.
+
+Input validation rejects `reference` (or its aliases) without `reference_text`/`prompt_text`. `voice` can be used independently without reference audio, and both can be provided together.
+
+Buffered multipart requests do not silently enable `stream`, `chunked`, `low_latency`, or raw PCM output.
+
+Compatibility is validated against the official `rodrigomatta/s2.cpp` OpenAPI spec (`openapi/s2-openapi.yaml`) and mocked tests only. Real s2.cpp compatibility remains unverified until Phase 5.5.
+
+Acceptance criteria status:
+
+- Canonical emitted fields match `rodrigomatta/s2.cpp` OpenAPI spec.
+- Alias normalisation: `prompt_audio` → `reference`, `prompt_text` → `reference_text`.
+- `voice` and `voice_dir` emitted as canonical top-level fields when configured.
+- `reference` without `reference_text` raises `ValueError`.
+- `voice` without reference audio is supported.
+- `voice` and `reference` can be provided together (no client-side conflict).
+- Empty optional fields are omitted.
+- Buffered requests do not add `stream`/`chunked`/`low_latency` to `params`.
+- Existing JSON-buffered and fake Wyoming tests still pass.
+- 21 s2_client tests pass (4 JSON-buffered + 17 multipart/encoder).
+- Full 47-test suite passes.
 - No real s2.cpp, CUDA, GPU, Docker, or latency success claimed.
 
 

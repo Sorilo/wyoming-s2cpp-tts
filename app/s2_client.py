@@ -1,10 +1,11 @@
 """s2.cpp HTTP client for an already-running backend server.
 
 This module contains backend-client-only helpers for a separate s2.cpp HTTP
-`/generate` endpoint. It supports the existing buffered JSON path and the Phase
-5A.1 buffered multipart/form-data path using the verified canonical upstream
-multipart fields. It does not start, build, compile, package, or supervise
-s2.cpp, and it does not download models.
+``/generate`` endpoint. It supports the existing buffered JSON path and the
+Phase 5A.2 buffered multipart/form-data path using canonical upstream fields
+verified against the official target ``rodrigomatta/s2.cpp`` OpenAPI spec. It
+does not start, build, compile, package, or supervise s2.cpp, and it does not
+download models.
 """
 
 from __future__ import annotations
@@ -22,6 +23,12 @@ from app.config import Settings
 urlopen = urllib.request.urlopen
 
 MultipartFiles = dict[str, tuple[str, bytes, str]]
+
+# Canonical reference-audio file-part key and its accepted aliases.
+_REFERENCE_AUDIO_FIELD = "reference"
+_REFERENCE_AUDIO_ALIASES = frozenset(
+    {"reference_audio", "prompt_audio", "ref_audio"}
+)
 
 
 def _stringify_multipart_value(value: Any) -> str:
@@ -47,8 +54,8 @@ def encode_multipart_form_data(
 ) -> tuple[str, bytes]:
     """Encode fields/files as multipart/form-data.
 
-    Phase 5A.1 verified the canonical upstream s2.cpp multipart fields
-    against the reference client in sinfisum/s2pro-gguf.
+    Phase 5A.2 uses the canonical upstream s2.cpp multipart fields verified
+    against the ``rodrigomatta/s2.cpp`` OpenAPI spec.
     """
     active_boundary = boundary or f"wyoming-s2cpp-tts-{uuid.uuid4().hex}"
     chunks: list[bytes] = []
@@ -114,9 +121,9 @@ class S2GenerateRequest:
 
     The JSON payload shape (``to_payload``) is the existing Phase 2 buffered
     format. The multipart format (``to_multipart_fields``) was verified against
-    the upstream s2.cpp reference client (``sinfisum/s2pro-gguf``
-    ``s2_test_client.py``) in Phase 5A.1 and uses the canonical fields:
-    ``text``, ``params`` (one JSON string), and optional ``prompt_text``.
+    the official target ``rodrigomatta/s2.cpp`` OpenAPI spec in Phase 5A.2 and
+    uses the canonical fields: ``text``, ``params`` (one JSON string),
+    optional ``reference_text``, ``voice``, and ``voice_dir``.
     """
 
     text: str
@@ -131,6 +138,7 @@ class S2GenerateRequest:
     top_p: float = 0.88
     top_k: int = 40
     prompt_text: str = ""
+    voice_dir: str = ""
 
     @classmethod
     def from_settings(
@@ -154,6 +162,7 @@ class S2GenerateRequest:
             top_p=settings.s2_top_p,
             top_k=settings.s2_top_k,
             prompt_text=prompt_text,
+            voice_dir=settings.s2_voice_dir,
         )
 
     def to_payload(self) -> dict[str, Any]:
@@ -177,16 +186,22 @@ class S2GenerateRequest:
     def to_multipart_fields(self) -> dict[str, Any]:
         """Convert to canonical s2.cpp multipart scalar fields.
 
-        Verified against the upstream reference client at
-        ``sinfisum/s2pro-gguf`` (``s2_test_client.py``).  The canonical
-        format uses ``text`` as a required string field and ``params`` as a
-        single JSON-encoded string holding generation settings.  When
-        reference-audio cloning is requested, ``prompt_text`` accompanies
-        the ``prompt_audio`` file part.
+        Verified against the official target ``rodrigomatta/s2.cpp``
+        (``openapi/s2-openapi.yaml``).  The canonical format uses ``text``
+        as a required string field and ``params`` as a single JSON-encoded
+        string holding generation settings.
+
+        When reference-audio cloning is requested the ``reference_text``
+        field accompanies the ``reference`` file part.
+        ``prompt_audio`` and ``prompt_text`` are accepted upstream
+        aliases but are NOT the canonical emitted field names.
+
+        ``voice`` and ``voice_dir`` are canonical top-level fields for
+        saved voice profiles (``.s2voice``).
 
         Individual settings such as ``stream``, ``chunked``,
-        ``output_format``, ``model``, and ``voice`` are NOT top-level
-        multipart fields.
+        ``output_format``, and ``model`` are NOT top-level multipart
+        fields — they belong inside ``params``.
         """
         params: dict[str, Any] = {
             "temperature": self.temperature,
@@ -201,7 +216,11 @@ class S2GenerateRequest:
             "params": json.dumps(params),
         }
         if self.prompt_text:
-            fields["prompt_text"] = self.prompt_text
+            fields["reference_text"] = self.prompt_text
+        if self.voice:
+            fields["voice"] = self.voice
+        if self.voice_dir:
+            fields["voice_dir"] = self.voice_dir
         return fields
 
 
@@ -265,21 +284,37 @@ class S2Client:
     ) -> S2GenerateResult:
         """POST multipart/form-data to ``/generate`` and return raw audio bytes.
 
-        Phase 5A.1 uses the verified canonical upstream fields.  When
-        ``files`` includes ``prompt_audio``, the caller must also provide
-        ``prompt_text`` on the request or a ``ValueError`` is raised.
+        Phase 5A.2 uses canonical fields from ``rodrigomatta/s2.cpp``
+        (``openapi/s2-openapi.yaml``). The canonical file-part key is
+        ``reference``; accepted aliases are ``reference_audio``,
+        ``prompt_audio``, and ``ref_audio`` and are normalised internally.
+
+        When reference audio is provided, ``reference_text`` (or the
+        ``prompt_text`` field on the request) is required — a
+        ``ValueError`` is raised otherwise.
+
         This method still buffers the backend response and does not
         implement streaming.
         """
-        has_prompt_audio = files and "prompt_audio" in files
-        if has_prompt_audio and not request.prompt_text:
+        # Normalise reference-audio aliases to the canonical key.
+        _files: dict[str, tuple[str, bytes, str]] = {}
+        if files:
+            for key, value in files.items():
+                if key in _REFERENCE_AUDIO_ALIASES:
+                    _files[_REFERENCE_AUDIO_FIELD] = value
+                else:
+                    _files[key] = value
+
+        has_reference = _REFERENCE_AUDIO_FIELD in _files
+        if has_reference and not request.prompt_text:
             raise ValueError(
-                "prompt_audio requires prompt_text (reference transcript)"
+                "reference requires reference_text (transcript for the"
+                " reference audio); accepted aliases: prompt_text, ref_text"
             )
 
         content_type, body = encode_multipart_form_data(
             fields=request.to_multipart_fields(),
-            files=files,
+            files=_files,
             boundary=boundary,
         )
         http_request = urllib.request.Request(

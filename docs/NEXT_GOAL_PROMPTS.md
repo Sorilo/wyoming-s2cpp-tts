@@ -39,13 +39,40 @@ Every future generated prompt must:
 
 If an intermediate phase is proposed, it must state why it is required, which approved phase it blocks, exact scope, acceptance criteria, and whether it changes the approved architecture.
 
-## Next immediate prompt: Phase 5D ✅ (completed 2026-07-07)
+## Next immediate prompt: Phase 5.5A ✅ (harness completed 2026-07-07)
 
-Implemented. Added ``app/metrics.py`` with ``SynthesisMetrics`` and ``MetricsCollector``. All three synthesis paths (fake, buffered, streaming) accept an optional ``MetricsCollector``. 38 new tests; 128 total pass.
+Phase 5.5A implemented: ``app/smoke_harness.py`` with full smoke harness,
+rewritten ``scripts/smoke_s2cpp_generate.py`` CLI, 65 new mocked tests,
+193 total pass. Phase 5.5B is pending — requires an already-running
+``rodrigomatta/s2.cpp`` backend.
+
+### Phase 5.5B continuation prompt (if no real backend was tested)
+
+```text
+/goal
+You are Hermes, acting as a senior Python/s2.cpp/smoke-test engineer.
+
+Project:
+/workspace/wyoming-s2cpp-tts
+
+Goal:
+Execute Phase 5.5B only: run the real-backend smoke tests against an
+already-running rodrigomatta/s2.cpp server and document the actual results.
+
+Context:
+Phase 5.5A is complete — the harness is implemented and tested (193 tests
+pass). The CLI accepts --run-real, --require-backend, --endpoint, --json,
+--output-dir, --probe-legacy-json.
+
+If no backend is reachable, report status=unavailable and exit 0 (unless
+--require-backend is set).
+
+Quota/safety: do not build s2.cpp, download models, or do GPU work.
 
 ---
 
-### Phase 5.5: real external s2.cpp smoke test (prompt follows)
+### Phase 6A: Wyoming client disconnect and backend cancellation (prompt follows)
+
 
 ```text
 /goal

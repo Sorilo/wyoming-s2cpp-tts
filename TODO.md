@@ -20,7 +20,7 @@
 12. Phase 5B: implement a streaming async iterator over s2.cpp response bytes with mocked chunked responses. ✅
 13. Phase 5C: pipe streamed audio into Wyoming `AudioStart`/`AudioChunk`/`AudioStop` events with mocked streaming tests. ✅
 14. Phase 5D: add TTS-side metrics and structured tracing for request start, first backend byte, first Wyoming audio chunk, emitted bytes/chunks, request duration, and trace/request identifiers where practical. ✅
-15. Phase 5.5: run an opt-in real external s2.cpp smoke test outside the final Docker image when backend/model/tokenizer prerequisites are actually available.
+15. Phase 5.5: run an opt-in real external s2.cpp smoke test outside final Docker image. Phase 5.5A ✅ (harness implemented, 65 mocked tests). Phase 5.5B PENDING (real backend verification).
 16. Phase 6A: handle Wyoming client disconnects and backend cancellation where supported.
 17. Phase 6B: implement queue cancellation, backend busy handling, timeout policy, and policy for a new request arriving during active speech.
 18. Phase 6C: test barge-in-friendly behavior using Home Assistant when available or simulated disconnect/cancellation tests otherwise.

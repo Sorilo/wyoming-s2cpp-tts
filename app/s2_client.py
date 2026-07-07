@@ -322,6 +322,23 @@ class S2StreamResult:
             "Content-Type", "application/octet-stream"
         )
 
+    @property
+    def status_code(self) -> int | None:
+        """HTTP status code from the backend response, or *None* before connect."""
+        if self._response is None:
+            return None
+        return self._response.status
+
+    @property
+    def response_headers(self) -> dict[str, str]:
+        """Return a copy of the backend response headers (lowercase keys).
+
+        Returns an empty dict when the connection has not been opened yet.
+        """
+        if self._response is None:
+            return {}
+        return {k.lower(): v for k, v in self._response.headers.items()}
+
 
 class S2Client:
     """Small synchronous client for an already-running s2.cpp HTTP server."""

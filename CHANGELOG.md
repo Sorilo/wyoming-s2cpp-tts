@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+- Phase 5.5A: implemented opt-in real-backend smoke-test harness.
+- Added ``app/smoke_harness.py`` with ``SmokeConfig``, ``BufferedMultipartResult``,
+  ``StreamingMultipartResult``, ``LegacyJsonResult``, ``SmokeReport``, WAV header
+  validation, PCM frame-alignment validation, audio response-header parsing,
+  streaming progressive-delivery classification, and ``run_smoke_harness()``
+  orchestrator with reachability probe.
+- Added ``status_code`` and ``response_headers`` properties to ``S2StreamResult``
+  for smoke-test audio-metadata validation.
+- Rewrote ``scripts/smoke_s2cpp_generate.py`` as the Phase 5.5 CLI with
+  ``--run-real`` (explicit opt-in), ``--require-backend`` (nonzero exit),
+  ``--endpoint`` override, ``--probe-legacy-json``, ``--output-dir``, and
+  ``--json`` machine-readable output.
+- Added 65 mocked smoke-harness tests (193 total pass): cover opt-in gates,
+  WAV/PCM validation, streaming progressive/inconclusive classification,
+  audio-header parsing, error categorisation, structured output, timeout/error
+  cleanup, and the full orchestrator path. No real backend contacted during
+  the ordinary test suite.
+- ``TTS_BACKEND=fake`` remains default; all existing 128 tests continue to pass.
+- Phase 5.5B (real backend verification) is pending — requires an already-running
+  ``rodrigomatta/s2.cpp`` backend.
+- No real s2.cpp, CUDA, GPU, Docker, Home Assistant, cancellation, or latency
+  success claimed from this harness implementation alone.
+
+
 - Phase 5D: implemented lightweight structured TTS metrics and tracing.
 - Added ``app/metrics.py`` with ``SynthesisMetrics`` frozen dataclass (request_id,
   trace_id, backend_type, synthesis_mode, monotonic timestamps for request start,

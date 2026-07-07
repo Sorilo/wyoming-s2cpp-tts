@@ -255,13 +255,27 @@ Acceptance criteria status:
 
 ### Phase 5.5: real external s2.cpp smoke test outside final Docker image
 
-Run a real external s2.cpp smoke test only when an already-running backend and required model/tokenizer files are available outside the final Docker image.
+**Phase 5.5A (harness implemented): ✅**
 
-Acceptance criteria:
+Implemented the opt-in smoke-test harness (``app/smoke_harness.py``) with
+canonical buffered multipart WAV validation, canonical streaming multipart
+PCM/header validation with progressive-delivery classification, and
+structured JSON reporting. 65 new mocked tests (193 total pass).
 
-- The smoke test is opt-in and harmless when unavailable.
-- Results document exact backend endpoint, payload mode, content type, byte count, and whether audio was playable if checked.
-- No Docker/CUDA build success is inferred from this smoke test.
+Acceptance criteria status:
+
+- The smoke test is opt-in and harmless when unavailable. ✅ (``--run-real`` flag required)
+- Results document exact backend endpoint, payload mode, content type, byte count. ✅ (structured JSON + human-readable summary)
+- No Docker/CUDA build success is inferred. ✅
+- CLI supports ``--require-backend`` (nonzero exit), ``--endpoint`` override, ``--probe-legacy-json``, ``--output-dir``, ``--json``. ✅
+- ``S2StreamResult`` exposes ``status_code`` and ``response_headers`` for audio-metadata validation. ✅
+
+**Phase 5.5B (real backend verification): PENDING**
+
+Real s2.cpp compatibility has NOT been verified through this repo's client
+code yet.  Phase 5.5B requires an already-running ``rodrigomatta/s2.cpp``
+backend.  When available, the harness will run buffered and streaming
+multipart checks and record actual results.
 
 ### Phase 6A: Wyoming client disconnect and backend cancellation
 

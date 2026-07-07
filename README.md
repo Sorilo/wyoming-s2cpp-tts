@@ -191,6 +191,52 @@ Limitations:
 - It assumes the backend `/generate` endpoint is already running and compatible with the current buffered JSON payload used by `S2Client.generate(...)`; multipart compatibility is mocked separately in Phase 5A.
 - It does not validate audio quality, realtime factor, VRAM use, streaming, cancellation, or barge-in behavior.
 
+## Phase 5.5 real external s2.cpp smoke test harness
+
+Phase 5.5 adds an opt-in smoke-test harness that validates real s2.cpp HTTP
+/generate backend compatibility without starting, building, or downloading
+s2.cpp, models, or CUDA tooling.
+
+### Phase 5.5A: harness implemented (complete)
+
+app/smoke_harness.py provides the harness with SmokeConfig,
+BufferedMultipartResult, StreamingMultipartResult, SmokeReport,
+WAV header validation, PCM frame-alignment validation, and streaming
+progressive-delivery classification. 65 new mocked tests (193 total pass).
+
+The CLI (scripts/smoke_s2cpp_generate.py) supports --run-real
+(explicit opt-in), --require-backend (nonzero exit), --endpoint
+override, --probe-legacy-json, --output-dir, and --json output.
+
+Without --run-real the script exits successfully with status=skipped.
+With --run-real but unreachable backend it reports status=unavailable
+(exit 0 unless --require-backend is also set).
+
+### Phase 5.5B: real backend verification (pending)
+
+Phase 5.5B requires an already-running rodrigomatta/s2.cpp backend.
+When reached, the harness runs buffered multipart (WAV validation) and
+streaming multipart (PCM/header validation with progressive classification).
+Real s2.cpp compatibility is **not** claimed until this actually succeeds.
+
+### Smoke harness tests
+
+
+
+65 focused mocked tests cover opt-in gates, WAV/PCM validation, progressive
+classification, header parsing, error categorisation, and the full orchestrator
+path. No real backend is contacted during the ordinary test suite.
+
+Limitations:
+
+- Direct backend-client smoke test only — not a Home Assistant/Wyoming
+  integration test.
+- Does not validate audio quality, realtime factor, VRAM use, or barge-in.
+- Target server is alpha/experimental.
+- Diagnostic timings are single-run only, explicitly labeled non-benchmark.
+- Generated audio is never committed to Git.
+- JSON-path success is not required from the multipart-only target.
+
 ## Phase 3 container/process scaffold
 
 The Phase 3 Dockerfile is now a runnable Python-wrapper container scaffold:

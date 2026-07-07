@@ -1,8 +1,8 @@
 # Next Hermes `/goal` prompts
 
-Run these phases one at a time. Keep each run small. Do **not** start the CUDA/s2.cpp build until the Wyoming server works with fake/test audio and the backend client path is proven. Phase 2 is complete at the backend-client level; the next immediate goal is a small Phase 2.5 integration step.
+Run these phases one at a time. Keep each run small. Do **not** start the CUDA/s2.cpp build until the Wyoming server works with fake/test audio, the backend client path is proven, and an external backend smoke path is documented. Phase 2.5 is complete; the next immediate goal is an optional external s2.cpp smoke-test step if an already-running backend is available.
 
-## Next immediate prompt: Phase 2.5
+## Next immediate prompt: Phase 2.75
 
 ```text
 /goal
@@ -12,29 +12,21 @@ Project: /workspace/wyoming-s2cpp-tts
 
 Quota protection: Keep this run small. Do not build s2.cpp, do not download models, do not run Docker builds, and do not implement final streaming/cancellation yet.
 
-Goal: Implement Phase 2.5 only: wire the tested s2.cpp HTTP client into the Wyoming TTS path as an opt-in non-streaming backend mode, while keeping the Phase 1 fake PCM mode as the default fallback/test mode.
+Goal: Implement Phase 2.75 only: add an optional direct smoke-test path for an already-running external s2.cpp HTTP /generate endpoint, without requiring that backend for normal tests or CI.
 
 Requirements:
-- Inspect the existing Phase 1 Wyoming server and Phase 2 s2_client implementation first.
-- Keep Home Assistant/Wyoming protocol behavior in app/wyoming_server.py.
-- Keep backend HTTP details in app/s2_client.py.
-- Add a small config switch such as TTS_BACKEND=fake|s2cpp, defaulting to fake.
-- When TTS_BACKEND=fake, all existing fake Wyoming tests must keep passing.
-- When TTS_BACKEND=s2cpp, convert one buffered s2.cpp client result into Wyoming AudioStart/AudioChunk/AudioStop events.
-- Use mocked s2.cpp responses in tests; do not require a real backend.
-- Do not implement progressive streaming, cancellation, Docker packaging, CUDA builds, or model downloads.
-- Document the backend mode switch and limitations clearly.
+- Inspect the current Phase 2.5 implementation first.
+- Keep fake backend as the default and keep all mocked tests passing.
+- Do not start, build, compile, package, or supervise s2.cpp.
+- Do not download GGUF models.
+- Add a small script or documented command that uses Settings.from_env(), S2_HOST, S2_PORT, and TTS_BACKEND=s2cpp to send one direct /generate request when a backend is already available.
+- The smoke path must be opt-in and skipped/harmless when no backend is available.
+- Add tests for any new parsing/helper code using mocks only.
+- Document expected inputs, expected output, and limitations.
 - Run the cheapest relevant tests available.
 - Make one git commit with a clear message.
 
 Final response: summarize files changed, tests run, git status, and the next recommended prompt.
-```
-
-## Phase 2 prompt
-
-```text
-/goal
-Implement Phase 2 for /workspace/wyoming-s2cpp-tts: connect the Python wrapper to an already-running s2.cpp HTTP /generate endpoint. Keep it backend-client focused. Do not build s2.cpp, download models, or change Docker packaging. Add tests with mocked HTTP responses and document how to point S2_HOST/S2_PORT at an external test server. Commit the change.
 ```
 
 ## Phase 3 prompt

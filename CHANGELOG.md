@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Implemented Phase 2.5 opt-in `TTS_BACKEND=s2cpp` Wyoming route for one buffered backend response.
+- Kept `TTS_BACKEND=fake` as the default fake PCM/Home Assistant test mode.
+- Added mocked tests for converting s2.cpp client results into Wyoming `AudioStart`/`AudioChunk`/`AudioStop` events.
 - Implemented Phase 2 s2.cpp HTTP `/generate` client for an already-running backend.
 - Added minimal `S2_HOST`/`S2_PORT` environment loading for external backend targeting.
 - Added mocked tests for backend request payloads, endpoint selection, omitted empty voices, and HTTP failure handling.

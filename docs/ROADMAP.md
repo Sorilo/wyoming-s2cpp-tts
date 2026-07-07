@@ -14,7 +14,11 @@ Implemented at the backend-client level. `app/s2_client.py` can POST JSON to an 
 
 ## Phase 2.5: opt-in non-streaming s2.cpp backend mode
 
-Wire the tested s2.cpp client into the Wyoming `Synthesize` path behind a config switch, while keeping fake PCM as the default fallback/test mode. Convert one buffered backend response into Wyoming audio events. Do not implement final progressive streaming or cancellation yet.
+Implemented. `TTS_BACKEND=fake` remains the default. `TTS_BACKEND=s2cpp` calls the tested s2.cpp HTTP client and converts one buffered raw PCM response into Wyoming `AudioStart`/`AudioChunk`/`AudioStop` events. Progressive streaming, WAV-header handling, and cancellation remain later phases.
+
+## Phase 2.75: optional direct external s2.cpp smoke test
+
+If an already-running s2.cpp server is available, prove one direct request path against it without building s2.cpp or downloading models. Keep this optional and documented so CI/tests do not require local model infrastructure.
 
 ## Phase 3: Docker container with s2.cpp supervised process
 

@@ -1,7 +1,8 @@
-"""Application entrypoint for the Phase 1 fake Wyoming TTS server.
+"""Application entrypoint for the Wyoming TTS server.
 
-This starts deterministic fake/test PCM only. Later phases will supervise s2.cpp
-and route real Fish Speech audio through this Wyoming boundary.
+By default this starts deterministic fake/test PCM. With `TTS_BACKEND=s2cpp`, it
+uses the opt-in non-streaming bridge to an already-running s2.cpp HTTP server.
+Later phases will supervise s2.cpp and add real streaming/cancellation behavior.
 """
 
 from __future__ import annotations
@@ -11,8 +12,8 @@ from app.wyoming_server import run_server
 
 
 def main() -> int:
-    """Run the Phase 1 fake Wyoming TTS server."""
-    run_server(Settings())
+    """Run the configured Wyoming TTS server."""
+    run_server(Settings.from_env())
     return 0
 
 

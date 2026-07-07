@@ -1,15 +1,17 @@
-"""Minimal Wyoming Protocol fake TTS server for Phase 1.
+"""Minimal Wyoming Protocol TTS server for fake and opt-in s2.cpp backends.
 
-This module proves the Home Assistant/Wyoming boundary using deterministic local
-PCM test audio. It intentionally does not call s2.cpp, load GGUF models, or use
-CUDA/GPU resources.
+The default backend proves the Home Assistant/Wyoming boundary using
+deterministic local PCM test audio. The opt-in Phase 2.5 backend calls an
+already-running s2.cpp HTTP server and converts one buffered PCM response into
+Wyoming audio events. This module does not build s2.cpp, load GGUF models, or
+use CUDA/GPU resources directly.
 """
 
 from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, Protocol
 from urllib.parse import urlparse
 
 from wyoming.audio import AudioChunk, AudioStart, AudioStop
@@ -20,6 +22,50 @@ from wyoming.tts import Synthesize
 
 from app.audio import PCM_CHANNELS, PCM_WIDTH_BYTES, chunk_pcm_s16le, pcm_s16le_test_tone
 from app.config import Settings
+from app.s2_client import S2Client, S2GenerateRequest
+
+
+class S2GenerateClient(Protocol):
+    """Small protocol for a sync s2.cpp client used by the Wyoming adapter."""
+
+    def generate(self, request: S2GenerateRequest):
+        """Generate one buffered audio response."""
+
+
+S2ClientFactory = Callable[[Settings], S2GenerateClient]
+
+
+def _pcm_to_audio_events(pcm: bytes, config: "FakeTtsConfig") -> list[Event]:
+    """Convert buffered raw PCM s16le audio into Wyoming audio events."""
+    events: list[Event] = [
+        AudioStart(
+            rate=config.sample_rate,
+            width=config.width,
+            channels=config.channels,
+        ).event()
+    ]
+
+    timestamp_ms = 0
+    for chunk in chunk_pcm_s16le(
+        pcm,
+        sample_rate=config.sample_rate,
+        chunk_ms=config.chunk_ms,
+        width=config.width,
+        channels=config.channels,
+    ):
+        events.append(
+            AudioChunk(
+                rate=config.sample_rate,
+                width=config.width,
+                channels=config.channels,
+                audio=chunk,
+                timestamp=timestamp_ms,
+            ).event()
+        )
+        timestamp_ms += config.chunk_ms
+
+    events.append(AudioStop(timestamp=timestamp_ms).event())
+    return events
 
 
 @dataclass(frozen=True)
@@ -88,35 +134,25 @@ def synthesize_fake_tts_events(
         sample_rate=fake_config.sample_rate,
     )
 
-    events: list[Event] = [
-        AudioStart(
-            rate=fake_config.sample_rate,
-            width=fake_config.width,
-            channels=fake_config.channels,
-        ).event()
-    ]
+    return _pcm_to_audio_events(pcm, fake_config)
 
-    timestamp_ms = 0
-    for chunk in chunk_pcm_s16le(
-        pcm,
-        sample_rate=fake_config.sample_rate,
-        chunk_ms=fake_config.chunk_ms,
-        width=fake_config.width,
-        channels=fake_config.channels,
-    ):
-        events.append(
-            AudioChunk(
-                rate=fake_config.sample_rate,
-                width=fake_config.width,
-                channels=fake_config.channels,
-                audio=chunk,
-                timestamp=timestamp_ms,
-            ).event()
-        )
-        timestamp_ms += fake_config.chunk_ms
 
-    events.append(AudioStop(timestamp=timestamp_ms).event())
-    return events
+def synthesize_s2cpp_tts_events(
+    text: str,
+    client: S2GenerateClient,
+    settings: Settings,
+    config: FakeTtsConfig | None = None,
+) -> list[Event]:
+    """Synthesize via an already-running s2.cpp backend and emit Wyoming events.
+
+    This Phase 2.5 bridge intentionally buffers the backend response before
+    converting it to Wyoming audio. Progressive streaming is reserved for a
+    later phase.
+    """
+    audio_config = config or FakeTtsConfig.from_settings(settings)
+    request = S2GenerateRequest.from_settings(text=text, settings=settings)
+    result = client.generate(request)
+    return _pcm_to_audio_events(result.audio, audio_config)
 
 
 class SingleWorkerSynthesisQueue:
@@ -158,10 +194,14 @@ class FakeTtsEventHandler(AsyncEventHandler):
         writer: asyncio.StreamWriter,
         config: FakeTtsConfig,
         queue: SingleWorkerSynthesisQueue,
+        settings: Settings,
+        s2_client_factory: S2ClientFactory,
     ) -> None:
         super().__init__(reader, writer)
         self.config = config
         self.queue = queue
+        self.settings = settings
+        self.s2_client_factory = s2_client_factory
 
     async def handle_event(self, event: Event) -> bool:
         """Handle one Wyoming event."""
@@ -173,10 +213,22 @@ class FakeTtsEventHandler(AsyncEventHandler):
             synthesize = Synthesize.from_event(event)
 
             async def send_audio() -> None:
-                for audio_event in synthesize_fake_tts_events(
-                    synthesize.text,
-                    config=self.config,
-                ):
+                if self.settings.tts_backend == "s2cpp":
+                    s2_client = self.s2_client_factory(self.settings)
+                    events = await asyncio.to_thread(
+                        synthesize_s2cpp_tts_events,
+                        synthesize.text,
+                        s2_client,
+                        self.settings,
+                        self.config,
+                    )
+                else:
+                    events = synthesize_fake_tts_events(
+                        synthesize.text,
+                        config=self.config,
+                    )
+
+                for audio_event in events:
                     await self.write_event(audio_event)
 
             await self.queue.run(send_audio)
@@ -207,14 +259,28 @@ async def start_fake_tts_server(
     port: int = 10200,
     config: FakeTtsConfig | None = None,
     max_queue_size: int = 3,
+    settings: Settings | None = None,
+    s2_client_factory: S2ClientFactory = S2Client.from_settings,
 ) -> RunningFakeTtsServer:
-    """Start the Phase 1 fake Wyoming TTS server without blocking."""
-    fake_config = config or FakeTtsConfig()
+    """Start the Wyoming TTS server without blocking.
+
+    Despite the historical function name, this can run either the default fake
+    backend or the opt-in buffered s2.cpp backend based on `settings.tts_backend`.
+    """
+    active_settings = settings or Settings()
+    fake_config = config or FakeTtsConfig.from_settings(active_settings)
     queue = SingleWorkerSynthesisQueue(max_size=max_queue_size)
     server = AsyncTcpServer(host, port)
 
     def handler_factory(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-        return FakeTtsEventHandler(reader, writer, fake_config, queue)
+        return FakeTtsEventHandler(
+            reader,
+            writer,
+            fake_config,
+            queue,
+            active_settings,
+            s2_client_factory,
+        )
 
     await server.start(handler_factory)
     raw_server = getattr(server, "_server", None)
@@ -242,8 +308,12 @@ def run_server(settings: Settings | None = None) -> None:
             port=port,
             config=config,
             max_queue_size=active_settings.max_queue_size,
+            settings=active_settings,
         )
-        print(f"Fake Wyoming TTS server listening on tcp://{host}:{server.port}")
+        print(
+            f"Wyoming TTS server listening on tcp://{host}:{server.port} "
+            f"with backend={active_settings.tts_backend}"
+        )
         try:
             await asyncio.Event().wait()
         finally:

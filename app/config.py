@@ -12,6 +12,7 @@ import os
 
 
 WYOMING_URI = "tcp://0.0.0.0:10200"
+TTS_BACKEND = "fake"
 S2_HOST = "127.0.0.1"
 S2_PORT = 3030
 S2_MODEL = "/models/s2-pro-q6_k.gguf"
@@ -49,6 +50,7 @@ class Settings:
     """
 
     wyoming_uri: str = WYOMING_URI
+    tts_backend: str = TTS_BACKEND
     s2_host: str = S2_HOST
     s2_port: int = S2_PORT
     s2_model: str = S2_MODEL
@@ -81,11 +83,13 @@ class Settings:
     def from_env(cls) -> "Settings":
         """Load minimal Phase 2 environment overrides.
 
-        Only `S2_HOST` and `S2_PORT` are parsed for now so an already-running
-        external s2.cpp HTTP server can be targeted without changing code.
-        Broader environment/profile loading belongs in a later hardening phase.
+        `TTS_BACKEND`, `S2_HOST`, and `S2_PORT` are parsed for now so the
+        default fake backend or an already-running external s2.cpp HTTP server
+        can be selected without changing code. Broader environment/profile
+        loading belongs in a later hardening phase.
         """
         return cls(
+            tts_backend=os.getenv("TTS_BACKEND", TTS_BACKEND),
             s2_host=os.getenv("S2_HOST", S2_HOST),
             s2_port=int(os.getenv("S2_PORT", str(S2_PORT))),
         )

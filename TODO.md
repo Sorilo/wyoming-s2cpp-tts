@@ -8,10 +8,11 @@
 4. Add single-worker bounded queue. ✅
 5. Add direct s2.cpp HTTP client with mocked tests. ✅
 6. Prove one external s2.cpp request path before packaging.
-7. Add container startup flow for Python wrapper plus s2.cpp process.
-8. Document Unraid WebUI Add Container settings.
-9. Verify Home Assistant can connect to the Wyoming endpoint.
-10. Add troubleshooting for ports, GPU visibility, models, voices, and audio format.
+7. Add opt-in non-streaming s2.cpp backend mode. ✅
+8. Add container startup flow for Python wrapper plus s2.cpp process.
+9. Document Unraid WebUI Add Container settings.
+10. Verify Home Assistant can connect to the Wyoming endpoint.
+11. Add troubleshooting for ports, GPU visibility, models, voices, and audio format.
 
 ## Future
 

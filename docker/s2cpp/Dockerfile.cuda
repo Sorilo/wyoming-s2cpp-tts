@@ -1,0 +1,99 @@
+# docker/s2cpp/Dockerfile.cuda
+# ---------------------------------------------------------------------------
+# Phase 5.5B0: minimal reproducible CUDA s2.cpp backend image
+#
+# This image builds the rodrigomatta/s2.cpp inference engine with CUDA
+# support and packages only the HTTP server binary.  It intentionally does
+# NOT bundle GGUF models, tokenizer assets, reference audio, voices,
+# secrets, generated audio, or the Python Wyoming wrapper.
+#
+# Mount runtime assets from Unraid host paths.
+#
+# Pinned upstream revision: see S2CPP_REVISION ARG below.
+# ---------------------------------------------------------------------------
+
+# -- build stage -----------------------------------------------------------
+FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS builder
+
+# Build-time arguments (pin the exact upstream revision).
+ARG S2CPP_REPO=https://github.com/rodrigomatta/s2.cpp.git
+ARG S2CPP_REVISION=2c33261938da1a41d713768b1b391b4d368d7d2c
+
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        cmake \
+        git \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+
+# Clone with submodules and pin.
+RUN git clone --recurse-submodules "${S2CPP_REPO}" . \
+    && git fetch --depth=1 origin "${S2CPP_REVISION}" \
+    && git checkout "${S2CPP_REVISION}" \
+    && git submodule update --init --recursive
+
+# Build the s2.cpp CUDA binary.
+RUN cmake -B build -DCMAKE_BUILD_TYPE=Release -DS2_CUDA=ON \
+    && cmake --build build --parallel "$(nproc)"
+
+# Record build provenance.
+RUN echo "s2.cpp revision: ${S2CPP_REVISION}" > /src/build/BUILD_INFO \
+    && echo "build date: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /src/build/BUILD_INFO \
+    && echo "cuda base: nvidia/cuda:12.4.1-devel-ubuntu22.04" >> /src/build/BUILD_INFO
+
+# -- runtime stage ---------------------------------------------------------
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
+
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+
+# Runtime dependencies: only what the s2 binary needs for the HTTP server.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system s2cpp \
+    && useradd --system --no-create-home --gid s2cpp s2cpp
+
+# Copy only the required runtime artifacts.
+COPY --from=builder --chown=s2cpp:s2cpp /src/build/s2            /usr/local/bin/s2
+COPY --from=builder --chown=s2cpp:s2cpp /src/build/BUILD_INFO     /usr/local/share/s2cpp/BUILD_INFO
+COPY --chown=s2cpp:s2cpp docker/s2cpp/entrypoint.sh               /entrypoint.sh
+
+RUN chmod +x /entrypoint.sh \
+    && mkdir -p /models /voices /config \
+    && chown s2cpp:s2cpp /models /voices /config
+
+# Runtime volumes for host-mounted assets.
+VOLUME ["/models", "/voices", "/config"]
+
+# Environment defaults (matching upstream CLI defaults).
+ENV S2_MODEL=/models/s2-pro-q6_k.gguf \
+    S2_HOST=0.0.0.0 \
+    S2_PORT=3030 \
+    S2_GPU_LAYERS=-1 \
+    S2_THREADS=0 \
+    S2_CODEC_CPU=false \
+    S2_LOG_LEVEL=info
+
+# Expose the internal HTTP server port (used by same-network clients).
+EXPOSE 3030/tcp
+
+# OCI metadata labels.
+LABEL org.opencontainers.image.title="s2cpp-backend" \
+      org.opencontainers.image.description="Standalone CUDA-enabled rodrigomatta/s2.cpp HTTP backend" \
+      org.opencontainers.image.source="https://github.com/rodrigomatta/s2.cpp" \
+      org.opencontainers.image.version="0.1.0-alpha" \
+      org.opencontainers.image.vendor="wyoming-s2cpp-tts" \
+      com.nvidia.volumes.needed="nvidia_driver" \
+      com.nvidia.cuda.version="12.4.1" \
+      wyoming-s2cpp-tts.s2cpp-revision="2c33261938da1a41d713768b1b391b4d368d7d2c" \
+      wyoming-s2cpp-tts.role="backend-only"
+
+USER s2cpp
+
+ENTRYPOINT ["/entrypoint.sh"]

@@ -1,0 +1,203 @@
+# s2cpp Backend — Docker Image & Unraid Deployment
+
+Phase 5.5B0: minimal reproducible CUDA `rodrigomatta/s2.cpp` HTTP backend image for early testing.
+
+## What this is
+
+A standalone Docker image that builds and runs the `rodrigomatta/s2.cpp` inference engine with NVIDIA CUDA GPU acceleration. It exposes the `POST /generate` HTTP endpoint but does **not** include the Python Wyoming wrapper, GGUF models, tokenizer assets, reference audio, voices, secrets, or generated audio.
+
+This is an **early extraction** of backend-packaging work. It is **not** production-hardened and Phase 5.5B has **not yet been run**.
+
+## Image details
+
+| Detail | Value |
+|---|---|
+| Upstream repo | `rodrigomatta/s2.cpp` |
+| Pinned revision | `2c33261938da1a41d713768b1b391b4d368d7d2c` |
+| CUDA base | `nvidia/cuda:12.4.1-runtime-ubuntu22.04` |
+| Build base | `nvidia/cuda:12.4.1-devel-ubuntu22.04` |
+| Internal server port | `3030` |
+| Build platform | `linux/amd64` |
+| GitHub Container Registry | `ghcr.io/<owner>/wyoming-s2cpp-tts-backend` |
+
+## Published tags
+
+| Tag | Description |
+|---|---|
+| `edge` | Latest push to main / manual dispatch (rolling) |
+| `sha-<short>` | Immutable per-commit image (pin for rollback) |
+| `v*` | Optional release tag (future) |
+
+## Required runtime assets (mounted from host)
+
+```
+/models/
+  s2-pro-q6_k.gguf      # GGUF model (q6_k recommended for RTX 3080 10 GB)
+  tokenizer.json         # Qwen3 BPE tokenizer
+
+/voices/                 # Saved .s2voice profiles (optional)
+/config/                 # Reserved for future config (optional)
+```
+
+GGUF model files are available at: https://huggingface.co/rodrigomt/s2-pro-gguf
+
+## Environment variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `S2_MODEL` | `/models/s2-pro-q6_k.gguf` | Path to GGUF model file (required) |
+| `S2_TOKENIZER` | *auto-detect* | Path to tokenizer.json (auto-detected next to model) |
+| `S2_HOST` | `0.0.0.0` | Server bind address |
+| `S2_PORT` | `3030` | Internal HTTP server port |
+| `S2_GPU_LAYERS` | `-1` | GPU layer offload (-1 = all 36, 0 = CPU only) |
+| `S2_CUDA_DEVICE` | `0` | CUDA device index |
+| `S2_THREADS` | `0` | CPU threads (0 = auto) |
+| `S2_CODEC_CPU` | `false` | Keep audio codec on CPU |
+| `S2_VOICE_DIR` | `/voices` | Saved voice profiles directory |
+| `S2_LOG_LEVEL` | `info` | Runtime verbosity: error, warn, info, debug |
+| `S2_EXTRA_ARGS` | *empty* | Additional CLI flags passed to s2 binary |
+
+## GitHub Actions: Build & Publish
+
+### Triggering a build
+
+1. Push the repository to GitHub.
+2. Go to **Actions** → **Publish s2cpp Backend** → **Run workflow**.
+3. Optionally enter a release tag (e.g., `v0.1.0-alpha`). Leave blank for edge + SHA tags only.
+
+The workflow:
+- Does **not** require a GPU on the build runner.
+- Does **not** run real synthesis smoke tests.
+- Uses `GITHUB_TOKEN` (no committed secrets).
+- Publishes `edge`, `sha-<short>`, and optionally a release tag.
+- Uses BuildKit with GitHub Actions layer caching.
+- Publishes to `ghcr.io/<owner>/wyoming-s2cpp-tts-backend`.
+
+### Pushing a release tag
+
+```bash
+git tag v0.1.0-alpha
+git push origin v0.1.0-alpha
+```
+
+Pushing a tag matching `v*` also triggers the workflow. The tag image is published alongside `edge` and `sha-<short>`.
+
+## Unraid Deployment
+
+### Prerequisites
+
+1. Unraid NVIDIA plugin installed and working.
+2. GPU visible to the host (`nvidia-smi`).
+3. GGUF model and tokenizer files downloaded to a host directory (e.g., `/mnt/user/appdata/s2cpp/models/`).
+
+### Install the template
+
+```bash
+cp unraid/my-s2cpp-backend.xml /boot/config/plugins/dockerMan/templates-user/
+```
+
+Then in the Unraid WebUI: **Docker** → **Add Container** → Select **s2cpp-backend** from the dropdown.
+
+### Public vs private GHCR pulling
+
+- **Public repository**: The image is pullable without authentication.
+- **Private repository**: You must create a GitHub personal access token with `read:packages` scope, then log in on Unraid:
+  ```bash
+  docker login ghcr.io -u YOUR_GITHUB_USER
+  ```
+
+### Configure the container
+
+Edit the template fields after adding:
+
+1. **Network**: Choose a custom Docker network (e.g., `hermes-net`) so containers can reach each other by name.
+2. **GGUF Model Directory**: Host path containing the `.gguf` file and `tokenizer.json` (read-only mount recommended).
+3. **Voice Profiles Directory**: Host path for `.s2voice` files (read-write so voices can be saved).
+4. **GPU**: Set `NVIDIA_VISIBLE_DEVICES` to a GPU UUID or leave empty for all GPUs.
+5. **Host Port**: Default `3031` (host port 3030 is already occupied on this server). Same-network clients use the **internal** port `3030` via container name.
+
+### Verify the backend is running
+
+```bash
+# Check logs
+docker logs s2cpp-backend
+
+# Expected startup output:
+# ========================================
+#  s2.cpp backend starting
+# ========================================
+#  model          = /models/s2-pro-q6_k.gguf
+#  tokenizer      = /models/tokenizer.json
+#  listen         = 0.0.0.0:3030
+#  ...
+
+# Test the /generate endpoint from the Unraid host
+curl -X POST http://localhost:3031/generate   --form "text=Hello world"   --form 'params={"max_new_tokens":64}'   -o test.wav
+
+# Or from another container on the same network:
+curl -X POST http://s2cpp-backend:3030/generate   --form "text=Hello world"   --form 'params={"max_new_tokens":64}'   -o test.wav
+```
+
+### Hermes Suite / Wyoming wrapper configuration
+
+When the Wyoming wrapper container is on the same Docker network, configure it to reach the backend by container name:
+
+```
+S2_HOST=s2cpp-backend
+S2_PORT=3030
+```
+
+**Do not** use the container IP (it changes on restart). Use the container name.
+
+### Rolling back
+
+Use an immutable SHA tag to pin to a specific build:
+
+1. Find the SHA tag in the GitHub Container Registry.
+2. Change the `Repository` field in the Unraid template to:
+   ```
+   ghcr.io/YOUR_GITHUB_USER/wyoming-s2cpp-tts-backend:sha-abc1234
+   ```
+3. Re-pull and restart the container.
+
+## What remains unverified
+
+- The image has **not been built and run on Unraid** yet.
+- Real CUDA GPU passthrough has not been tested.
+- Model loading, synthesis quality, VRAM usage, and realtime factor are unverified.
+- The HTTP `/generate` endpoint has not been tested with real audio output on this setup.
+- Phase 5.5B (real backend verification) has not yet been run.
+
+## Files in this phase
+
+```
+docker/s2cpp/
+  Dockerfile.cuda      # Multi-stage CUDA build
+  entrypoint.sh        # Startup validation + server launch
+  README.md            # This documentation
+
+.github/workflows/
+  publish-s2cpp-backend.yml  # GHCR build/publish workflow
+
+unraid/
+  my-s2cpp-backend.xml       # Unraid Add Container template
+```
+
+## Next steps: Phase 5.5B
+
+After the image is built, pushed, and deployed on Unraid, run Phase 5.5B verification:
+
+```
+/goal
+You are Hermes, acting as a senior CUDA Docker, Home Assistant, and Unraid integration engineer.
+
+Project: /workspace/wyoming-s2cpp-tts
+
+Goal: Run Phase 5.5B real backend verification.
+
+The s2cpp-backend container is deployed on Unraid as `s2cpp-backend`, listening internally on port 3030. The smoke harness is in app/smoke_harness.py. Run the real smoke tests against it.
+```
+
+---
+
+*Phase 5.5B0 — backend image packaging only. Phase 5.5B real verification is pending.*

@@ -53,10 +53,25 @@
 - Tests baseline: 287/287 pass before Phase 7A
 - Runtime caveat: true progressive backend HTTP audio streaming is not wired into the production event handler yet; the live handler still uses buffered `generate_multipart()`.
 
+## Phase 7B results
+
+- Wrapper voice discovery from `/voices` directory.
+- Safe `.s2voice` filename sanitisation (path traversal, hidden files, and symlinks rejected).
+- Six CMU ARCTIC profiles plus future drop-in profiles discoverable without rebuild/restart.
+- `S2_VOICE_DIR` and `S2_DEFAULT_VOICE` environment variables supported.
+- Wyoming Describe advertises all discovered voices plus the generic `s2-pro` fallback.
+- Synthesis: selected/default voice propagated as `voice` and `voice_dir` multipart fields.
+- Generic `s2-pro` fallback omits custom voice fields.
+- Unknown/unsafe voice IDs rejected with clear errors.
+- Both buffered and streaming Wyoming paths propagate voice consistently.
+- Home Assistant may require a Wyoming integration reload to see newly dropped-in voices.
+- 38 new tests (20 discovery + 18 voice selection/Describe/synthesis).
+- Full suite: 323 passing (2 pre-existing stale doc test failures unchanged).
+- Wrapper image published: see CHANGELOG for tags.
+
 ## Approved remaining v0.1 phases
 
-21. Phase 7B: wrapper voice discovery, voice selection, default voice configuration, Wyoming Describe exposure, Home Assistant selection, and drop-in discovery for later personal voice profiles
-22. Phase 7.5: wire true progressive backend HTTP audio streaming into the production Wyoming event handler when `S2_STREAM=true`
+21. Phase 7.5: wire true progressive backend HTTP audio streaming into the production Wyoming event handler when `S2_STREAM=true`
 23. Phase 8: client disconnect cleanup, open HTTP stream closure, cancellation behavior, and documented backend cancellation limitations
 24. Phase 9: queue capacity, busy handling, backend HTTP 503 handling, queue wait timeout, synthesis timeout, and controlled Wyoming failure behavior
 25. Phase 10: end-to-end barge-in testing with an actual Home Assistant satellite/player, VAD, wake word, playback interruption, and new-request behavior

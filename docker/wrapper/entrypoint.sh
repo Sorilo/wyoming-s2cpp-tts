@@ -13,6 +13,8 @@
 #   S2_HOST         s2.cpp backend hostname (default: s2cpp-backend)
 #   S2_PORT         s2.cpp backend port (default: 3030)
 #   S2_STREAM       Enable streaming synthesis (default: true)
+#   S2_VOICE_DIR    Directory containing .s2voice profiles (default: /voices)
+#   S2_DEFAULT_VOICE Optional default voice profile ID (default: empty)
 #   LOG_LEVEL       Application log verbosity (default: info)
 set -euo pipefail
 
@@ -24,6 +26,8 @@ set -euo pipefail
 : "${S2_HOST:=s2cpp-backend}"
 : "${S2_PORT:=3030}"
 : "${S2_STREAM:=true}"
+: "${S2_VOICE_DIR:=/voices}"
+: "${S2_DEFAULT_VOICE:=}"
 : "${LOG_LEVEL:=info}"
 
 # ------------------------------------------------------------------
@@ -39,6 +43,10 @@ echo " s2 port        = ${S2_PORT}"
 echo " s2 stream      = ${S2_STREAM}"
 echo " log level      = ${LOG_LEVEL}"
 echo " user           = $(whoami)"
+echo "========================================"
+
+echo " s2 voice dir   = ${S2_VOICE_DIR}"
+echo " s2 default voice = ${S2_DEFAULT_VOICE:-<none>}"
 echo "========================================"
 
 if [ "${TTS_BACKEND}" = "s2cpp" ]; then

@@ -36,6 +36,7 @@ from app.audio import (
     validate_declared_pcm_s16le,
 )
 from app.config import Settings
+from app.voice_discovery import discover_voices
 import sys
 
 from app.metrics import MetricsCollector
@@ -128,7 +129,8 @@ def build_info_event(settings: Settings | None = None) -> Event:
     """Return Wyoming service metadata for Home Assistant discovery/describe.
 
     When TTS_BACKEND=s2cpp the Describe response reflects the real s2.cpp
-    backend metadata (44100 Hz, mono, s16le).  When TTS_BACKEND=fake or
+    backend metadata (44100 Hz, mono, s16le) and includes any discovered
+    .s2voice profiles as selectable voices.  When TTS_BACKEND=fake or
     settings is None the original fake/test metadata is returned.
     """
     attribution = Attribution(
@@ -138,21 +140,38 @@ def build_info_event(settings: Settings | None = None) -> Event:
 
     active_settings = settings or Settings()
     if active_settings.tts_backend == "s2cpp":
-        voice = TtsVoice(
-            name="s2-pro",
-            attribution=attribution,
-            installed=True,
-            description="Fish Speech S2 Pro via s2.cpp — 44100 Hz mono s16le",
-            version="0.1",
-            languages=["en", "zh"],
-        )
+        # Generic default voice (always present for compatibility).
+        voices = [
+            TtsVoice(
+                name="s2-pro",
+                attribution=attribution,
+                installed=True,
+                description="Fish Speech S2 Pro via s2.cpp — 44100 Hz mono s16le",
+                version="0.1",
+                languages=["en", "zh"],
+            )
+        ]
+
+        # Append discovered .s2voice profiles.
+        for profile_id in discover_voices(active_settings.s2_voice_dir):
+            voices.append(
+                TtsVoice(
+                    name=profile_id,
+                    attribution=attribution,
+                    installed=True,
+                    description=f"Custom s2 voice profile: {profile_id}",
+                    version="0.1",
+                    languages=["en"],
+                )
+            )
+
         program = TtsProgram(
             name="wyoming-s2cpp-tts",
             attribution=attribution,
             installed=True,
             description="Wyoming TTS service backed by s2.cpp / Fish Speech S2 Pro",
             version="0.1",
-            voices=[voice],
+            voices=voices,
             supports_synthesize_streaming=True,
         )
     else:
@@ -212,12 +231,25 @@ def synthesize_s2cpp_tts_events(
     settings: Settings,
     config: FakeTtsConfig | None = None,
     metrics: MetricsCollector | None = None,
+    voice: str | None = None,
 ) -> list[Event]:
     """Synthesize via an already-running s2.cpp backend and emit Wyoming events.
 
     This Phase 2.5 bridge intentionally buffers the backend response before
     converting it to Wyoming audio. Progressive streaming is reserved for a
     later phase.
+
+    Args:
+        text: The text to synthesize.
+        client: An s2.cpp client that supports ``generate_multipart``.
+        settings: Runtime settings (backend, model, voice config).
+        config: Audio configuration for Wyoming event construction.
+        metrics: Optional metrics collector.
+        voice: Explicit voice profile ID to use.  When set, the
+            ``S2GenerateRequest`` is constructed with this voice and
+            the configured ``voice_dir``.  When *None*, the configured
+            ``S2_DEFAULT_VOICE`` (if valid) or a generic fallback
+            (omitting custom voice fields) is used.
 
     .. important::
 
@@ -230,7 +262,9 @@ def synthesize_s2cpp_tts_events(
         metrics = MetricsCollector(backend_type="s2cpp", synthesis_mode="buffered")
 
     audio_config = config or FakeTtsConfig.from_settings(settings)
-    request = S2GenerateRequest.from_settings(text=text, settings=settings)
+    request = S2GenerateRequest.from_settings(
+        text=text, settings=settings, voice=voice,
+    )
 
     try:
         result = client.generate_multipart(request)
@@ -431,6 +465,50 @@ class SingleWorkerSynthesisQueue:
             self._pending -= 1
 
 
+def _resolve_voice_from_synthesize(
+    synthesize: Synthesize,
+    settings: Settings,
+) -> str | None:
+    """Determine the effective voice for a synthesis request.
+
+    Resolves the voice selection priority:
+    1. Client-requested voice (from the Wyoming Synthesize event).
+    2. Configured ``S2_DEFAULT_VOICE`` (when valid and discovered).
+    3. ``None`` — generic s2-pro/backend fallback.
+
+    Returns *None* when a generic fallback should be used (no custom
+    voice fields sent to the backend).
+
+    Raises *ValueError* if the client or configured default names a
+    voice that is not currently discovered.
+    """
+    discovered = discover_voices(settings.s2_voice_dir)
+    discovered_set = frozenset(discovered)
+
+    # 1. Client-requested voice.
+    if synthesize.voice is not None and synthesize.voice.name:
+        requested = synthesize.voice.name
+        if requested not in discovered_set:
+            raise ValueError(
+                "Unknown voice '%s'; available: %s"
+                % (requested, ', '.join(sorted(discovered)) if discovered else '(none)')
+            )
+        return requested
+
+    # 2. Configured default.
+    default = settings.s2_default_voice
+    if default:
+        if default not in discovered_set:
+            raise ValueError(
+                "Configured S2_DEFAULT_VOICE '%s' is not currently discovered; available: %s"
+                % (default, ', '.join(sorted(discovered)) if discovered else '(none)')
+            )
+        return default
+
+    # 3. Generic fallback — no custom voice fields.
+    return None
+
+
 class FakeTtsEventHandler(AsyncEventHandler):
     """Wyoming event handler for Describe, Synthesize, and streaming TTS.
 
@@ -457,6 +535,8 @@ class FakeTtsEventHandler(AsyncEventHandler):
         # Streaming state
         self._streaming_text_parts: list[str] = []
         self._in_streaming_session: bool = False
+        # Voice selection for current request
+        self._requested_voice: str | None = None
 
     async def handle_event(self, event: Event) -> bool:
         """Handle one Wyoming event."""
@@ -467,9 +547,14 @@ class FakeTtsEventHandler(AsyncEventHandler):
         # ── Legacy (non-streaming) Synthesize ────────────────────────
         if Synthesize.is_type(event.type):
             synthesize = Synthesize.from_event(event)
+            self._requested_voice = _resolve_voice_from_synthesize(
+                synthesize, self.settings
+            )
 
             async def send_audio() -> None:
-                audio_events = await self._synthesize_text(synthesize.text)
+                audio_events = await self._synthesize_text(
+                    synthesize.text, voice=self._requested_voice
+                )
                 for audio_event in audio_events:
                     await self.write_event(audio_event)
 
@@ -480,6 +565,22 @@ class FakeTtsEventHandler(AsyncEventHandler):
         if SynthesizeStart.is_type(event.type):
             self._streaming_text_parts = []
             self._in_streaming_session = True
+            # Resolve voice: client-requested > configured default > generic.
+            start_data = event.data if event.data else {}
+            voice_dict = start_data.get("voice", {})
+            if isinstance(voice_dict, dict) and voice_dict.get("name"):
+                from wyoming.tts import SynthesizeVoice
+                fake_syn = Synthesize(
+                    text="",
+                    voice=SynthesizeVoice(name=str(voice_dict["name"])),
+                )
+                self._requested_voice = _resolve_voice_from_synthesize(
+                    fake_syn, self.settings
+                )
+            else:
+                self._requested_voice = _resolve_voice_from_synthesize(
+                    Synthesize(text=""), self.settings
+                )
             return True
 
         # ── Streaming TTS: synthesize-chunk ──────────────────────────
@@ -500,7 +601,9 @@ class FakeTtsEventHandler(AsyncEventHandler):
 
             if accumulated:
                 async def send_streaming_audio() -> None:
-                    audio_events = await self._synthesize_text(accumulated)
+                    audio_events = await self._synthesize_text(
+                        accumulated, voice=self._requested_voice
+                    )
                     for audio_event in audio_events:
                         await self.write_event(audio_event)
                     # Signal end of streaming response
@@ -515,8 +618,16 @@ class FakeTtsEventHandler(AsyncEventHandler):
 
         return True
 
-    async def _synthesize_text(self, text: str) -> list[Event]:
-        """Run synthesis for given text and return Wyoming audio events."""
+    async def _synthesize_text(
+        self, text: str, voice: str | None = None
+    ) -> list[Event]:
+        """Run synthesis for given text and return Wyoming audio events.
+
+        Args:
+            text: The text to synthesize.
+            voice: Requested voice profile ID (from Wyoming voice selection),
+                   or *None* to use the configured default or generic fallback.
+        """
         if self.settings.tts_backend == "s2cpp":
             s2_client = self.s2_client_factory(self.settings)
             return await asyncio.to_thread(
@@ -525,6 +636,7 @@ class FakeTtsEventHandler(AsyncEventHandler):
                 s2_client,
                 self.settings,
                 self.config,
+                voice=voice,
             )
         else:
             return synthesize_fake_tts_events(

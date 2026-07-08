@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- Phase 7B: implemented wrapper voice discovery and Home Assistant voice selection.
+  Added `app/voice_discovery.py` for safe `.s2voice` file enumeration from the
+  `/voices` directory. Updated `build_info_event()` to advertise discovered
+  voices through Wyoming Describe alongside the generic `s2-pro` fallback.
+  Wired voice selection through the Wyoming handler: client-requested voice,
+  `S2_DEFAULT_VOICE`, and generic fallback priority. Selected/default voice
+  is forwarded as `voice` and `voice_dir` multipart fields to the backend.
+  Unknown and unsafe voice IDs are rejected. Drop-in discovery: new `.s2voice`
+  files are discoverable without rebuild/restart. Home Assistant may require a
+  Wyoming integration reload to see newly dropped-in voices. Both buffered
+  and streaming Wyoming paths propagate voice consistently. Added
+  `S2_VOICE_DIR` and `S2_DEFAULT_VOICE` env vars. Updated wrapper Dockerfile,
+  entrypoint, and Unraid template with read-only `/voices` mount. 38 new tests
+  (20 discovery + 18 voice selection/Describe/synthesis). Full suite: 323/325
+  passing (2 pre-existing stale doc tests unchanged).
+
 - Phase 7A: created six CMU ARCTIC voice profiles and verified direct backend synthesis.
   Created `.s2voice` profiles for bdl, rms, jmk, slt, clb, and eey under
   `/mnt/user/appdata/s2cpp/voices`. All six profiles are visible via `s2 --list-voices`

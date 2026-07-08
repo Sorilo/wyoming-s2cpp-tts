@@ -86,6 +86,8 @@ class Settings:
         ``TTS_BACKEND``, ``S2_HOST``, and ``S2_PORT`` select the backend.
         ``WYOMING_URI`` sets the Wyoming TCP listen address/port.
         ``S2_STREAM`` controls streaming vs buffered synthesis.
+        ``S2_VOICE_DIR`` sets the directory for saved ``.s2voice`` profiles.
+        ``S2_DEFAULT_VOICE`` sets the default voice profile ID.
         ``LOG_LEVEL`` controls application log verbosity.
         Broader environment/profile loading belongs in a later hardening phase.
         """
@@ -96,5 +98,7 @@ class Settings:
             s2_port=int(os.getenv("S2_PORT", str(S2_PORT))),
             s2_stream=os.getenv("S2_STREAM", str(S2_STREAM)).lower()
             not in ("false", "0", "no", "off"),
+            s2_voice_dir=os.getenv("S2_VOICE_DIR", S2_VOICE_DIR),
+            s2_default_voice=os.getenv("S2_DEFAULT_VOICE", S2_DEFAULT_VOICE),
             log_level=os.getenv("LOG_LEVEL", LOG_LEVEL),
         )

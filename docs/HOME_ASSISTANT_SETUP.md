@@ -43,10 +43,21 @@ Unraid host at `/mnt/user/appdata/s2cpp/voices`:
 | `cmu_clb_female_us` | female | US English |
 | `cmu_eey_female_us` | female | US English |
 
-**Voice selection in Home Assistant is not yet wired** — the wrapper does not
-currently discover or expose these profiles through Wyoming Describe. This is
-the work of Phase 7B. Until then, expect only the generic `s2-pro` voice in
-Home Assistant.
+**Voice selection in Home Assistant is now wired (Phase 7B).**  The wrapper
+discovers ``.s2voice`` profiles from ``/voices`` and advertises them through
+Wyoming Describe.  Select a voice in Home Assistant TTS settings — the selected
+voice is forwarded to the backend as ``voice`` and ``voice_dir`` multipart fields.
+
+**Drop-in discovery:** New ``.s2voice`` files placed in
+``/mnt/user/appdata/s2cpp/voices`` are discoverable without rebuilding or
+restarting the wrapper container.  However, Home Assistant may cache Wyoming
+Describe results.  To see a newly dropped-in voice in the HA UI:
+
+1. Go to **Settings → Devices & services → Wyoming Protocol**.
+2. Select the ``wyoming-s2cpp-tts`` integration.
+3. Choose **Reload** from the three-dot menu.
+
+This reloads the cached voice list — the wrapper itself does not need a restart.
 
 Human listening assessment: all six voices are acceptable as temporary assistant
 voices but sound somewhat robotic. This is not a confirmed downstream defect;
@@ -85,7 +96,12 @@ Fixed in wrapper image `sha-89ed2dc`. The handler supports the full Wyoming stre
 
 ### Voice not found
 
-Custom voice selection is not implemented in the wrapper yet. Saved `.s2voice`
-profiles were created in Phase 7A and verified via direct backend synthesis (6/6
-passed). Wrapper discovery and Home Assistant selectable voices are Phase 7B.
-Until then, expect only the generic `s2-pro` voice in Home Assistant.
+Custom voice selection is implemented as of Phase 7B. If a voice does not appear
+in Home Assistant:
+
+- Verify the ``.s2voice`` file exists on the host at
+  ``/mnt/user/appdata/s2cpp/voices/<profile_id>.s2voice``.
+- Reload the Wyoming Protocol integration in Home Assistant
+  (Settings → Devices & services → Wyoming Protocol → three-dot menu → Reload).
+- Check wrapper logs for startup voice discovery messages.
+- If ``S2_DEFAULT_VOICE`` is configured, verify it matches a discovered profile ID.

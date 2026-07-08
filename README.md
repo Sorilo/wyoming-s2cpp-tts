@@ -48,7 +48,7 @@ This `q6_k` target is the current RTX 3080 baseline. Future model choices may in
 | Wrapper image | `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-89ed2dc` |
 | Wyoming endpoint | `tcp://0.0.0.0:10200` inside container; `192.168.1.45:10200` from Home Assistant |
 | Home Assistant result | Discovery succeeds; `s2-pro` is visible; real speech is audible |
-| Test baseline | 287 tests passing before Phase 6E |
+| Test baseline | 323 tests passing after Phase 7B |
 
 ## Current architecture
 
@@ -95,6 +95,8 @@ To point a local wrapper process at an already-running s2.cpp backend, set:
 export TTS_BACKEND=s2cpp
 export S2_HOST=s2cpp-backend
 export S2_PORT=3030
+export S2_VOICE_DIR=/voices
+export S2_DEFAULT_VOICE=cmu_bdl_male_us
 python -m app.main
 ```
 
@@ -130,9 +132,9 @@ No ordinary test should contact a real backend unless explicitly opted in throug
 
 ## Current limitations and remaining work
 
-- Custom `.s2voice` profile creation is not implemented in this wrapper flow yet.
-- Do not assume an HTTP voice-management API such as `/v1/voices`; the pinned behavior to plan against is `POST /generate`, reference audio plus exact transcript, saved voice selection using `voice` and `voice_dir`, CLI profile creation with `--prompt-audio`, `--prompt-text`, `--voice`, `--save-voice`, `--voice-dir`, and CLI listing with `--list-voices`.
-- Wrapper voice discovery, sanitized voice selection, `S2_DEFAULT_VOICE`, and Home Assistant selectable voice exposure are future Phase 7B work.
+- Six custom `.s2voice` voice profiles are available from Phase 7A (CMU ARCTIC). Voice discovery and selection through Home Assistant is implemented in Phase 7B.
+- Saved voice selection uses `voice` and `voice_dir` multipart fields; CLI voice creation uses `--prompt-audio`, `--prompt-text`, `--voice`, `--save-voice`, `--voice-dir`; CLI voice listing uses `--list-voices`. There is no HTTP voice-management API.
+- Drop-in discovery: new `.s2voice` files placed in `/voices` are discoverable without rebuilding or restarting the wrapper. Home Assistant may require a Wyoming integration reload to see new voices.
 - True progressive backend HTTP audio streaming in the production handler is future Phase 7.5 work.
 - Client disconnect cleanup, open HTTP stream closure, and backend cancellation limitations are future Phase 8 work.
 - Queue-busy behavior, HTTP 503 handling, queue wait timeout, synthesis timeout, and controlled Wyoming failure behavior are future Phase 9 work.

@@ -55,9 +55,15 @@ Home Assistant discovers the service at `192.168.1.45:10200` via the Wyoming Pro
 The service currently advertises:
 
 - Program: `wyoming-s2cpp-tts`
-- Voice: `s2-pro` (en, zh)
+- Default voice: `s2-pro` (en, zh) — always present
+- Discovered voices: each `.s2voice` profile in `/voices` as a selectable voice
 - Streaming: `true`
 - Audio: 44100 Hz, mono, s16le
+
+Voice discovery scans `/voices` on every Describe and before validating synthesis
+requests. New `.s2voice` files are discoverable without container rebuild or restart.
+Home Assistant may cache Describe results and require a Wyoming integration reload
+to see newly dropped-in voices.
 
 ## Streaming distinction
 
@@ -78,6 +84,15 @@ The pinned s2.cpp behavior to plan against is:
 - CLI voice listing with `--list-voices`
 
 Do not claim an HTTP voice-management endpoint such as `/v1/voices` unless source inspection proves one exists.
+
+The wrapper mounts `/voices` read-only and discovers `.s2voice` profiles on every
+Describe and synthesis request.  Voice selection follows this priority:
+
+1. Client-requested voice (Wyoming Synthesize ``voice.name``).
+2. ``S2_DEFAULT_VOICE`` (when configured and discovered).
+3. Generic ``s2-pro`` fallback (no custom voice fields sent).
+
+Unknown or unsafe voice IDs are rejected with a clear error.
 
 ## Queue and worker model
 

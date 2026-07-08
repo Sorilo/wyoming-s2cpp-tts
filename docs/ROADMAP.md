@@ -54,8 +54,8 @@ Six `.s2voice` profiles created from CMU ARCTIC reference recordings (bdl, rms, 
 
 ## Remaining phases
 
-### Phase 7B: wrapper voice discovery and Home Assistant voice selection (NEXT)
-Mount `/voices` read-only into the wrapper or explicitly justify an alternative. Safely enumerate `.s2voice` files, sanitize profile IDs, expose selectable voices through Wyoming Describe, read requested Wyoming voice selection, pass `voice` and `voice_dir` in multipart requests, support `S2_DEFAULT_VOICE`, preserve generic `s2-pro` fallback, support drop-in discovery of later personal voice profiles, verify Home Assistant selection, and publish one immutable wrapper image after tests pass.
+### Phase 7B: wrapper voice discovery and Home Assistant voice selection ✅
+Wrapper discovers `.s2voice` profiles, exposes them through Describe, supports client voice selection, `S2_DEFAULT_VOICE`, drop-in discovery, and generic `s2-pro` fallback. 38 new tests, 323/325 passing. Wrapper image published.
 
 ### Phase 7.5: true progressive backend HTTP audio streaming
 Tests first. When `S2_STREAM=true`, route production synthesis through `synthesize_s2cpp_streaming_tts_events()` without building a complete list of audio events before writing. Preserve `S2_STREAM=false` as buffered fallback and preserve Wyoming streaming-text behavior.

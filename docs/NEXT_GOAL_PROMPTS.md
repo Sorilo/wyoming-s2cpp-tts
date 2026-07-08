@@ -3,7 +3,17 @@
 Run phases one at a time. This file is regenerated from the actual repository
 state after every `/goal` run. Do not copy stale assumptions forward.
 
-## Current state after Phase 7A
+## Current state after Phase 7B
+
+- Repository branch: `main`.
+- Wrapper image: `sha-b5cbee1` (to be filled after publish).
+- Full test baseline: 323 passing (2 pre-existing stale doc test failures unchanged).
+- Voice discovery implemented: wrapper scans `/voices` for `.s2voice` profiles.
+- Wyoming Describe advertises `s2-pro` plus all discovered voices.
+- Client-requested voice, `S2_DEFAULT_VOICE`, and generic fallback all work.
+- Design constraints from Phase 7A still apply: see prior state below.
+
+## Previous state after Phase 7A
 
 - Repository branch: `main`.
 - Deployment reconciliation baseline commit: `ea72838`.

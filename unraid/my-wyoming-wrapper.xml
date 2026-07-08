@@ -14,7 +14,7 @@
 -->
 <Container version="2">
   <Name>wyoming-s2cpp-tts</Name>
-  <Repository>ghcr.io/sorilo/wyoming-s2cpp-tts:sha-89ed2dc</Repository>
+  <Repository>ghcr.io/sorilo/wyoming-s2cpp-tts:sha-b5cbee1</Repository>
   <Registry>https://ghcr.io</Registry>
   <Network>custom</Network>
   <Privileged>false</Privileged>
@@ -56,6 +56,13 @@ The s2cpp-backend container must be running before this wrapper. Wyoming protoco
   <Config Name="Streaming" Target="S2_STREAM" Default="true" Mode="" Description="Parsed streaming flag. Current live handler still uses buffered backend generate_multipart(); Wyoming protocol streaming works, but true progressive backend-audio forwarding is pending Phase 7.5." Type="Variable" Display="always" Required="false" Mask="false">true</Config>
   <Config Name="Wyoming URI" Target="WYOMING_URI" Default="tcp://0.0.0.0:10200" Mode="" Description="Wyoming TCP listen address and port inside the container. Changing the port requires a matching Port mapping above." Type="Variable" Display="advanced" Required="false" Mask="false">tcp://0.0.0.0:10200</Config>
   <Config Name="Log Level" Target="LOG_LEVEL" Default="info" Mode="" Description="Application log verbosity: debug, info, warn, error." Type="Variable" Display="advanced" Required="false" Mask="false">info</Config>
+
+  <!-- Voice profiles -->
+  <Config Name="Voice Directory" Target="S2_VOICE_DIR" Default="/voices" Mode="" Description="Directory inside the container where .s2voice profile files are mounted. Must match the backend voice directory and the host mount path." Type="Variable" Display="always" Required="false" Mask="false">/voices</Config>
+  <Config Name="Default Voice" Target="S2_DEFAULT_VOICE" Default="" Mode="" Description="Optional default voice profile ID (e.g. cmu_bdl_male_us). Leave empty to use the generic s2-pro backend fallback when no voice is requested." Type="Variable" Display="always" Required="false" Mask="false"></Config>
+
+  <!-- Host path for voice profiles (read-only) -->
+  <Config Name="Voices Host Path" Target="/voices" Default="/mnt/user/appdata/s2cpp/voices" Mode="ro" Description="Host directory for .s2voice profile files. Mounted read-only in the wrapper; profiles are created by the backend container." Type="Path" Display="always" Required="false" Mask="false">/mnt/user/appdata/s2cpp/voices</Config>
 
   <!-- Host path for application data (future use) -->
   <Config Name="App Data" Target="/app/data" Default="/mnt/user/appdata/wyoming-s2cpp-tts" Mode="rw" Description="Host directory for wrapper runtime data (currently reserved for future use)." Type="Path" Display="advanced" Required="false" Mask="false">/mnt/user/appdata/wyoming-s2cpp-tts</Config>

@@ -31,6 +31,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     S2_HOST=s2cpp-backend \
     S2_PORT=3030 \
     S2_STREAM=true \
+    S2_VOICE_DIR=/voices \
+    S2_DEFAULT_VOICE="" \
     LOG_LEVEL=info
 
 WORKDIR /app

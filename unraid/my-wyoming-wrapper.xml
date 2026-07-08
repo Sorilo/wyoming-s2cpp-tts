@@ -14,7 +14,7 @@
 -->
 <Container version="2">
   <Name>wyoming-s2cpp-tts</Name>
-  <Repository>ghcr.io/sorilo/wyoming-s2cpp-tts:sha-33dd293</Repository>
+  <Repository>ghcr.io/sorilo/wyoming-s2cpp-tts:sha-4b49a70</Repository>
   <Registry>https://ghcr.io</Registry>
   <Network>custom</Network>
   <Privileged>false</Privileged>

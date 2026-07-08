@@ -39,8 +39,8 @@ from app.s2_client import S2Client, S2ClientError, S2GenerateRequest
 class S2GenerateClient(Protocol):
     """Small protocol for a sync s2.cpp client used by the Wyoming adapter."""
 
-    def generate(self, request: S2GenerateRequest):
-        """Generate one buffered audio response."""
+    def generate_multipart(self, request: S2GenerateRequest):
+        """Generate one buffered audio response via multipart/form-data."""
 
 
 S2ClientFactory = Callable[[Settings], S2GenerateClient]
@@ -118,29 +118,55 @@ def parse_tcp_uri(uri: str) -> tuple[str, int]:
     return parsed.hostname, parsed.port
 
 
-def build_info_event() -> Event:
-    """Return Wyoming service metadata for Home Assistant discovery/describe."""
+def build_info_event(settings: Settings | None = None) -> Event:
+    """Return Wyoming service metadata for Home Assistant discovery/describe.
+
+    When TTS_BACKEND=s2cpp the Describe response reflects the real s2.cpp
+    backend metadata (44100 Hz, mono, s16le).  When TTS_BACKEND=fake or
+    settings is None the original fake/test metadata is returned.
+    """
     attribution = Attribution(
         name="wyoming-s2cpp-tts",
-        url="https://github.com/",
+        url="https://github.com/sorilo/wyoming-s2cpp-tts",
     )
-    voice = TtsVoice(
-        name="fake-test-tone",
-        attribution=attribution,
-        installed=True,
-        description="Deterministic Phase 1 fake PCM test tone",
-        version="0.1-phase1",
-        languages=["en"],
-    )
-    program = TtsProgram(
-        name="wyoming-s2cpp-tts-fake",
-        attribution=attribution,
-        installed=True,
-        description="Phase 1 fake/test PCM Wyoming TTS service",
-        version="0.1-phase1",
-        voices=[voice],
-        supports_synthesize_streaming=False,
-    )
+
+    active_settings = settings or Settings()
+    if active_settings.tts_backend == "s2cpp":
+        voice = TtsVoice(
+            name="s2-pro",
+            attribution=attribution,
+            installed=True,
+            description="Fish Speech S2 Pro via s2.cpp — 44100 Hz mono s16le",
+            version="0.1",
+            languages=["en", "zh"],
+        )
+        program = TtsProgram(
+            name="wyoming-s2cpp-tts",
+            attribution=attribution,
+            installed=True,
+            description="Wyoming TTS service backed by s2.cpp / Fish Speech S2 Pro",
+            version="0.1",
+            voices=[voice],
+            supports_synthesize_streaming=True,
+        )
+    else:
+        voice = TtsVoice(
+            name="fake-test-tone",
+            attribution=attribution,
+            installed=True,
+            description="Deterministic Phase 1 fake PCM test tone",
+            version="0.1-phase1",
+            languages=["en"],
+        )
+        program = TtsProgram(
+            name="wyoming-s2cpp-tts-fake",
+            attribution=attribution,
+            installed=True,
+            description="Phase 1 fake/test PCM Wyoming TTS service",
+            version="0.1-phase1",
+            voices=[voice],
+            supports_synthesize_streaming=False,
+        )
     return Info(tts=[program]).event()
 
 
@@ -201,7 +227,7 @@ def synthesize_s2cpp_tts_events(
     request = S2GenerateRequest.from_settings(text=text, settings=settings)
 
     try:
-        result = client.generate(request)
+        result = client.generate_multipart(request)
         pcm_format = validate_declared_pcm_s16le(
             result.audio,
             content_type=result.content_type,
@@ -420,7 +446,7 @@ class FakeTtsEventHandler(AsyncEventHandler):
     async def handle_event(self, event: Event) -> bool:
         """Handle one Wyoming event."""
         if Describe.is_type(event.type):
-            await self.write_event(build_info_event())
+            await self.write_event(build_info_event(self.settings))
             return True
 
         if Synthesize.is_type(event.type):

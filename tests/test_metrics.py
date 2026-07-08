@@ -336,7 +336,7 @@ class TestBufferedS2CppMetrics:
         class _Client:
             def __init__(self):
                 self.requests = []
-            def generate(self, request):
+            def generate_multipart(self, request):
                 self.requests.append(request)
                 return S2GenerateResult(
                     audio=audio,
@@ -423,7 +423,7 @@ class TestBufferedS2CppMetrics:
         from app.wyoming_server import synthesize_s2cpp_tts_events
 
         class _FailingClient:
-            def generate(self, request):
+            def generate_multipart(self, request):
                 raise S2ClientError("backend down")
 
         client = _FailingClient()

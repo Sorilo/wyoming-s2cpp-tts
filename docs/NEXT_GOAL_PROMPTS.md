@@ -3,15 +3,16 @@
 Run phases one at a time. This file is regenerated from the actual repository
 state after every `/goal` run. Do not copy stale assumptions forward.
 
-## Current state after Phase 7B
+## Current state after Phase 7.5A
 
 - Repository branch: `main`.
-- Wrapper image: `sha-b5cbee1` (to be filled after publish).
-- Full test baseline: 323 passing (2 pre-existing stale doc test failures unchanged).
-- Voice discovery implemented: wrapper scans `/voices` for `.s2voice` profiles.
-- Wyoming Describe advertises `s2-pro` plus all discovered voices.
-- Client-requested voice, `S2_DEFAULT_VOICE`, and generic fallback all work.
-- Design constraints from Phase 7A still apply: see prior state below.
+- Wrapper image: to be published by CI workflow.
+- Full test baseline: 367 passing (368 total, 1 pre-existing Unraid template SHA test unchanged).
+- Streaming routing wired: ``S2_STREAM=true`` uses ``generate_stream()`` / progressive event emission; ``S2_STREAM=false`` preserves buffered ``generate_multipart()``.
+- Streaming observability: ``backend_stream_headers``, ``backend_stream_first_audio``, ``first_wyoming_audio``, ``backend_stream_done`` with timing fields.
+- Voice discovery, compatibility synthesize deferral, Wyoming text-streaming state machine, fake backend — all preserved.
+- 13 new streaming-specific tests.
+- Phase 7.5B (deployment + live latency measurement) remains.
 
 ## Previous state after Phase 7A
 
@@ -143,7 +144,14 @@ Suggested commit:
 feat: expose saved s2 voices through Wyoming with drop-in discovery
 ```
 
-## Phase 7.5 prompt — true progressive backend HTTP audio streaming
+## Phase 7.5A prompt — true progressive backend HTTP audio streaming (COMPLETED ✅)
+
+Completed 2026-07-08.  ``S2_STREAM=true`` now routes production synthesis through
+``synthesize_s2cpp_streaming_tts_events()`` / ``generate_stream()`` instead of
+buffered ``generate_multipart()``.  13 new tests (routing, success, voice,
+failure, compat, progressive proof).  367/368 tests pass.  Structured
+observability extended with streaming-specific timing fields.  See
+``CHANGELOG.md`` and ``TODO.md`` for full results.
 
 ```text
 /goal

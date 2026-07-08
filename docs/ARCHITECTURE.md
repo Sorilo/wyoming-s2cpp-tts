@@ -69,9 +69,9 @@ to see newly dropped-in voices.
 
 Wyoming protocol streaming is implemented and verified: the wrapper handles `synthesize-start`, `synthesize-chunk`, and `synthesize-stop`, then emits `AudioStart`, `AudioChunk`, `AudioStop`, and `synthesize-stopped` for Home Assistant.
 
-Progressive backend-audio streaming is not currently used by the production handler: although `S2_STREAM` is parsed and `synthesize_s2cpp_streaming_tts_events()` / `generate_stream()` exist, the live handler still calls buffered `synthesize_s2cpp_tts_events()` via `generate_multipart()`, then sends Wyoming audio events.
+Progressive backend-audio streaming is now wired (Phase 7.5A). When `S2_STREAM=true`, the production handler uses `synthesize_s2cpp_streaming_tts_events()` / `generate_stream()` to yield Wyoming audio events progressively as backend transport chunks arrive — ``AudioStart`` is emitted only after backend metadata is validated, ``AudioChunk`` events are emitted as bytes arrive, and ``AudioStop`` follows clean stream completion. When `S2_STREAM=false`, the existing buffered `generate_multipart()` path is preserved.
 
-Phase 7.5 is the planned work to make `S2_STREAM=true` select the progressive backend HTTP stream in the production Wyoming event handler. Until then, `S2_STREAM=true` must not be documented as sending backend bytes to Home Assistant as they are generated.
+Time-to-first-audio with the real backend was previously observed at ~3.8 seconds (both first-audio and total request). Phase 7.5A does not guarantee a major latency reduction; measure live latency after deployment (Phase 7.5B).
 
 ## Voice profile boundary
 

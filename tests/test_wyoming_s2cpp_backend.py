@@ -22,6 +22,22 @@ REAL_PCM_HEADERS = {
 REAL_PCM_CONTENT_TYPE = "audio/L16; rate=44100; channels=1"
 
 
+class _BufferedAsStream:
+    """Wraps a S2GenerateResult as a stream for backward-compatible tests."""
+    def __init__(self, result):
+        self.content_type = result.content_type
+        self.response_headers = result.response_headers
+        self._audio = result.audio
+        self._yielded = False
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+    def __iter__(self): return self
+    def __next__(self):
+        if self._yielded: raise StopIteration
+        self._yielded = True
+        return self._audio
+
+
 class RecordingS2Client:
     def __init__(
         self,
@@ -42,6 +58,15 @@ class RecordingS2Client:
             content_type=self.content_type,
             response_headers=self.response_headers.copy(),
         )
+
+    def generate_stream(self, request, files=None, boundary=None):
+        self.requests.append(request)
+        result = S2GenerateResult(
+            audio=self.audio,
+            content_type=self.content_type,
+            response_headers=self.response_headers.copy(),
+        )
+        return _BufferedAsStream(result)
 
 
 def _audio_events(events):

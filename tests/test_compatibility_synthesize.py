@@ -13,9 +13,19 @@ from app.wyoming_server import FakeTtsConfig, start_fake_tts_server
 RH = {"x-audio-encoding":"pcm_s16le","x-audio-channels":"1","x-audio-sample-rate":"44100"}
 CT = "audio/L16; rate=44100; channels=1"
 
+class _BS:
+    def __init__(s,r): s.ct=r.content_type; s.rh=r.response_headers; s._a=r.audio; s._y=False
+    def __enter__(s): return s
+    def __exit__(s,*a): return False
+    def __iter__(s): return s
+    def __next__(s):
+        if s._y: raise StopIteration
+        s._y=True; return s._a
+
 class R:
     def __init__(s,a,*,ct=CT,rh=None): s.a=a; s.ct=ct; s.rh=RH.copy() if rh is None else rh; s.rq=[]
     def generate_multipart(s,r): s.rq.append(r); return S2GenerateResult(audio=s.a,content_type=s.ct,response_headers=s.rh.copy())
+    def generate_stream(s,r,files=None,boundary=None): s.rq.append(r); return _BS(S2GenerateResult(audio=s.a,content_type=s.ct,response_headers=s.rh.copy()))
 
 PCM = bytes([1,0])*200
 
@@ -114,7 +124,7 @@ def test_ha_compat_sequence():
     df=_et(rs,"compatibility_synthesize_deferred"); assert len(df)==1; assert df[0]["status"]=="deferred"
     tr=_et(rs,"syn_trigger"); assert len(tr)==1; assert tr[0]["trigger"]=="streaming"
     assert len(_et(rs,"backend_start"))==1
-    assert len(_et(rs,"backend_done"))==1
+    assert len(_et(rs,"backend_stream_done"))==1
     assert len(_et(rs,"audio_out"))==1
     assert len(_et(rs,"syn_stopped"))==1
 

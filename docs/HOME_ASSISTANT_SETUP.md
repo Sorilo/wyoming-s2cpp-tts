@@ -76,9 +76,11 @@ planned for later as a better quality test.
 
 ## Streaming caveat
 
-Wyoming protocol streaming is implemented and verified: the wrapper handles `synthesize-start`, `synthesize-chunk`, and `synthesize-stop`, then emits `AudioStart`, `AudioChunk`, `AudioStop`, and `synthesize-stopped` for Home Assistant.
+Wyoming protocol streaming is implemented and verified (see above).
 
-Progressive backend-audio streaming is not currently used by the production handler: although `S2_STREAM` is parsed and `synthesize_s2cpp_streaming_tts_events()` / `generate_stream()` exist, the live handler still calls buffered `synthesize_s2cpp_tts_events()` via `generate_multipart()`, then sends Wyoming audio events.
+Progressive backend-audio streaming is now wired (Phase 7.5A). When `S2_STREAM=true` (already configured in Unraid), the handler yields Wyoming audio events progressively as backend transport chunks arrive instead of buffering the complete response. When `S2_STREAM=false`, the buffered path is preserved.
+
+Note: previous real-backend measurements showed time-to-first-audio at ~3.8 s. Phase 7.5A does not guarantee a major latency reduction; measure live latency after deploying the new wrapper image (Phase 7.5B).
 
 ## Troubleshooting
 

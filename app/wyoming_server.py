@@ -402,11 +402,12 @@ async def synthesize_s2cpp_streaming_tts_events(
     request: S2GenerateRequest,
     config: FakeTtsConfig,
     metrics: MetricsCollector | None = None,
+    ctx: LogContext | None = None,
 ):
     """Yield Wyoming audio events progressively from a streaming s2.cpp backend.
 
-    Phase 5C: Consumes ``S2StreamResult`` one transport chunk at a time via
-    ``asyncio.to_thread`` (so blocking ``response.read()`` calls never block
+    Phase 5C / 7.5A: Consumes ``S2StreamResult`` one transport chunk at a time
+    via ``asyncio.to_thread`` (so blocking ``response.read()`` calls never block
     the event loop).  A ``StreamingPCMRechunker`` handles PCM frame alignment
     across arbitrary HTTP chunk boundaries and produces frame-aligned
     ``AudioChunk`` payloads with frame-derived timestamps.
@@ -419,19 +420,35 @@ async def synthesize_s2cpp_streaming_tts_events(
     ``AudioStop`` is emitted.
 
     Metrics are finalized on all paths (success, error, early close,
-    cancellation).
+    cancellation).  Structured observability logs are emitted when *ctx*
+    is provided.
     """
     if metrics is None:
         metrics = MetricsCollector(backend_type="s2cpp", synthesis_mode="streaming")
 
+    _ctx = ctx or LogContext()
     audio_config = config
     rechunker: StreamingPCMRechunker | None = None
     backend_data_observed = False
+    first_audio_emitted = False
+    stream_start = time.monotonic()
+
+    fp = text_fingerprint(request.text)
+    obs_log("backend_start",
+            connection_id=_ctx.connection_id,
+            synthesis_id=_ctx.synthesis_id,
+            text_fp=fp,
+            text_len=len(request.text),
+            voice=request.voice or "generic",
+            mode="streaming")
 
     try:
         with client.generate_stream(request) as stream:
             stream_content_type = getattr(stream, "content_type", None)
             stream_headers = getattr(stream, "response_headers", None)
+
+            headers_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
+
             if stream_content_type is not None or stream_headers is not None:
                 pcm_format = parse_declared_pcm_s16le_format(
                     content_type=stream_content_type or "",
@@ -444,6 +461,15 @@ async def synthesize_s2cpp_streaming_tts_events(
                     width=pcm_format.width,
                     channels=pcm_format.channels,
                 )
+
+                obs_log("backend_stream_headers",
+                        connection_id=_ctx.connection_id,
+                        synthesis_id=_ctx.synthesis_id,
+                        text_fp=fp,
+                        content_type=stream_content_type,
+                        sample_rate=pcm_format.sample_rate,
+                        channels=pcm_format.channels,
+                        elapsed_ms=headers_elapsed_ms)
 
             rechunker = StreamingPCMRechunker(
                 sample_rate=audio_config.sample_rate,
@@ -470,9 +496,21 @@ async def synthesize_s2cpp_streaming_tts_events(
                 if not backend_data_observed and chunk:
                     metrics.record_first_backend_data()
                     backend_data_observed = True
+                    first_audio_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
+                    obs_log("backend_stream_first_audio",
+                            connection_id=_ctx.connection_id,
+                            synthesis_id=_ctx.synthesis_id,
+                            text_fp=fp,
+                            elapsed_ms=first_audio_elapsed_ms)
 
                 for audio_bytes, timestamp_ms in rechunker.feed(chunk):
                     metrics.record_first_audio_chunk()
+                    if not first_audio_emitted:
+                        first_audio_emitted = True
+                        obs_log("first_wyoming_audio",
+                                connection_id=_ctx.connection_id,
+                                synthesis_id=_ctx.synthesis_id,
+                                text_fp=fp)
                     yield AudioChunk(
                         rate=audio_config.sample_rate,
                         width=audio_config.width,
@@ -483,8 +521,15 @@ async def synthesize_s2cpp_streaming_tts_events(
                     metrics.record_emitted_chunk(len(audio_bytes))
 
         # Stream exhausted normally — flush any remaining complete frames.
+        flush_chunks = []
         for audio_bytes, timestamp_ms in rechunker.flush():
             metrics.record_first_audio_chunk()
+            if not first_audio_emitted:
+                first_audio_emitted = True
+                obs_log("first_wyoming_audio",
+                        connection_id=_ctx.connection_id,
+                        synthesis_id=_ctx.synthesis_id,
+                        text_fp=fp)
             yield AudioChunk(
                 rate=audio_config.sample_rate,
                 width=audio_config.width,
@@ -493,6 +538,7 @@ async def synthesize_s2cpp_streaming_tts_events(
                 timestamp=timestamp_ms,
             ).event()
             metrics.record_emitted_chunk(len(audio_bytes))
+            flush_chunks.append(len(audio_bytes))
 
         yield AudioStop(
             timestamp=int(
@@ -500,19 +546,64 @@ async def synthesize_s2cpp_streaming_tts_events(
             )
         ).event()
 
+        total_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
+        obs_log("backend_stream_done",
+                connection_id=_ctx.connection_id,
+                synthesis_id=_ctx.synthesis_id,
+                text_fp=fp,
+                total_elapsed_ms=total_elapsed_ms,
+                total_pcm_bytes=metrics.total_emitted_bytes,
+                chunk_count=metrics.emitted_chunk_count + len(flush_chunks),
+                status="ok")
+
+        obs_log("audio_out",
+                connection_id=_ctx.connection_id,
+                synthesis_id=_ctx.synthesis_id,
+                text_fp=fp,
+                audio_start=True,
+                chunk_count=metrics.emitted_chunk_count + len(flush_chunks),
+                pcm_bytes=metrics.total_emitted_bytes + sum(flush_chunks),
+                audio_stop=True,
+                mode="streaming",
+                status="ok")
+
         metrics.finalize("success")
 
     except (GeneratorExit, asyncio.CancelledError) as exc:
+        total_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
+        obs_log("backend_stream_done",
+                connection_id=_ctx.connection_id,
+                synthesis_id=_ctx.synthesis_id,
+                text_fp=fp,
+                total_elapsed_ms=total_elapsed_ms,
+                status="cancelled")
         # Consumer closed the async generator early or the task was
         # cancelled.  The ``with`` block's ``__exit__`` already cleaned
         # up the stream; finalize then re-raise.
         metrics.finalize("cancelled")
         raise
     except S2ClientError:
+        total_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
+        obs_log("backend_stream_done",
+                connection_id=_ctx.connection_id,
+                synthesis_id=_ctx.synthesis_id,
+                text_fp=fp,
+                total_elapsed_ms=total_elapsed_ms,
+                status="error",
+                error="S2ClientError")
         metrics.finalize("error", "S2ClientError")
         raise
     except Exception:
-        metrics.finalize("error", type(sys.exc_info()[1]).__name__)
+        total_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
+        exc_name = type(sys.exc_info()[1]).__name__
+        obs_log("backend_stream_done",
+                connection_id=_ctx.connection_id,
+                synthesis_id=_ctx.synthesis_id,
+                text_fp=fp,
+                total_elapsed_ms=total_elapsed_ms,
+                status="error",
+                error=exc_name)
+        metrics.finalize("error", exc_name)
         raise
 
 class SingleWorkerSynthesisQueue:
@@ -707,11 +798,20 @@ class FakeTtsEventHandler(AsyncEventHandler):
             self._requested_voice = resolved
 
             async def send_audio() -> None:
-                audio_events = await self._synthesize_text(
-                    synthesize.text, voice=self._requested_voice
-                )
-                for audio_event in audio_events:
-                    await self.write_event(audio_event)
+                if (
+                    self.settings.tts_backend == "s2cpp"
+                    and self.settings.s2_stream
+                ):
+                    async for audio_event in self._synthesize_text_streaming(
+                        synthesize.text, voice=self._requested_voice,
+                    ):
+                        await self.write_event(audio_event)
+                else:
+                    audio_events = await self._synthesize_text(
+                        synthesize.text, voice=self._requested_voice
+                    )
+                    for audio_event in audio_events:
+                        await self.write_event(audio_event)
 
             await self.queue.run(send_audio)
             return True
@@ -767,12 +867,22 @@ class FakeTtsEventHandler(AsyncEventHandler):
             if accumulated:
                 syn_id = new_synthesis_id()
                 async def send_streaming_audio() -> None:
-                    audio_events = await self._synthesize_text(
-                        accumulated, voice=self._requested_voice,
-                        trigger="streaming", synthesis_id=syn_id,
-                    )
-                    for audio_event in audio_events:
-                        await self.write_event(audio_event)
+                    if (
+                        self.settings.tts_backend == "s2cpp"
+                        and self.settings.s2_stream
+                    ):
+                        async for audio_event in self._synthesize_text_streaming(
+                            accumulated, voice=self._requested_voice,
+                            trigger="streaming", synthesis_id=syn_id,
+                        ):
+                            await self.write_event(audio_event)
+                    else:
+                        audio_events = await self._synthesize_text(
+                            accumulated, voice=self._requested_voice,
+                            trigger="streaming", synthesis_id=syn_id,
+                        )
+                        for audio_event in audio_events:
+                            await self.write_event(audio_event)
                     # Signal end of streaming response
                     await self.write_event(SynthesizeStopped().event())
                     obs_log("syn_stopped",
@@ -846,6 +956,51 @@ class FakeTtsEventHandler(AsyncEventHandler):
                 config=self.config,
                 ctx=ctx,
             )
+
+    async def _synthesize_text_streaming(
+        self, text: str, voice: str | None = None,
+        trigger: str = "legacy", synthesis_id: str = "",
+    ):
+        """Async generator: yield Wyoming audio events progressively.
+
+        When ``S2_STREAM=true`` and the backend is ``s2cpp``, this uses
+        ``synthesize_s2cpp_streaming_tts_events()`` to yield events as
+        backend transport chunks arrive rather than buffering the complete
+        response first.  The fake backend is yielded one-at-a-time for
+        consistency but is still fully buffered internally.
+        """
+        synthesis_id = synthesis_id or new_synthesis_id()
+        ctx = LogContext(connection_id=self._conn_id, synthesis_id=synthesis_id)
+
+        voice_source = "client" if voice else (
+            "default" if self.settings.s2_default_voice else "generic"
+        )
+
+        obs_log("syn_trigger",
+                connection_id=self._conn_id,
+                synthesis_id=synthesis_id,
+                trigger=trigger,
+                text_fp=text_fingerprint(text),
+                text_len=len(text),
+                voice=voice or self.settings.s2_default_voice or "generic",
+                voice_source=voice_source,
+                mode="streaming")
+
+        if self.settings.tts_backend == "s2cpp":
+            s2_client = self.s2_client_factory(self.settings)
+            request = S2GenerateRequest.from_settings(
+                text=text, settings=self.settings, voice=voice,
+            )
+            async for event in synthesize_s2cpp_streaming_tts_events(
+                s2_client, request, self.config, ctx=ctx,
+            ):
+                yield event
+        else:
+            # Fake backend yielded one event at a time for consistent interface.
+            for event in synthesize_fake_tts_events(
+                text, config=self.config, ctx=ctx,
+            ):
+                yield event
 
 
 @dataclass

@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- Phase 7.5A: wired true progressive backend HTTP PCM streaming into the
+  production Wyoming wrapper. When ``S2_STREAM=true``, the handler now uses
+  ``synthesize_s2cpp_streaming_tts_events()`` / ``generate_stream()`` to
+  yield Wyoming ``AudioStart`` / ``AudioChunk`` / ``AudioStop`` events
+  progressively as backend transport chunks arrive, instead of buffering
+  the complete response. When ``S2_STREAM=false``, the existing buffered
+  ``generate_multipart()`` path is preserved unchanged.  Added structured
+  observability fields: ``backend_stream_headers``, ``backend_stream_first_audio``,
+  ``first_wyoming_audio``, ``backend_stream_done`` with timing (``elapsed_ms``,
+  ``total_elapsed_ms``), chunk count, and PCM byte totals.  Extended
+  ``synthesize_s2cpp_streaming_tts_events()`` to accept ``LogContext`` for
+  correlation.  Added ``_synthesize_text_streaming()`` async generator on
+  ``FakeTtsEventHandler``.  13 new streaming-specific tests + existing suite
+  adjustments.  Full suite: 367/368 passing (1 pre-existing Unraid template SHA
+  test unchanged).
+
 - Phase 7B.3: fixed duplicate synthesis for Wyoming compatibility events. 355 tests.
 
 - Phase 7B.1: added structured request-level observability.

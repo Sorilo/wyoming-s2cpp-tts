@@ -57,8 +57,8 @@ Six `.s2voice` profiles created from CMU ARCTIC reference recordings (bdl, rms, 
 ### Phase 7B: wrapper voice discovery and Home Assistant voice selection ✅
 Wrapper discovers `.s2voice` profiles, exposes them through Describe, supports client voice selection, `S2_DEFAULT_VOICE`, drop-in discovery, and generic `s2-pro` fallback. 38 new tests, 323/325 passing. Wrapper image published.
 
-### Phase 7.5: true progressive backend HTTP audio streaming
-Tests first. When `S2_STREAM=true`, route production synthesis through `synthesize_s2cpp_streaming_tts_events()` without building a complete list of audio events before writing. Preserve `S2_STREAM=false` as buffered fallback and preserve Wyoming streaming-text behavior.
+### Phase 7.5A: true progressive backend HTTP audio streaming ✅
+When `S2_STREAM=true`, the production handler uses `synthesize_s2cpp_streaming_tts_events()` / `generate_stream()` to yield Wyoming audio events progressively as backend transport chunks arrive. When `S2_STREAM=false`, the existing buffered `generate_multipart()` path is preserved. Wyoming streaming-text state machine, compatibility synthesize deferral, voice propagation, and fake backend all preserved. Structured observability extended with streaming-specific timing fields. 13 new tests, 367/368 passing. Phase 7.5B (live latency verification) remains.
 
 ### Phase 8: disconnect cleanup and backend cancellation limitations
 Detect client disconnect/write failure, cancel active async synthesis, close any open backend stream/HTTP response, stop forwarding chunks, and document that closing the HTTP client connection may not stop all GPU work if upstream lacks an active cancellation API.

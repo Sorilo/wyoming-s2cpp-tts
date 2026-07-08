@@ -48,7 +48,7 @@ This `q6_k` target is the current RTX 3080 baseline. Future model choices may in
 | Wrapper image | `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-89ed2dc` |
 | Wyoming endpoint | `tcp://0.0.0.0:10200` inside container; `192.168.1.45:10200` from Home Assistant |
 | Home Assistant result | Discovery succeeds; `s2-pro` is visible; real speech is audible |
-| Test baseline | 355 tests passing after Phase 7B.3 |
+| Test baseline | 367 tests passing (368 total, 1 pre-existing Unraid template SHA test) after Phase 7.5A |
 
 ## Current architecture
 
@@ -64,9 +64,9 @@ The production deployment intentionally separates CPU-only Wyoming protocol hand
 
 Wyoming protocol streaming is implemented and verified: the wrapper handles `synthesize-start`, `synthesize-chunk`, and `synthesize-stop`, then emits `AudioStart`, `AudioChunk`, `AudioStop`, and `synthesize-stopped` for Home Assistant.
 
-Progressive backend-audio streaming is not currently used by the production handler: although `S2_STREAM` is parsed and `synthesize_s2cpp_streaming_tts_events()` / `generate_stream()` exist, the live handler still calls buffered `synthesize_s2cpp_tts_events()` via `generate_multipart()`, then sends Wyoming audio events.
+Progressive backend-audio streaming is now wired (Phase 7.5A). When `S2_STREAM=true`, the production handler uses `synthesize_s2cpp_streaming_tts_events()` / `generate_stream()` to yield Wyoming audio events progressively as backend transport chunks arrive. When `S2_STREAM=false`, the existing buffered `generate_multipart()` path is preserved unchanged.
 
-This means `S2_STREAM=true` is a parsed/configured setting, but Phase 7.5 is still required to wire true progressive backend HTTP audio streaming into the production Wyoming event handler.
+Previous real-backend measurements showed time-to-first-audio at ~3.8 seconds. Phase 7.5A does not guarantee a major latency reduction; live latency measurement is Phase 7.5B.
 
 ## Running locally for development
 
@@ -135,7 +135,7 @@ No ordinary test should contact a real backend unless explicitly opted in throug
 - Six custom `.s2voice` voice profiles are available from Phase 7A (CMU ARCTIC). Voice discovery and selection through Home Assistant is implemented in Phase 7B.
 - Saved voice selection uses `voice` and `voice_dir` multipart fields; CLI voice creation uses `--prompt-audio`, `--prompt-text`, `--voice`, `--save-voice`, `--voice-dir`; CLI voice listing uses `--list-voices`. There is no HTTP voice-management API.
 - Drop-in discovery: new `.s2voice` files placed in `/voices` are discoverable without rebuilding or restarting the wrapper. Home Assistant may require a Wyoming integration reload to see new voices.
-- True progressive backend HTTP audio streaming in the production handler is future Phase 7.5 work.
+- ~~True progressive backend HTTP audio streaming in the production handler is future Phase 7.5 work.~~ ✅ Phase 7.5A complete. Live latency verification is Phase 7.5B.
 - Client disconnect cleanup, open HTTP stream closure, and backend cancellation limitations are future Phase 8 work.
 - Queue-busy behavior, HTTP 503 handling, queue wait timeout, synthesis timeout, and controlled Wyoming failure behavior are future Phase 9 work.
 - End-to-end barge-in with a real Home Assistant satellite/player path is future Phase 10 work.

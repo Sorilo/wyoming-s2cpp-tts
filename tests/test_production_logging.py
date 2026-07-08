@@ -38,6 +38,21 @@ REAL_PCM_HEADERS = {
 REAL_PCM_CONTENT_TYPE = "audio/L16; rate=44100; channels=1"
 
 
+class _BufferedAsStream:
+    def __init__(self, result):
+        self.content_type = result.content_type
+        self.response_headers = result.response_headers
+        self._audio = result.audio
+        self._yielded = False
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+    def __iter__(self): return self
+    def __next__(self):
+        if self._yielded: raise StopIteration
+        self._yielded = True
+        return self._audio
+
+
 class RecordingS2Client:
     def __init__(self, audio, *, content_type=REAL_PCM_CONTENT_TYPE,
                  response_headers=None):
@@ -53,6 +68,15 @@ class RecordingS2Client:
             content_type=self.content_type,
             response_headers=self.response_headers.copy(),
         )
+
+    def generate_stream(self, request, files=None, boundary=None):
+        self.requests.append(request)
+        result = S2GenerateResult(
+            audio=self.audio,
+            content_type=self.content_type,
+            response_headers=self.response_headers.copy(),
+        )
+        return _BufferedAsStream(result)
 
 
 def _parse_json_lines(text: str) -> list[dict]:
@@ -200,7 +224,7 @@ async def test_full_synthesis_log_chain_on_stderr():
     # Verify backend_start and backend_done
     backend_starts = _events_of_type(records, "backend_start")
     assert len(backend_starts) == 1
-    backend_dones = _events_of_type(records, "backend_done")
+    backend_dones = _events_of_type(records, "backend_stream_done")
     assert len(backend_dones) == 1
     assert backend_dones[0]["status"] == "ok"
 

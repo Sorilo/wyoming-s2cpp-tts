@@ -617,6 +617,10 @@ class FakeTtsEventHandler(AsyncEventHandler):
         self._in_streaming_session: bool = False
         # Voice selection for current request
         self._requested_voice: str | None = None
+        # Compatibility state: text from a legacy synthesize event
+        # received inside an active streaming session.
+        self._streaming_compat_text: str = ""
+        self._streaming_compat_voice: str | None = None
         # Observability
         self._conn_id = new_connection_id()
         peer = ""
@@ -655,9 +659,52 @@ class FakeTtsEventHandler(AsyncEventHandler):
         # ── Legacy (non-streaming) Synthesize ────────────────────────
         if Synthesize.is_type(event.type):
             synthesize = Synthesize.from_event(event)
-            self._requested_voice = _resolve_voice_from_synthesize(
+            resolved = _resolve_voice_from_synthesize(
                 synthesize, self.settings
             )
+
+            # When a streaming session is already active, the legacy
+            # synthesize event is a Home Assistant compatibility event
+            # — do NOT trigger an immediate synthesis.  The actual
+            # synthesis will happen when synthesize-stop finalises the
+            # streaming session.
+            if self._in_streaming_session:
+                fp = text_fingerprint(synthesize.text)
+
+                # Voice consistency check.
+                # When both the compat event and the session specify a voice,
+                # they must agree.  When the compat event has a voice but the
+                # session does not, adopt the compat voice.
+                if resolved:
+                    if self._requested_voice and resolved != self._requested_voice:
+                        obs_log("compatibility_synthesize_deferred",
+                                connection_id=self._conn_id,
+                                text_fp=fp,
+                                text_len=len(synthesize.text),
+                                voice=resolved,
+                                streaming_voice=self._requested_voice,
+                                status="voice_mismatch")
+                        raise ValueError(
+                            "Compatibility synthesize voice '%s' does not match "
+                            "streaming session voice '%s'"
+                            % (resolved, self._requested_voice)
+                        )
+
+                self._streaming_compat_text = synthesize.text
+                self._streaming_compat_voice = resolved
+                if resolved and not self._requested_voice:
+                    self._requested_voice = resolved
+
+                obs_log("compatibility_synthesize_deferred",
+                        connection_id=self._conn_id,
+                        text_fp=fp,
+                        text_len=len(synthesize.text),
+                        voice=resolved or "generic",
+                        status="deferred")
+                return True
+
+            # No active streaming session — normal standalone synthesis.
+            self._requested_voice = resolved
 
             async def send_audio() -> None:
                 audio_events = await self._synthesize_text(
@@ -672,6 +719,8 @@ class FakeTtsEventHandler(AsyncEventHandler):
         # ── Streaming TTS: synthesize-start ──────────────────────────
         if SynthesizeStart.is_type(event.type):
             self._streaming_text_parts = []
+            self._streaming_compat_text = ""
+            self._streaming_compat_voice = None
             self._in_streaming_session = True
             # Resolve voice: client-requested > configured default > generic.
             start_data = event.data if event.data else {}
@@ -704,8 +753,16 @@ class FakeTtsEventHandler(AsyncEventHandler):
                 return True
 
             accumulated = " ".join(self._streaming_text_parts).strip()
+            compat_text = self._streaming_compat_text.strip()
             self._streaming_text_parts = []
+            self._streaming_compat_text = ""
+            self._streaming_compat_voice = None
             self._in_streaming_session = False
+
+            # If no chunks arrived but a compatibility synthesize event
+            # provided text, use that as a fallback.
+            if not accumulated and compat_text:
+                accumulated = compat_text
 
             if accumulated:
                 syn_id = new_synthesis_id()
@@ -734,6 +791,10 @@ class FakeTtsEventHandler(AsyncEventHandler):
 
     async def disconnect(self) -> None:
         """Log connection close, then delegate to the base class."""
+        self._streaming_text_parts = []
+        self._streaming_compat_text = ""
+        self._streaming_compat_voice = None
+        self._in_streaming_session = False
         obs_log("conn_close", connection_id=self._conn_id)
         await super().disconnect()
 

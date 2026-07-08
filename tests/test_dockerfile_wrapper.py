@@ -8,6 +8,7 @@ These tests prove that:
   - The production Unraid template targets the real backend.
   - Fake backend remains the repository default.
   - Streaming configuration is represented correctly.
+  - The Unraid template pins the verified immutable wrapper image.
 """
 
 from __future__ import annotations
@@ -243,9 +244,9 @@ def test_unraid_wrapper_container_name() -> None:
 
 
 def test_unraid_wrapper_image_is_wrapper_not_backend() -> None:
-    """Template references the wrapper image, not the backend image."""
+    """Template references the verified immutable wrapper image, not backend."""
     content = _read(UNRAID_TEMPLATE)
-    assert "wyoming-s2cpp-tts:edge" in content
+    assert "wyoming-s2cpp-tts:sha-89ed2dc" in content
     assert "wyoming-s2cpp-tts-backend" not in content
 
 

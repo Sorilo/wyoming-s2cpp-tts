@@ -1,13 +1,14 @@
-# Phase 4 CUDA/s2.cpp and Unraid GPU runtime plan
+# Historical Phase 4 CUDA/s2.cpp and Unraid GPU runtime plan
 
-This is the Phase 4 planning document for future CUDA/s2.cpp support. The build described here is **not yet tested** in this repository, and this phase intentionally does not download GGUF models, vendor s2.cpp, run a Docker build, or compile CUDA code.
+This is a historical Phase 4 planning document. Later phases built, published, deployed, and verified the CUDA backend image; the current verified backend image is `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b`. Preserve this file as implementation history, not as the current deployment baseline.
 
 ## Current verified repo state
 
-- The Python Wyoming wrapper runs with `TTS_BACKEND=fake` by default.
-- `TTS_BACKEND=s2cpp` can call an already-running external `/generate` endpoint and convert one buffered PCM response into Wyoming audio events.
-- `scripts/smoke_s2cpp_generate.py` can optionally test a direct external `/generate` request.
-- The Phase 3 Dockerfile runs the Python wrapper and creates `/models`, `/voices`, and `/config`.
+- The live deployment uses a separate CUDA backend container plus CPU-only Wyoming wrapper.
+- The verified backend image is `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b`.
+- The verified wrapper image is `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-89ed2dc`.
+- The backend accepts multipart/form-data at `POST /generate` and returns `audio/L16; rate=44100; channels=1`.
+- See `ARCHITECTURE.md` and `ROADMAP.md` for the current baseline.
 
 ## External reference checked during Phase 4
 
@@ -31,7 +32,7 @@ This project should adapt those flags cautiously for Linux only after the actual
 
 ## Intended future Linux container shape
 
-The current Dockerfile should remain Python-wrapper-only until Phase 8A proves the s2.cpp Linux/CUDA build. The likely future structure is a multi-stage Dockerfile:
+Historical note: this was the planned future container shape before the separate CUDA backend image was implemented and verified. The current deployment uses `docker/s2cpp/Dockerfile.cuda` for the backend and a separate CPU-only wrapper image. The original sketch was:
 
 ```Dockerfile
 # PHASE 4 TODO, not enabled yet:
@@ -46,7 +47,7 @@ The current Dockerfile should remain Python-wrapper-only until Phase 8A proves t
 # COPY --from=s2cpp-builder /src/s2.cpp/<verified-binary> /usr/local/bin/s2cpp-server
 ```
 
-Do not fill in the repository URL, CUDA tag, build command, or binary path until they are actually tested.
+This sketch is historical; do not use it as the current deployment instructions.
 
 ## Planned internal runtime command
 

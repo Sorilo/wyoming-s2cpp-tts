@@ -2,10 +2,17 @@
 
 ## Unreleased
 
+- Phase 6E: corrected deployment safety baseline and forward plan.
+  Updated Unraid templates to pin verified immutable images, rewrote stale
+  README deployment/status claims, clarified that Wyoming protocol streaming is
+  verified while true progressive backend HTTP audio streaming is still pending,
+  and split the remaining roadmap into Phase 7A, 7B, 7.5, and later reliability
+  phases.
+
 - Phase 6D: verified Home Assistant deployment end-to-end.
   HA discovers service at 192.168.1.45:10200, s2-pro voice visible,
-  preview generates and audibly plays real speech through the streaming
-  TTS lifecycle.
+  preview generates and audibly plays real speech through the Wyoming
+  streaming TTS lifecycle.
 
 - Phase 6C: implemented full Wyoming streaming TTS state machine.
   Added synthesize-start, synthesize-chunk, synthesize-stop, and
@@ -30,7 +37,7 @@
 
 - Phase 5D: implemented structured TTS metrics and tracing.
 
-- Phase 5C: implemented streamed audio to Wyoming events.
+- Phase 5C: implemented streamed audio to Wyoming events helper.
 
 - Phase 5B: implemented streaming client interface.
 

@@ -1,85 +1,74 @@
-# Unraid install draft
+# Unraid install notes
 
-This is a draft for a future published Docker image. As of Phase 4, the container structure can run the Python Wyoming wrapper with the default fake backend and has a documented CUDA/s2.cpp/Unraid GPU plan, but it still does **not** build/start s2.cpp, download models, provide final GPU TTS, or validate the final Unraid WebUI deployment.
+The verified deployment uses two Docker containers on the Unraid `sorilonet` network:
 
-## Planned Unraid WebUI Add Container settings
+- `s2cpp-backend` — CUDA s2.cpp HTTP backend, image `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b`
+- `wyoming-s2cpp-tts` — CPU-only Wyoming wrapper, image `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-89ed2dc`
 
-Use the Unraid WebUI **Add Container** flow rather than Docker Compose.
+Home Assistant connects to the wrapper at `192.168.1.45:10200`. The wrapper reaches the backend at `http://s2cpp-backend:3030/generate` over `sorilonet`.
 
-### Repository/image
+## Backend template
 
-Future value, after an image exists:
+Use `unraid/my-s2cpp-backend.xml` for the CUDA backend.
 
-```text
-ghcr.io/<owner>/wyoming-s2cpp-tts:<tag>
-```
+Important settings:
 
-For local development before publishing, build/tag instructions should be added only after the Docker build path is explicitly tested.
+| Setting | Verified value |
+| --- | --- |
+| Repository | `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b` |
+| Container name | `s2cpp-backend` |
+| Network | custom Docker network (`sorilonet`) |
+| Internal HTTP port | `3030` |
+| Host debug port | `3031` by default, because host `3030` is already occupied on this server |
+| Model mount | `/mnt/user/appdata/s2cpp/models` → `/models` read-only |
+| Voice mount | `/mnt/user/appdata/s2cpp/voices` → `/voices` read-write |
+| Model path | `/models/s2-pro-q6_k.gguf` |
+| Voice dir | `/voices` |
+| GPU runtime | NVIDIA runtime / `--runtime=nvidia` |
 
-### Network
+The backend `POST /generate` endpoint expects `multipart/form-data`; do not configure the wrapper to send JSON to the deployed backend.
 
-Bridge mode should be sufficient for the Wyoming TCP port unless your Home Assistant setup requires custom networking.
+## Wrapper template
 
-### Path mappings
+Use `unraid/my-wyoming-wrapper.xml` for the CPU-only Wyoming wrapper.
 
-| Host path | Container path | Purpose |
-| --- | --- | --- |
-| `/mnt/user/appdata/wyoming-s2cpp-tts/models` | `/models` | GGUF model files, future s2.cpp backend |
-| `/mnt/user/appdata/wyoming-s2cpp-tts/voices` | `/voices` | Reference voices / voice metadata |
-| `/mnt/user/appdata/wyoming-s2cpp-tts/config` | `/config` | Service config and profiles |
+Important settings:
 
-### Ports
+| Setting | Verified value |
+| --- | --- |
+| Repository | `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-89ed2dc` |
+| Container name | `wyoming-s2cpp-tts` |
+| Network | same custom Docker network as backend (`sorilonet`) |
+| Host Wyoming port | `10200` |
+| `TTS_BACKEND` | `s2cpp` |
+| `S2_HOST` | `s2cpp-backend` |
+| `S2_PORT` | `3030` |
+| `S2_STREAM` | parsed/configured; see streaming caveat below |
 
-| Host port | Container port | Purpose |
-| --- | --- | --- |
-| `10200` | `10200/tcp` | Wyoming Protocol TTS |
-| `8088` | `8088/tcp` | Future health/debug HTTP |
-| not exposed by default | `3030/tcp` | Internal s2.cpp HTTP |
+The wrapper does not need NVIDIA runtime, CUDA, GGUF model files, or GPU access.
 
-Expose `3030` only when intentionally debugging a future internal s2.cpp HTTP server. In current Phase 3, internal s2.cpp startup is not implemented.
+## Streaming caveat
 
-### Environment variables
+Wyoming protocol streaming is implemented and verified: the wrapper handles `synthesize-start`, `synthesize-chunk`, and `synthesize-stop`, then emits `AudioStart`, `AudioChunk`, `AudioStop`, and `synthesize-stopped` for Home Assistant.
 
-Current useful variables:
+Progressive backend-audio streaming is not currently used by the production handler: although `S2_STREAM` is parsed and `synthesize_s2cpp_streaming_tts_events()` / `generate_stream()` exist, the live handler still calls buffered `synthesize_s2cpp_tts_events()` via `generate_multipart()`, then sends Wyoming audio events.
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `WYOMING_URI` | `tcp://0.0.0.0:10200` | Wyoming listen URI |
-| `TTS_BACKEND` | `fake` | `fake` for deterministic test tone; `s2cpp` for external/buffered backend path |
-| `S2_HOST` | `127.0.0.1` | s2.cpp HTTP host when using `TTS_BACKEND=s2cpp` |
-| `S2_PORT` | `3030` | s2.cpp HTTP port when using `TTS_BACKEND=s2cpp` |
-| `S2_MODEL` | `/models/s2-pro-q6_k.gguf` | Planned model path sent in `/generate` payload |
-| `S2_VOICE_DIR` | `/voices` | Planned voice/reference directory |
-| `S2CPP_ENABLE_INTERNAL_SERVER` | `false` | Future hook only; currently prints TODO messages and does not start s2.cpp |
+## Home Assistant setup
 
-Recommended first Unraid test mode remains:
+1. In Home Assistant, add the **Wyoming Protocol** integration.
+2. Host: `192.168.1.45`
+3. Port: `10200`
+4. Select `wyoming-s2cpp-tts` / `s2-pro` as the TTS engine.
+5. Test with "Try text-to-speech".
 
-```text
-TTS_BACKEND=fake
-```
+Verified behavior as of 2026-07-08: Home Assistant discovers the service, `s2-pro` is visible, and preview TTS audibly plays real speech.
 
-That mode validates the Wyoming container path with deterministic fake audio before any GPU/model work.
+## Voice profiles
 
-## NVIDIA GPU notes
+Saved `.s2voice` files belong under `/mnt/user/appdata/s2cpp/voices` on the host and `/voices` inside the backend. Phase 7A creates and directly verifies a profile. Phase 7B adds wrapper read-only voice discovery and Home Assistant selectable voices.
 
-This service is intended to use one NVIDIA RTX 3080 10 GB for the first real version. Do not assume an exact Unraid NVIDIA setup until verified. See [`CUDA_S2CPP_PLAN.md`](CUDA_S2CPP_PLAN.md) for the Phase 4 CUDA/s2.cpp plan and the current untested assumptions.
+Do not assume a backend HTTP voice-management endpoint. Plan against CLI profile creation/listing and `/generate` voice selection unless source inspection proves otherwise.
 
-General checks for a future implementation:
+## Finalization status
 
-1. Install/configure the Unraid NVIDIA plugin or equivalent supported NVIDIA runtime path.
-2. Confirm the GPU is visible on the host with `nvidia-smi`.
-3. Configure the container runtime/extra parameters according to the verified Unraid NVIDIA setup.
-4. Run `scripts/check_gpu_visibility.sh` inside the future GPU-enabled container.
-5. Confirm the script reports `nvidia-smi` success and shows the expected device.
-6. Confirm `nvidia-smi` works inside the container before debugging TTS.
-
-Typical future environment variables may include:
-
-```text
-NVIDIA_VISIBLE_DEVICES=<gpu-id-or-all>
-NVIDIA_DRIVER_CAPABILITIES=compute,utility
-S2_GPU_INDEX=0
-S2_GPU_LAYERS=36
-```
-
-Exact GPU runtime settings should be documented after they are tested on the target Unraid server. Final Unraid WebUI template validation is Phase 8B and must cover GPU passthrough, ports, mounts, permissions, startup, process supervision, health checks, shutdown, restart behavior, and persistence.
+Final restart, update, persistence, backup, and rollback validation for the Unraid templates is planned for Phase 14. Until then, prefer immutable `sha-*` image tags for every verified deployment.

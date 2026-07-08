@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <!--
   Unraid Docker template for wyoming-s2cpp-tts (wrapper)
-  Phase 6B0: CPU-only Wyoming Protocol TTS wrapper
+  Verified CPU-only Wyoming Protocol TTS wrapper
 
   Install this template by copying it to:
     /boot/config/plugins/dockerMan/templates-user/my-wyoming-wrapper.xml
@@ -14,7 +14,7 @@
 -->
 <Container version="2">
   <Name>wyoming-s2cpp-tts</Name>
-  <Repository>ghcr.io/sorilo/wyoming-s2cpp-tts:edge</Repository>
+  <Repository>ghcr.io/sorilo/wyoming-s2cpp-tts:sha-89ed2dc</Repository>
   <Registry>https://ghcr.io</Registry>
   <Network>custom</Network>
   <Privileged>false</Privileged>
@@ -24,8 +24,8 @@
 CPU-only Wyoming Protocol TTS wrapper for s2.cpp backend.
 
 This container runs the Python Wyoming TCP server that translates Home
-Assistant Wyoming TTS requests into HTTP calls to the already-running
-s2.cpp backend (s2cpp-backend container on sorilonet).
+Assistant Wyoming TTS requests into buffered multipart/form-data HTTP calls
+to the already-running s2.cpp backend (s2cpp-backend container on sorilonet).
 
 This image does NOT require NVIDIA runtime, CUDA, or GPU hardware.
 It does NOT bundle GGUF models or build s2.cpp.
@@ -35,7 +35,7 @@ Home Assistant connects to this container at:
 (unless Home Assistant is itself on sorilonet, in which case use
 container-name:10200).
 
-The s2cpp-backend container must be running before this wrapper.
+The s2cpp-backend container must be running before this wrapper. Wyoming protocol streaming is supported; true progressive backend-audio forwarding remains future Phase 7.5 work.
   </Overview>
   <Category>Productivity</Category>
   <WebUI></WebUI>
@@ -53,7 +53,7 @@ The s2cpp-backend container must be running before this wrapper.
   <Config Name="Backend Port" Target="S2_PORT" Default="3030" Mode="" Description="HTTP port of the s2.cpp backend (default: 3030). The backend generates audio at http://s2cpp-backend:3030/generate." Type="Variable" Display="always" Required="true" Mask="false">3030</Config>
 
   <!-- Synthesis settings -->
-  <Config Name="Streaming" Target="S2_STREAM" Default="true" Mode="" Description="Enable progressive streaming synthesis (recommended). When enabled, audio chunks are sent to Home Assistant as they are generated." Type="Variable" Display="always" Required="false" Mask="false">true</Config>
+  <Config Name="Streaming" Target="S2_STREAM" Default="true" Mode="" Description="Parsed streaming flag. Current live handler still uses buffered backend generate_multipart(); Wyoming protocol streaming works, but true progressive backend-audio forwarding is pending Phase 7.5." Type="Variable" Display="always" Required="false" Mask="false">true</Config>
   <Config Name="Wyoming URI" Target="WYOMING_URI" Default="tcp://0.0.0.0:10200" Mode="" Description="Wyoming TCP listen address and port inside the container. Changing the port requires a matching Port mapping above." Type="Variable" Display="advanced" Required="false" Mask="false">tcp://0.0.0.0:10200</Config>
   <Config Name="Log Level" Target="LOG_LEVEL" Default="info" Mode="" Description="Application log verbosity: debug, info, warn, error." Type="Variable" Display="advanced" Required="false" Mask="false">info</Config>
 

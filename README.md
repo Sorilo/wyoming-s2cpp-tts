@@ -1,297 +1,161 @@
 # wyoming-s2cpp-tts
 
-`wyoming-s2cpp-tts` is planned as a local Home Assistant Wyoming Protocol TTS service for running Fish Speech S2 Pro through `s2.cpp` GGUF models on a home server.
+`wyoming-s2cpp-tts` is a local Home Assistant Wyoming Protocol TTS service that runs Fish Speech S2 Pro through `s2.cpp` GGUF models on a home Unraid server.
 
-This repository currently contains an early phased implementation through Phase 6A — including runtime handling of the verified real `s2.cpp` raw-PCM response contract, plus lightweight structured TTS metrics and tracing across fake, buffered s2.cpp, and streaming s2.cpp synthesis paths. It includes a minimal fake-audio Wyoming server, a small client for an already-running `s2.cpp` HTTP `/generate` endpoint, JSON and multipart/form-data request construction for that client, an opt-in `s2cpp` backend mode, a Phase 3 container/process scaffold that runs the Python wrapper while leaving hooks for a future supervised s2.cpp process, and a Phase 4 CUDA/Unraid planning document. It does **not** yet build `s2.cpp`, download models, deploy to Home Assistant, measure real end-to-end latency, or implement final cancellation/barge-in behavior.
+The current deployed baseline is a two-container system:
 
-## Target hardware for the first real version
+```text
+Home Assistant (192.168.1.233)
+  -> Wyoming Protocol TCP at 192.168.1.45:10200
+  -> CPU-only wyoming-s2cpp-tts wrapper container
+  -> HTTP multipart/form-data at http://s2cpp-backend:3030/generate
+  -> CUDA s2cpp-backend container
+  -> Fish Speech S2 Pro GGUF model on NVIDIA RTX 3080
+```
 
-- Server: Unraid home server
+Real Home Assistant TTS playback has been deployed and verified: Home Assistant discovers the Wyoming service, shows the `s2-pro` voice, completes the streaming TTS lifecycle, and audibly plays real speech.
+
+## Target hardware and model
+
+- Server: Unraid home server (`192.168.1.45`)
+- Home Assistant VM: `192.168.1.233`
+- Docker network: `sorilonet`
 - GPU target: NVIDIA RTX 3080 10 GB
 - CPU: Intel i9-13900K
 - RAM: 96 GB DDR4
 - Persistent appdata root: `/mnt/user/appdata`
+- Model path inside backend container: `/models/s2-pro-q6_k.gguf`
+- Host voices directory: `/mnt/user/appdata/s2cpp/voices`
+- Backend voices mount: `/voices`
 
-The first model target is:
+The verified first model target is:
 
 ```text
 /models/s2-pro-q6_k.gguf
 ```
 
-This `q6_k` target is intended as a realistic starting point for a single 10 GB RTX 3080. Future model choices may include `s2-pro-q8_0.gguf` for quality if VRAM allows, or `s2-pro-q4_k_m.gguf` as a lower-VRAM fallback. A possible later TTS hardware upgrade is an NVIDIA RTX 5080 16 GB, but hardware-upgrade benchmarking is post-v0.1 work.
+This `q6_k` target is the current RTX 3080 baseline. Future model choices may include `s2-pro-q8_0.gguf` for quality if VRAM allows, or `s2-pro-q4_k_m.gguf` as a lower-VRAM fallback. Hardware-upgrade benchmarking is post-v0.1 work.
 
-## Planned final architecture
+## Current verified deployment
 
-```text
-Home Assistant Assist pipeline
-  -> Wyoming Protocol TCP TTS server on port 10200
-  -> Python wrapper / adapter
-  -> local s2.cpp HTTP server on port 3030
-  -> Fish Speech S2 Pro GGUF model
-  -> NVIDIA RTX 3080
-```
+| Component | Value |
+| --- | --- |
+| Backend container | `s2cpp-backend` |
+| Backend image | `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b` |
+| Backend endpoint | `http://s2cpp-backend:3030/generate` |
+| Backend contract | `multipart/form-data` only; raw `audio/L16; rate=44100; channels=1` |
+| Wrapper container | `wyoming-s2cpp-tts` |
+| Wrapper image | `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-89ed2dc` |
+| Wyoming endpoint | `tcp://0.0.0.0:10200` inside container; `192.168.1.45:10200` from Home Assistant |
+| Home Assistant result | Discovery succeeds; `s2-pro` is visible; real speech is audible |
+| Test baseline | 287 tests passing before Phase 6E |
 
-The Python wrapper is responsible for translating Home Assistant/Wyoming TTS requests into s2.cpp HTTP requests, then returning audio to the Wyoming client. The final design should stream PCM chunks where possible, avoid unnecessary full-audio buffering, and cancel synthesis when the client disconnects.
+## Current architecture
 
-## Latency objective
+The production deployment intentionally separates CPU-only Wyoming protocol handling from GPU inference:
 
-The aspirational end-to-end target is under 2 seconds from detected end-of-speech through first audible playback for short, warm-path requests, including VAD endpointing. This repo can directly measure TTS-side timestamps such as request receipt, backend first byte, Wyoming first audio chunk, emitted bytes/chunks, cancellation, and request duration. STT, LLM, VAD, and actual playback timestamps require Home Assistant/upstream/client instrumentation or a correlated end-to-end test harness.
+- The **wrapper** runs the Python Wyoming TCP server and does not require CUDA, NVIDIA runtime, GGUF files, or GPU access.
+- The **backend** runs `s2.cpp` in HTTP server mode with CUDA and the mounted model/tokenizer assets.
+- Home Assistant only talks to the wrapper on TCP port 10200.
+- The wrapper talks to the backend through the Docker network at `http://s2cpp-backend:3030/generate`.
+- The backend expects `multipart/form-data`; JSON requests are not valid for the deployed backend.
 
-Do not treat placeholder buffering values such as `1000 ms` or `4000 ms` as validated production defaults, and do not claim end-to-end latency until it is actually measured.
+## Streaming status
 
-## Current status
+Wyoming protocol streaming is implemented and verified: the wrapper handles `synthesize-start`, `synthesize-chunk`, and `synthesize-stop`, then emits `AudioStart`, `AudioChunk`, `AudioStop`, and `synthesize-stopped` for Home Assistant.
 
-Phase 6A is now implemented:
+Progressive backend-audio streaming is not currently used by the production handler: although `S2_STREAM` is parsed and `synthesize_s2cpp_streaming_tts_events()` / `generate_stream()` exist, the live handler still calls buffered `synthesize_s2cpp_tts_events()` via `generate_multipart()`, then sends Wyoming audio events.
 
-- Repository structure exists with 238 passing tests.
-- Docs describe the intended architecture and deployment path.
-- The Python package includes a Wyoming TCP TTS server.
-- The default `TTS_BACKEND=fake` path handles Wyoming `Describe` and `Synthesize` events with deterministic local PCM test-tone audio.
-- `app/s2_client.py` can POST JSON, multipart/form-data, or create streaming iterators for an already-running external `s2.cpp` HTTP `/generate` endpoint.
-- Optional `TTS_BACKEND=s2cpp` routes one buffered s2.cpp client result back through Wyoming `AudioStart`/`AudioChunk`/`AudioStop` events using validated backend PCM metadata.
-- `app/wyoming_server.py` has a streaming async generator (`synthesize_s2cpp_streaming_tts_events()`) that yields progressive Wyoming audio events with PCM frame-aligned rechunking.
-- `app/audio.py` has declared `pcm_s16le` response validation and `StreamingPCMRechunker` for bounded frame-aligned PCM rechunking across arbitrary HTTP transport boundaries.
-- `app/metrics.py` provides `SynthesisMetrics` (frozen dataclass) and `MetricsCollector` (mutable per-request collector with DI clock) wired into all three synthesis paths — request start, first backend data, first Wyoming chunk, emitted bytes/chunks, terminal status, and monotonic duration.
-- `scripts/smoke_s2cpp_generate.py` provides an optional direct `/generate` smoke test.
-- `Dockerfile` installs Python requirements, exposes Wyoming/health ports, creates `/models`, `/voices`, and `/config`, and starts `entrypoint.sh`.
-- `entrypoint.sh` runs `python -m app.main` and includes TODO hooks for future internal s2.cpp supervision on `127.0.0.1:3030`.
-- `docs/CUDA_S2CPP_PLAN.md` documents the untested future CUDA/s2.cpp build plan.
-- `scripts/check_gpu_visibility.sh` provides a safe future `nvidia-smi` validation hook.
-- No s2.cpp build, CUDA setup, GGUF model download, Home Assistant deployment, real end-to-end latency measurement, or final cancellation/barge-in behavior is implemented yet.
+This means `S2_STREAM=true` is a parsed/configured setting, but Phase 7.5 is still required to wire true progressive backend HTTP audio streaming into the production Wyoming event handler.
 
-Implementation continues in small phases. Phase 6A wires the verified real backend raw-PCM contract into the Wyoming runtime path; Home Assistant deployment remains future Phase 6B work. See [`docs/ROADMAP.md`](docs/ROADMAP.md) and [`docs/NEXT_GOAL_PROMPTS.md`](docs/NEXT_GOAL_PROMPTS.md).
+## Running locally for development
 
-## Manual Phase 1 test
-
-Install the small Python requirements, then start the fake Wyoming server:
-
-```bash
-python -m pip install -r requirements.txt
-python -m app.main
-```
-
-Expected startup message:
-
-```text
-Wyoming TTS server listening on tcp://0.0.0.0:10200 with backend=fake
-```
-
-In Home Assistant, add a Wyoming Protocol integration pointing at the host running this service on port `10200`, then select it as a TTS engine in an Assist pipeline. A synthesis request should return a deterministic test tone, not real speech.
-
-For a local automated protocol check, run:
-
-```bash
-python -m pytest tests/test_wyoming_server.py -q
-```
-
-## Phase 2/2.5 external s2.cpp backend configuration
-
-Phase 2 added client code for an already-running external `s2.cpp` HTTP server. Phase 2.5 adds an opt-in non-streaming Wyoming backend mode that can call that client and convert one buffered PCM response into Wyoming audio events. The service does not start or supervise s2.cpp yet.
-
-Default backend settings in `app/config.py` are:
-
-```text
-TTS_BACKEND=fake
-S2_HOST=127.0.0.1
-S2_PORT=3030
-S2_MODEL=/models/s2-pro-q6_k.gguf
-```
-
-For a future external server on another host, set the corresponding environment variables before running the service or client tools:
-
-```bash
-export TTS_BACKEND=s2cpp
-export S2_HOST=192.168.1.45
-export S2_PORT=3030
-python -m app.main
-```
-
-In this mode, Home Assistant still connects to Wyoming on port `10200`, while the Python wrapper makes a buffered HTTP request to `http://$S2_HOST:$S2_PORT/generate` for each synthesis request.
-
-You can also load settings from the environment when creating the client directly:
-
-```python
-from app.config import Settings
-from app.s2_client import S2Client, S2GenerateRequest
-
-settings = Settings.from_env()
-client = S2Client.from_settings(settings)
-result = client.generate(S2GenerateRequest.from_settings("hello", settings))
-print(result.content_type, len(result.audio))
-```
-
-`TTS_BACKEND=s2cpp` remains opt-in and the default backend remains fake. Buffered runtime responses must be explicitly declared `pcm_s16le`/`audio/L16` with non-contradictory sample-rate/channel metadata and frame-aligned 16-bit PCM bytes; the Wyoming `AudioStart`/`AudioChunk` metadata is derived from the validated backend contract (for the verified real backend: 44100 Hz, mono, 16-bit). Cancellation, barge-in behavior, and Home Assistant deployment are later phases.
-
-For the mocked Phase 2/2.5 client and backend-route tests, run:
-
-```bash
-python -m pytest tests/test_s2_client.py tests/test_wyoming_s2cpp_backend.py -q
-```
-
-## Phase 5A multipart/form-data client compatibility
-
-Phase 5A adds an additive multipart/form-data request path in `app/s2_client.py`:
-
-- `S2Client.generate(...)` still sends JSON and remains the existing buffered default path.
-- `S2Client.generate_multipart(...)` sends multipart/form-data and still buffers the response.
-- `encode_multipart_form_data(...)` supports scalar fields and in-memory file parts for future reference audio/file experiments.
-
-Current multipart field names intentionally mirror the JSON payload keys: `text`, `model`, `stream`, `chunked`, `output_format`, `segment_sentences`, `max_new_tokens`, `temperature`, `top_p`, `top_k`, and optional `voice`. These names are **unverified upstream assumptions** until tested against a real compatible s2.cpp backend. File part names such as `reference_audio` are supported by the encoder but are also unverified assumptions.
-
-Phase 5A does not implement streaming, Home Assistant/Wyoming behavior changes, Docker/CUDA work, real backend validation, audio-quality validation, or latency measurement.
-
-For mocked multipart compatibility tests, run:
-
-```bash
-python -m pytest tests/test_s2_client.py -q
-```
-
-## Phase 2.75 optional direct s2.cpp smoke test
-
-Use this only when an external s2.cpp HTTP server is already running. The script does not start s2.cpp, build CUDA code, download models, or require model infrastructure for normal tests/CI.
-
-Default harmless skip mode:
-
-```bash
-python scripts/smoke_s2cpp_generate.py --text "hello"
-```
-
-Expected output includes:
-
-```text
-status=skipped
-endpoint=http://127.0.0.1:3030/generate
-bytes_received=0
-```
-
-Opt in when a backend is available:
-
-```bash
-export TTS_BACKEND=s2cpp
-export S2_HOST=192.168.1.45
-export S2_PORT=3030
-python scripts/smoke_s2cpp_generate.py --text "Hello from direct s2.cpp smoke test."
-```
-
-Expected success output includes:
-
-```text
-status=ok
-endpoint=http://192.168.1.45:3030/generate
-content_type=<backend content type>
-bytes_received=<non-zero byte count>
-```
-
-If `TTS_BACKEND=s2cpp` is set but the backend is unavailable, the script reports `status=unavailable` and exits successfully so it is safe to run during local setup checks.
-
-Limitations:
-
-- This is a direct backend-client smoke test, not a Home Assistant/Wyoming integration test.
-- It buffers one response and prints metadata only.
-- It assumes the backend `/generate` endpoint is already running and compatible with the current buffered JSON payload used by `S2Client.generate(...)`; multipart compatibility is mocked separately in Phase 5A.
-- It does not validate audio quality, realtime factor, VRAM use, streaming, cancellation, or barge-in behavior.
-
-## Phase 5.5 real external s2.cpp smoke test harness
-
-Phase 5.5 adds an opt-in smoke-test harness that validates real s2.cpp HTTP
-/generate backend compatibility without starting, building, or downloading
-s2.cpp, models, or CUDA tooling.
-
-### Phase 5.5A: harness implemented (complete)
-
-app/smoke_harness.py provides the harness with SmokeConfig,
-BufferedMultipartResult, StreamingMultipartResult, SmokeReport,
-WAV header validation, PCM frame-alignment validation, and streaming
-progressive-delivery classification. 65 new mocked tests (193 total pass).
-
-The CLI (scripts/smoke_s2cpp_generate.py) supports --run-real
-(explicit opt-in), --require-backend (nonzero exit), --endpoint
-override, --probe-legacy-json, --output-dir, and --json output.
-
-Without --run-real the script exits successfully with status=skipped.
-With --run-real but unreachable backend it reports status=unavailable
-(exit 0 unless --require-backend is also set).
-
-### Phase 5.5B: real backend verification (complete)
-
-Phase 5.5B was verified against an already-running real `rodrigomatta/s2.cpp`
-backend at `s2cpp-backend:3030`; see
-[`docs/PHASE_5_5B_REAL_BACKEND_VERIFICATION.md`](docs/PHASE_5_5B_REAL_BACKEND_VERIFICATION.md).
-The harness now accepts buffered output only when it is either:
-
-- declared `audio/wav` with a valid RIFF/WAVE header, or
-- declared `pcm_s16le`/`audio/L16` with valid, non-contradictory sample-rate
-  and channel metadata plus frame-aligned 16-bit PCM bytes.
-
-The observed real backend contract for the repository default request shape is
-raw `audio/L16; rate=44100; channels=1` with `X-Audio-Encoding=pcm_s16le`,
-`X-Audio-Channels=1`, and `X-Audio-Sample-Rate=44100`. Streaming verification
-requires valid PCM metadata, frame alignment, and `verified_progressive` delivery.
-
-### Smoke harness tests
-
-
-
-73 focused mocked smoke-harness tests cover opt-in gates, strict WAV validation,
-validated buffered PCM acceptance/rejection, streaming progressive/inconclusive
-classification, header parsing, error categorisation, structured output,
-timeout/error cleanup, and the full orchestrator path. No real backend is
-contacted during the ordinary test suite. Full suite: 238 tests pass.
-
-Limitations:
-
-- Direct backend-client smoke test only — not a Home Assistant/Wyoming
-  integration test.
-- Does not validate audio quality, realtime factor, VRAM use, or barge-in.
-- Target server is alpha/experimental.
-- Diagnostic timings are single-run only, explicitly labeled non-benchmark.
-- Generated audio is never committed to Git.
-- JSON-path success is not required from the multipart-only target.
-
-## Phase 3 container/process scaffold
-
-The Phase 3 Dockerfile is now a runnable Python-wrapper container scaffold:
-
-- Installs `requirements.txt`.
-- Copies `app/`, `scripts/`, and `entrypoint.sh`.
-- Creates `/models`, `/voices`, and `/config` for Unraid appdata mappings.
-- Exposes `10200/tcp` for Wyoming and `8088/tcp` for a future health/debug endpoint.
-- Starts `entrypoint.sh`, which runs `python -m app.main`.
-
-Default container behavior is still safe fake audio:
+The repository default remains the safe fake backend:
 
 ```text
 TTS_BACKEND=fake
 WYOMING_URI=tcp://0.0.0.0:10200
 ```
 
-Future s2.cpp process supervision is intentionally a hook only:
+Start the development server with:
 
-```text
-S2CPP_ENABLE_INTERNAL_SERVER=false
+```bash
+python -m app.main
 ```
 
-Setting `S2CPP_ENABLE_INTERNAL_SERVER=true` currently prints TODO messages and continues; it does not start s2.cpp yet. This Phase 3 container does not build s2.cpp, compile CUDA code, download models, or include the future s2.cpp binary. Phase 8A is the planned phase for actually building and testing the CUDA-enabled s2.cpp Docker image.
+Expected startup message for the default fake path:
 
-## Phase 4 CUDA/s2.cpp and Unraid GPU plan
+```text
+Wyoming TTS server listening on tcp://0.0.0.0:10200 with backend=fake
+```
 
-See [`docs/CUDA_S2CPP_PLAN.md`](docs/CUDA_S2CPP_PLAN.md) for the current future build/runtime plan. Phase 4 added documentation and validation hooks only:
+To point a local wrapper process at an already-running s2.cpp backend, set:
 
-- A future multi-stage CUDA Dockerfile shape is documented but not enabled.
-- The relevant external s2.cpp reference found was `sinfisum/s2pro-gguf`; its Linux/Unraid build has not been tested here.
-- The planned server flags include `--server`, `--model`, `--tokenizer`, `--ngl 36`, and `--cuda 0`, subject to Linux verification.
-- Future Unraid/NVIDIA variables include `NVIDIA_VISIBLE_DEVICES` and `NVIDIA_DRIVER_CAPABILITIES=compute,utility`.
-- `scripts/check_gpu_visibility.sh` can be run inside a future GPU-enabled container to check `nvidia-smi` safely.
+```bash
+export TTS_BACKEND=s2cpp
+export S2_HOST=s2cpp-backend
+export S2_PORT=3030
+python -m app.main
+```
 
-No CUDA/s2.cpp build success is claimed by this repo yet.
+In the verified deployment, the production wrapper container sets `TTS_BACKEND=s2cpp` and sends buffered multipart requests to `/generate`.
+
+## Direct backend smoke testing
+
+Use the smoke harness only when a compatible backend is already running:
+
+```bash
+.venv/bin/python scripts/smoke_s2cpp_generate.py \
+  --run-real \
+  --require-backend \
+  --endpoint s2cpp-backend:3030 \
+  --json
+```
+
+The verified real backend contract is raw `audio/L16; rate=44100; channels=1` with `X-Audio-Encoding=pcm_s16le`, `X-Audio-Channels=1`, and `X-Audio-Sample-Rate=44100`.
+
+## Testing
+
+Current full-suite baseline before Phase 6E: 287 passing tests.
+
+Useful focused checks:
+
+```bash
+python -m pytest tests/test_s2_client.py tests/test_wyoming_s2cpp_backend.py -q
+python -m pytest tests/test_streaming_protocol.py -q
+python -m pytest tests/test_dockerfile_cuda.py tests/test_dockerfile_wrapper.py -q
+```
+
+No ordinary test should contact a real backend unless explicitly opted in through the smoke harness.
+
+## Current limitations and remaining work
+
+- Custom `.s2voice` profile creation is not implemented in this wrapper flow yet.
+- Do not assume an HTTP voice-management API such as `/v1/voices`; the pinned behavior to plan against is `POST /generate`, reference audio plus exact transcript, saved voice selection using `voice` and `voice_dir`, CLI profile creation with `--prompt-audio`, `--prompt-text`, `--voice`, `--save-voice`, `--voice-dir`, and CLI listing with `--list-voices`.
+- Wrapper voice discovery, sanitized voice selection, `S2_DEFAULT_VOICE`, and Home Assistant selectable voice exposure are future Phase 7B work.
+- True progressive backend HTTP audio streaming in the production handler is future Phase 7.5 work.
+- Client disconnect cleanup, open HTTP stream closure, and backend cancellation limitations are future Phase 8 work.
+- Queue-busy behavior, HTTP 503 handling, queue wait timeout, synthesis timeout, and controlled Wyoming failure behavior are future Phase 9 work.
+- End-to-end barge-in with a real Home Assistant satellite/player path is future Phase 10 work.
+- STT, LLM, VAD, and actual playback timestamps require Home Assistant/upstream/client instrumentation or a correlated end-to-end test harness.
+
+Do not claim end-to-end latency, cancellation, barge-in, custom voice management, or production release readiness until those phases have been implemented and verified.
+
+## Historical implementation notes
+
+Earlier phases remain useful implementation history, but they are no longer the current deployment baseline:
+
+- Phase 0-4: repository scaffold, fake Wyoming server, s2.cpp client, wrapper container scaffold, and CUDA/Unraid planning.
+- Phase 5A-5D: multipart client support, streaming client interfaces, streamed audio-to-Wyoming helpers, and TTS-side metrics.
+- Phase 5.5A/5.5B: opt-in real-backend smoke harness and real backend contract verification.
+- Phase 6A: CUDA backend image built, published, and deployed.
+- Phase 6B0: CPU-only wrapper image and GHCR workflow.
+- Phase 6B1: production wrapper changed from JSON to multipart/form-data.
+- Phase 6C: Wyoming streaming TTS state machine fixed Home Assistant preview hangs.
+- Phase 6D: live Home Assistant deployment verified real audible speech.
+
+See [`docs/ROADMAP.md`](docs/ROADMAP.md), [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), and [`docs/NEXT_GOAL_PROMPTS.md`](docs/NEXT_GOAL_PROMPTS.md) for the governing forward plan.
 
 ## GitHub remote
 
-No remote is required for this scaffold. If this repository does not already have a remote, add one later with:
-
-```bash
-git remote add origin git@github.com:<your-user-or-org>/wyoming-s2cpp-tts.git
-git push -u origin main
-```
-
-Do not force-push, and do not push from automation unless the remote and credentials are confirmed safe.
+The project remote is expected to be GitHub. Do not force-push, and do not publish images or change running containers unless the current phase explicitly authorizes it.

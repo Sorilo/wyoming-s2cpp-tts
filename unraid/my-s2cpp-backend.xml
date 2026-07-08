@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <!--
   Unraid Docker template for s2cpp-backend
-  Phase 5.5B0: minimal reproducible CUDA s2.cpp HTTP backend
+  Verified CUDA s2.cpp HTTP backend template
 
   Install this template by copying it to:
     /boot/config/plugins/dockerMan/templates-user/my-s2cpp-backend.xml
@@ -11,7 +11,7 @@
 -->
 <Container version="2">
   <Name>s2cpp-backend</Name>
-  <Repository>ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-ddb8912</Repository>
+  <Repository>ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b</Repository>
   <Registry>https://ghcr.io</Registry>
   <Network>custom</Network>
   <Privileged>false</Privileged>
@@ -22,7 +22,7 @@ Standalone CUDA-enabled rodrigomatta/s2.cpp HTTP backend for Fish Speech S2 Pro 
 
 This container runs the s2.cpp inference engine with CUDA GPU acceleration and exposes an HTTP /generate endpoint on port 3030. It does NOT include the Python Wyoming wrapper, GGUF models, or tokenizer assets — those must be mounted from host paths.
 
-Phase 5.5B0 early testing image. Not production-hardened.
+Verified live backend image for the current Home Assistant deployment. Pin immutable sha-* tags for rollback safety.
 
 Upstream s2.cpp revision: 2c33261
 CUDA base: nvidia/cuda:12.4.1-runtime-ubuntu22.04

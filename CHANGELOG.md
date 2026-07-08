@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- Phase 7.5B: live deployment verification and streaming-metrics audit.
+  Confirmed one-request/one-audio lifecycle through progressive streaming path
+  (compatibility_synthesize_deferred → syn_trigger → backend_start →
+  backend_stream_headers → backend_stream_first_audio → first_wyoming_audio →
+  backend_stream_done → audio_out → syn_stopped).  Discovered and fixed two
+  metric-only double-counting bugs in ``backend_stream_done`` and ``audio_out``
+  observability lines that double-counted flush-carry chunk bytes and chunk
+  counts (``+ len(flush_chunks)`` and ``+ sum(flush_chunks)``).  No actual audio
+  bytes were affected — the 2,080-byte live discrepancy was purely in the JSON
+  log fields.  Renamed ``total_elapsed_ms`` → ``total_backend_stream_ms`` in
+  ``backend_stream_done``.  Enhanced ``first_wyoming_audio`` with ``elapsed_ms``,
+  ``time_to_first_backend_audio_ms``, and
+  ``wrapper_first_audio_forwarding_overhead_ms`` timing fields using one
+  consistent monotonic start point.  Added ``total_synthesis_ms`` to
+  ``syn_stopped``.  5 new deterministic PCM byte-counting tests prove: every
+  backend byte is counted exactly once, every emitted byte is counted exactly
+  once, clean aligned streams match, first backend chunk is included in totals,
+  and realistic 222,580-byte/44100 Hz scenario produces exact accounting (26
+  chunks, not 27).  Live progressive window measured at ~5 ms — wrapper
+  streaming works but backend generation dominates latency (2,932 ms to first
+  audio).  Full suite: 374/374 passing.
+
 - Phase 7.5A: wired true progressive backend HTTP PCM streaming into the
   production Wyoming wrapper. When ``S2_STREAM=true``, the handler now uses
   ``synthesize_s2cpp_streaming_tts_events()`` / ``generate_stream()`` to

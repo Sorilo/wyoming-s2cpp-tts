@@ -507,10 +507,14 @@ async def synthesize_s2cpp_streaming_tts_events(
                     metrics.record_first_audio_chunk()
                     if not first_audio_emitted:
                         first_audio_emitted = True
+                        wyoming_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
                         obs_log("first_wyoming_audio",
                                 connection_id=_ctx.connection_id,
                                 synthesis_id=_ctx.synthesis_id,
-                                text_fp=fp)
+                                text_fp=fp,
+                                elapsed_ms=wyoming_elapsed_ms,
+                                time_to_first_backend_audio_ms=first_audio_elapsed_ms,
+                                wrapper_first_audio_forwarding_overhead_ms=wyoming_elapsed_ms - first_audio_elapsed_ms)
                     yield AudioChunk(
                         rate=audio_config.sample_rate,
                         width=audio_config.width,
@@ -526,10 +530,14 @@ async def synthesize_s2cpp_streaming_tts_events(
             metrics.record_first_audio_chunk()
             if not first_audio_emitted:
                 first_audio_emitted = True
+                wyoming_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
                 obs_log("first_wyoming_audio",
                         connection_id=_ctx.connection_id,
                         synthesis_id=_ctx.synthesis_id,
-                        text_fp=fp)
+                        text_fp=fp,
+                        elapsed_ms=wyoming_elapsed_ms,
+                        time_to_first_backend_audio_ms=first_audio_elapsed_ms,
+                        wrapper_first_audio_forwarding_overhead_ms=wyoming_elapsed_ms - first_audio_elapsed_ms)
             yield AudioChunk(
                 rate=audio_config.sample_rate,
                 width=audio_config.width,
@@ -551,9 +559,9 @@ async def synthesize_s2cpp_streaming_tts_events(
                 connection_id=_ctx.connection_id,
                 synthesis_id=_ctx.synthesis_id,
                 text_fp=fp,
-                total_elapsed_ms=total_elapsed_ms,
+                total_backend_stream_ms=total_elapsed_ms,
                 total_pcm_bytes=metrics.total_emitted_bytes,
-                chunk_count=metrics.emitted_chunk_count + len(flush_chunks),
+                chunk_count=metrics.emitted_chunk_count,
                 status="ok")
 
         obs_log("audio_out",
@@ -561,8 +569,8 @@ async def synthesize_s2cpp_streaming_tts_events(
                 synthesis_id=_ctx.synthesis_id,
                 text_fp=fp,
                 audio_start=True,
-                chunk_count=metrics.emitted_chunk_count + len(flush_chunks),
-                pcm_bytes=metrics.total_emitted_bytes + sum(flush_chunks),
+                chunk_count=metrics.emitted_chunk_count,
+                pcm_bytes=metrics.total_emitted_bytes,
                 audio_stop=True,
                 mode="streaming",
                 status="ok")
@@ -867,6 +875,7 @@ class FakeTtsEventHandler(AsyncEventHandler):
             if accumulated:
                 syn_id = new_synthesis_id()
                 async def send_streaming_audio() -> None:
+                    syn_start = time.monotonic()
                     if (
                         self.settings.tts_backend == "s2cpp"
                         and self.settings.s2_stream
@@ -884,11 +893,13 @@ class FakeTtsEventHandler(AsyncEventHandler):
                         for audio_event in audio_events:
                             await self.write_event(audio_event)
                     # Signal end of streaming response
+                    total_synthesis_ms = int((time.monotonic() - syn_start) * 1000)
                     await self.write_event(SynthesizeStopped().event())
                     obs_log("syn_stopped",
                             connection_id=self._conn_id,
                             synthesis_id=syn_id,
-                            trigger="streaming")
+                            trigger="streaming",
+                            total_synthesis_ms=total_synthesis_ms)
 
                 await self.queue.run(send_streaming_audio)
             else:

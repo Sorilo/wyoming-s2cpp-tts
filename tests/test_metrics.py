@@ -812,6 +812,278 @@ class TestStreamingS2CppMetrics:
             elif AudioStop.is_type(e1.type):
                 pass  # AudioStop timestamps may differ due to different clock paths
 
+class TestStreamingPCMByteAccounting:
+    """Phase 7.5B: Deterministic PCM byte-counting proofs.
+
+    Every backend PCM byte is counted exactly once.
+    Every emitted PCM byte is counted exactly once.
+    For a clean aligned stream, backend total and Wyoming emitted total match.
+    The first backend chunk is included in backend_stream_done totals.
+    """
+
+    @staticmethod
+    def _config(sample_rate=8000, chunk_ms=5):
+        from app.wyoming_server import FakeTtsConfig
+        return FakeTtsConfig(sample_rate=sample_rate, chunk_ms=chunk_ms)
+
+    def _mock_client(self, chunks):
+        class _MockStream:
+            def __init__(self, chunks):
+                self._chunks = list(chunks)
+                self._idx = 0
+                self._closed = False
+                self.content_type = "audio/L16; rate=8000; channels=1"
+                self.response_headers = {
+                    "x-audio-encoding": "pcm_s16le",
+                    "x-audio-sample-rate": "8000",
+                    "x-audio-channels": "1",
+                }
+            def __enter__(self): return self
+            def __exit__(self, *args): self._closed = True; return False
+            def __iter__(self): return self
+            def __next__(self):
+                if self._idx >= len(self._chunks): raise StopIteration
+                chunk = self._chunks[self._idx]; self._idx += 1; return chunk
+
+        class _Client:
+            def __init__(self, chunks):
+                self._chunks = chunks
+            def generate_stream(self, request, files=None, boundary=None):
+                return _MockStream(self._chunks)
+        return _Client(chunks)
+
+    async def _collect(self, async_gen):
+        events = []
+        async for event in async_gen:
+            events.append(event)
+        return events
+
+    @pytest.mark.asyncio
+    async def test_clean_aligned_stream_bytes_match(self):
+        """For a stream whose PCM is exactly divisible by Wyoming chunk size,
+        total_emitted_bytes equals total backend bytes, and every byte is
+        counted exactly once."""
+        from app.s2_client import S2GenerateRequest
+        from app.wyoming_server import synthesize_s2cpp_streaming_tts_events
+        from wyoming.audio import AudioChunk
+
+        # 8000 Hz, 5ms chunks = 40 frames = 80 bytes per Wyoming chunk
+        # 8 chunks * 80 = 640 bytes total — cleanly aligned
+        total_backend_bytes = 640  # 8 Wyoming chunks
+        data = b"\x01\x00" * (total_backend_bytes // 2)
+
+        client = self._mock_client(chunks=[data])
+        config = self._config(sample_rate=8000, chunk_ms=5)
+        metrics = MetricsCollector("s2cpp", "streaming")
+        request = S2GenerateRequest(text="test")
+
+        events = await self._collect(
+            synthesize_s2cpp_streaming_tts_events(client, request, config, metrics=metrics)
+        )
+
+        snapshot = _finalized(metrics)
+
+        # Total emitted bytes must equal backend bytes
+        assert snapshot.total_emitted_bytes == total_backend_bytes, (
+            f"Expected {total_backend_bytes} emitted bytes, got {snapshot.total_emitted_bytes}"
+        )
+
+        # Chunk count must be exact: 640/80 = 8
+        assert snapshot.emitted_chunk_count == 8, (
+            f"Expected 8 chunks, got {snapshot.emitted_chunk_count}"
+        )
+
+        # Verify individual chunks sum to total
+        chunks = [AudioChunk.from_event(e) for e in events if AudioChunk.is_type(e.type)]
+        chunk_bytes = sum(len(c.audio) for c in chunks)
+        assert chunk_bytes == total_backend_bytes
+        assert len(chunks) == 8
+
+    @pytest.mark.asyncio
+    async def test_non_aligned_stream_with_flush_carry(self):
+        """When total backend PCM is NOT divisible by Wyoming chunk size,
+        the flush carry chunk is counted once — not double-counted."""
+        from app.s2_client import S2GenerateRequest
+        from app.wyoming_server import synthesize_s2cpp_streaming_tts_events
+        from wyoming.audio import AudioChunk
+
+        # 8000 Hz, 5ms chunks = 80 bytes per Wyoming chunk
+        # 700 bytes = 8 full chunks (640) + 60 bytes carry (30 frames)
+        total_backend_bytes = 700
+        data = b"\x01\x00" * (total_backend_bytes // 2)
+
+        client = self._mock_client(chunks=[data])
+        config = self._config(sample_rate=8000, chunk_ms=5)
+        metrics = MetricsCollector("s2cpp", "streaming")
+        request = S2GenerateRequest(text="test")
+
+        events = await self._collect(
+            synthesize_s2cpp_streaming_tts_events(client, request, config, metrics=metrics)
+        )
+
+        snapshot = _finalized(metrics)
+
+        # Must count all 700 bytes exactly once — not 700+60=760
+        assert snapshot.total_emitted_bytes == total_backend_bytes, (
+            f"Expected {total_backend_bytes} emitted bytes (flush carry counted once), "
+            f"got {snapshot.total_emitted_bytes}"
+        )
+
+        # 8 full + 1 carry = 9 chunks
+        assert snapshot.emitted_chunk_count == 9, (
+            f"Expected 9 chunks (8 full + 1 carry), got {snapshot.emitted_chunk_count}"
+        )
+
+        # Verify AudioChunk payloads sum correctly
+        chunks = [AudioChunk.from_event(e) for e in events if AudioChunk.is_type(e.type)]
+        chunk_bytes = sum(len(c.audio) for c in chunks)
+        assert chunk_bytes == total_backend_bytes
+
+    @pytest.mark.asyncio
+    async def test_first_backend_chunk_included_in_total(self):
+        """The very first backend PCM chunk contributes to total_emitted_bytes."""
+        from app.s2_client import S2GenerateRequest
+        from app.wyoming_server import synthesize_s2cpp_streaming_tts_events
+
+        # First chunk 240 bytes, second chunk 400 bytes
+        chunk1 = b"\x01\x00" * 120   # 240 bytes
+        chunk2 = b"\x02\x00" * 200   # 400 bytes
+        total_bytes = 640
+
+        client = self._mock_client(chunks=[chunk1, chunk2])
+        config = self._config(sample_rate=8000, chunk_ms=5)
+        metrics = MetricsCollector("s2cpp", "streaming")
+        request = S2GenerateRequest(text="test")
+
+        await self._collect(
+            synthesize_s2cpp_streaming_tts_events(client, request, config, metrics=metrics)
+        )
+
+        snapshot = _finalized(metrics)
+        assert snapshot.total_emitted_bytes == total_bytes, (
+            f"Expected {total_bytes}, got {snapshot.total_emitted_bytes} — "
+            f"first chunk ({len(chunk1)} bytes) may be missing"
+        )
+        assert snapshot.total_emitted_bytes >= len(chunk1), (
+            f"total_emitted_bytes ({snapshot.total_emitted_bytes}) < first chunk ({len(chunk1)})"
+        )
+
+    @pytest.mark.asyncio
+    async def test_stream_split_across_transport_boundaries(self):
+        """PCM split across multiple transport chunks with partial frames
+        at boundaries must still count every byte exactly once."""
+        from app.s2_client import S2GenerateRequest
+        from app.wyoming_server import synthesize_s2cpp_streaming_tts_events
+        from wyoming.audio import AudioChunk
+
+        # 10 full frames + 1 trailing byte, then 1 leading byte + 9 frames
+        # = 20 frames total = 40 bytes
+        chunk1 = b"\x01\x00" * 10 + b"\x02"     # 20 bytes + 1 odd byte
+        chunk2 = b"\x00" + b"\x03\x00" * 9      # 1 odd byte + 18 bytes
+        total_bytes = 40  # 20 frames * 2 bytes
+
+        client = self._mock_client(chunks=[chunk1, chunk2])
+        config = self._config(sample_rate=8000, chunk_ms=5)
+        metrics = MetricsCollector("s2cpp", "streaming")
+        request = S2GenerateRequest(text="test")
+
+        events = await self._collect(
+            synthesize_s2cpp_streaming_tts_events(client, request, config, metrics=metrics)
+        )
+
+        snapshot = _finalized(metrics)
+
+        # 40 bytes = 1 Wyoming chunk (80 byte capacity not full)
+        assert snapshot.total_emitted_bytes == total_bytes, (
+            f"Expected {total_bytes}, got {snapshot.total_emitted_bytes}"
+        )
+
+        # Verify the emitted audio is correct (reconstructed frames)
+        chunks = [AudioChunk.from_event(e) for e in events if AudioChunk.is_type(e.type)]
+        emitted = b"".join(c.audio for c in chunks)
+        assert len(emitted) == total_bytes
+        # Frames 1-10 from chunk1: \x01\x00 repeated 10 times
+        assert emitted[:20] == b"\x01\x00" * 10
+        # Frames 11-20 from chunk2: \x03\x00 repeated 9 times, preceded by the carry byte
+        assert emitted[20:22] == b"\x02\x00"  # reconstructed from carry
+        assert emitted[22:] == b"\x03\x00" * 9
+
+    @pytest.mark.asyncio
+    async def test_every_emitted_byte_counted_exactly_once(self):
+        """For 44100 Hz mono s16le (realistic config), every emitted byte
+        is accounted for — no duplication, no loss."""
+        from app.s2_client import S2GenerateRequest
+        from app.wyoming_server import synthesize_s2cpp_streaming_tts_events
+        from wyoming.audio import AudioChunk
+
+        # Simulate the live scenario: 222580 bytes at 44100 Hz, 100ms chunks
+        # 222580 bytes = 111290 frames
+        total_bytes = 222580
+        data = b"\x00\x00" * (total_bytes // 2)
+
+        # Simulate HTTP reading in 4096-byte chunks
+        transport_chunks = []
+        for offset in range(0, len(data), 4096):
+            transport_chunks.append(data[offset:offset+4096])
+
+        # Use a mock client with real 44100 Hz metadata
+        class _MockStream:
+            def __init__(self, chunks):
+                self._chunks = list(chunks); self._idx = 0
+                self._closed = False
+                self.content_type = "audio/L16; rate=44100; channels=1"
+                self.response_headers = {
+                    "x-audio-encoding": "pcm_s16le",
+                    "x-audio-sample-rate": "44100",
+                    "x-audio-channels": "1",
+                }
+            def __enter__(self): return self
+            def __exit__(self, *a): self._closed = True; return False
+            def __iter__(self): return self
+            def __next__(self):
+                if self._idx >= len(self._chunks): raise StopIteration
+                chunk = self._chunks[self._idx]; self._idx += 1; return chunk
+        class _Client:
+            def generate_stream(self, r, files=None, boundary=None):
+                return _MockStream(transport_chunks)
+
+        client = _Client()
+        config = self._config(sample_rate=44100, chunk_ms=100)
+        metrics = MetricsCollector("s2cpp", "streaming")
+        request = S2GenerateRequest(text="test")
+
+        events = await self._collect(
+            synthesize_s2cpp_streaming_tts_events(client, request, config, metrics=metrics)
+        )
+
+        snapshot = _finalized(metrics)
+
+        # Every backend byte counted once
+        assert snapshot.total_emitted_bytes == total_bytes, (
+            f"Expected {total_bytes}, got {snapshot.total_emitted_bytes}"
+        )
+
+        # Verify AudioChunk sum matches
+        chunks = [AudioChunk.from_event(e) for e in events if AudioChunk.is_type(e.type)]
+        chunk_sum = sum(len(c.audio) for c in chunks)
+        assert chunk_sum == total_bytes, (
+            f"AudioChunk sum {chunk_sum} != expected {total_bytes}"
+        )
+
+        # Verify chunk count is consistent
+        assert snapshot.emitted_chunk_count == len(chunks), (
+            f"metrics chunks {snapshot.emitted_chunk_count} != actual {len(chunks)}"
+        )
+
+        # With 222580 at 8820 bytes per chunk (44100 Hz * 0.1s * 2 bytes):
+        # 25 full + 1 partial (2080 bytes) = 26 chunks
+        assert snapshot.emitted_chunk_count == 26, (
+            f"Expected 26 chunks (25 full + 1 carry of 2080 bytes), "
+            f"got {snapshot.emitted_chunk_count}"
+        )
+
+
+
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 

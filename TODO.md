@@ -46,7 +46,7 @@
 ## Current verified deployment
 
 - Backend: `s2cpp-backend` (`ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b`)
-- Wrapper: `wyoming-s2cpp-tts` (`ghcr.io/sorilo/wyoming-s2cpp-tts:sha-89ed2dc`)
+- Wrapper: `wyoming-s2cpp-tts` (`ghcr.io/sorilo/wyoming-s2cpp-tts:TBD (to be published)`)
 - Network: `sorilonet`
 - HA: `192.168.1.233` → `192.168.1.45:10200`
 - Audio: 44100 Hz mono s16le real speech via Wyoming protocol streaming lifecycle
@@ -90,6 +90,20 @@
   ``backend_stream_done`` with timing fields.
 - 13 new streaming-specific tests. Full suite: 367/368 passing.
 - Backend image, voices, live containers, and Home Assistant untouched.
+
+
+## Phase 7.5B results
+
+- Live deployment verified: one-request/one-audio lifecycle confirmed through progressive streaming path.
+- Progressive window measured at ~5 ms — backend generation dominates latency (2,932 ms to first audio).
+- Two metric-only double-counting bugs found and fixed in ``backend_stream_done`` and ``audio_out`` observability lines.
+  Flush-carry chunk bytes and chunk counts were double-counted. No actual audio bytes were affected.
+- ``first_wyoming_audio`` enhanced with ``elapsed_ms``, ``time_to_first_backend_audio_ms``, ``wrapper_first_audio_forwarding_overhead_ms``.
+- ``backend_stream_done.total_elapsed_ms`` → ``total_backend_stream_ms``.
+- ``syn_stopped`` now includes ``total_synthesis_ms``.
+- 5 new deterministic PCM byte-counting tests. Full suite: 374/374 passing.
+- Backend image, voices, live containers, and Home Assistant untouched.
+- Wrapper image to be published with corrected observability.
 
 ## Approved remaining v0.1 phases
 

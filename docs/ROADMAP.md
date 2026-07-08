@@ -43,6 +43,10 @@ Fixed `generate()` \u2192 `generate_multipart()`. Describe returns real metadata
 ### Phase 6C: Wyoming streaming TTS state machine \u2705
 HA preview hang fixed. `synthesize-stopped` emitted. 287 tests pass.
 
+### Phase 7.5B: live verification + streaming-metrics audit \u2705
+Confirmed progressive streaming in production. Fixed metric-only double-counting bugs.
+Enhanced observability with unified timing fields. 374/374 tests pass.
+
 ### Phase 6D: Home Assistant deployment verification \u2705
 Real speech audible through Home Assistant. Wyoming streaming lifecycle verified.
 

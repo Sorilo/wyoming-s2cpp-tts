@@ -38,7 +38,7 @@ The architecture uses **two separate containers** on the `sorilonet` Docker netw
 
 ### wyoming-s2cpp-tts (CPU-only wrapper)
 
-- **Image:** `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-89ed2dc`
+- **Image:** `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-4b49a70 (to be replaced)`
 - Does **not** require NVIDIA runtime, CUDA, or GPU
 - Runs the Python Wyoming TCP server on port 10200
 - Translates Wyoming TTS requests into HTTP multipart calls to the backend

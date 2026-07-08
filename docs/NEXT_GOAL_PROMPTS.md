@@ -3,7 +3,71 @@
 Run phases one at a time. This file is regenerated from the actual repository
 state after every `/goal` run. Do not copy stale assumptions forward.
 
-## Current state after Phase 7.5A
+## Current state after Phase 7.5B
+
+- Repository branch: `main`.
+- Wrapper image: to be published by CI workflow.
+- Full test baseline: 374 passing (zero failures).
+- Live progressive streaming verified. Progressive window ~5 ms — backend dominates latency.
+- Streaming observability corrected and enhanced:
+  - ``first_wyoming_audio``: ``elapsed_ms``, ``time_to_first_backend_audio_ms``, ``wrapper_first_audio_forwarding_overhead_ms``
+  - ``backend_stream_done``: ``total_backend_stream_ms``, ``total_pcm_bytes``, ``chunk_count``
+  - ``syn_stopped``: ``total_synthesis_ms``
+  - No more double-counting of flush-carry bytes/chunks.
+- 5 new deterministic PCM byte-counting tests.
+- Backend image, voices, live containers, and Home Assistant untouched.
+
+## Next phase: S2 Backend Generation & Flush Investigation
+
+Since first backend audio arrived at ~2,932 ms and the stream completed at
+~2,937 ms (only ~5 ms progressive window), the recommended next latency phase
+should investigate s2.cpp backend generation and flush behavior before assuming
+further wrapper optimization will help.
+
+### Phase 7.5C: Backend Early-Audio Investigation
+
+Goal: benchmark the s2.cpp backend directly to determine where time-to-first-audio
+latency comes from, and whether backend ``low_latency`` / streaming params can
+cause the backend to emit audio sooner.
+
+Required work:
+
+1. Benchmark direct backend /generate calls:
+   - Variation A: ``low_latency=true``, ``chunked=true``, ``stream=true`` (current)
+   - Variation B: ``low_latency=false``, ``chunked=false``, ``stream=false`` (buffered)
+   - Variation C: different text lengths (short, medium, long)
+   - Variation D: different ``max_new_tokens`` values
+   - Variation E: different ``temperature`` values
+   - Measure time-to-first-byte and total time for each
+
+2. For the streaming path, measure:
+   - Time from POST to first response byte (headers)
+   - Time from POST to first audio byte
+   - Time from POST to last audio byte
+   - Compare with wrapper-side measurements
+
+3. Check s2.cpp source code / documentation for:
+   - Streaming buffer settings
+   - ``low_latency`` mode behavior
+   - ``chunked`` output behavior
+   - Any configurable flush policies
+
+4. Determine whether:
+   - The backend holds audio until generation completes despite streaming flags
+   - The backend emits progressively but in large chunks
+   - The ``low_latency`` param is being correctly parsed and applied
+   - Model architecture prevents early emission
+
+5. Do not:
+   - Modify the wrapper code
+   - Modify voice profiles
+   - Change Home Assistant settings
+   - Implement Phase 8 cancellation
+
+The goal is to find whether backend configuration changes can reduce the ~2.9s
+time-to-first-audio before investing in wrapper-side streaming optimization.
+2026-07-08
+
 
 - Repository branch: `main`.
 - Wrapper image: to be published by CI workflow.

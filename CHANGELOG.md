@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Phase 7B.1: added structured request-level observability.
+  New app/observability.py module generates per-connection and per-synthesis
+  correlation IDs, fingerprints text with SHA-256 (never logs full text), and
+  emits structured JSON log lines at INFO level through the wyoming-s2cpp-tts.obs
+  logger.  Instrumented connection open/close, every incoming Wyoming event type,
+  synthesis trigger (legacy vs streaming), backend request lifecycle
+  (start/done/elapsed/status/bytes), and outgoing Wyoming audio lifecycle
+  (AudioStart, chunk count, PCM bytes, AudioStop, synthesize-stopped).
+  Correlation IDs propagate through the full handler, queue, synthesis, and
+  audio-event paths. 17 new tests + 325 existing = 342 total.
+
 - Phase 7B: implemented wrapper voice discovery and Home Assistant voice selection.
   Added `app/voice_discovery.py` for safe `.s2voice` file enumeration from the
   `/voices` directory. Updated `build_info_event()` to advertise discovered

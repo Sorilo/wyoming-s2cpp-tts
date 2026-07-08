@@ -48,7 +48,7 @@ This `q6_k` target is the current RTX 3080 baseline. Future model choices may in
 | Wrapper image | `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-89ed2dc` |
 | Wyoming endpoint | `tcp://0.0.0.0:10200` inside container; `192.168.1.45:10200` from Home Assistant |
 | Home Assistant result | Discovery succeeds; `s2-pro` is visible; real speech is audible |
-| Test baseline | 323 tests passing after Phase 7B |
+| Test baseline | 342 tests passing after Phase 7B.1 |
 
 ## Current architecture
 

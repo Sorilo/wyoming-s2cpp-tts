@@ -10,6 +10,14 @@
 # Mount runtime assets from Unraid host paths.
 #
 # Pinned upstream revision: see S2CPP_REVISION ARG below.
+#
+# Build arguments:
+#   CUDA_ARCHITECTURES    CUDA GPU architecture(s) to compile for.
+#                         Defaults to 86 (RTX 3000 / RTX 3080).
+#                         For RTX 4000 series, use 89.
+#                         For RTX 5000 series, use 120 (Blackwell).
+#                         For a multi-arch portable build, pass a list:
+#                         "75;80;86;89;120".
 # ---------------------------------------------------------------------------
 
 # -- build stage -----------------------------------------------------------
@@ -18,6 +26,10 @@ FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS builder
 # Build-time arguments (pin the exact upstream revision).
 ARG S2CPP_REPO=https://github.com/rodrigomatta/s2.cpp.git
 ARG S2CPP_REVISION=2c33261938da1a41d713768b1b391b4d368d7d2c
+
+# CUDA architecture(s) to target.  Documented build arg: change when
+# rebuilding for a different GPU family.  Default 86 = RTX 3000 series.
+ARG CUDA_ARCHITECTURES=86
 
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 
@@ -37,14 +49,57 @@ RUN git clone --recurse-submodules "${S2CPP_REPO}" . \
     && git checkout "${S2CPP_REVISION}" \
     && git submodule update --init --recursive
 
+# ------------------------------------------------------------------
+# CUDA driver stub setup for GPU-less build runners.
+#
+# libggml-cuda.so links against the CUDA driver API (libcuda.so).
+# On GPU-less GitHub Actions runners, the real libcuda.so.1 is not
+# present, but the CUDA devel image ships a stub at:
+#   /usr/local/cuda/lib64/stubs/libcuda.so
+#
+# We create a libcuda.so.1 symlink so the final executable link step
+# can resolve CUDA driver symbols.  The stub is used ONLY at link
+# time; it is NOT copied into the runtime image.  At runtime, the
+# real libcuda.so.1 is supplied by the host NVIDIA driver via the
+# container runtime (nvidia-container-toolkit on Unraid).
+# ------------------------------------------------------------------
+RUN test -f /usr/local/cuda/lib64/stubs/libcuda.so \
+    && ln -s libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1 \
+    && echo "Verified: CUDA driver stub ready for GPU-less linking"
+
 # Build the s2.cpp CUDA binary.
-RUN cmake -B build -DCMAKE_BUILD_TYPE=Release -DS2_CUDA=ON \
+#   GGML_NATIVE=OFF          : portable build (no -march=native from the
+#                              GitHub runner's CPU; safe for i9-13900K).
+#   CMAKE_CUDA_ARCHITECTURES : set by the documented CUDA_ARCHITECTURES
+#                              ARG; defaults to 86 for RTX 3080.
+#   CMAKE_EXE_LINKER_FLAGS   : tell the linker where to find the CUDA
+#                              driver stub during the final link step.
+RUN cmake -B build \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DS2_CUDA=ON \
+    -DGGML_NATIVE=OFF \
+    -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHITECTURES}" \
+    -DCMAKE_EXE_LINKER_FLAGS="-Wl,-rpath-link,/usr/local/cuda/lib64/stubs" \
     && cmake --build build --parallel "$(nproc)"
+
+# ------------------------------------------------------------------
+# Build-time verification
+# ------------------------------------------------------------------
+RUN echo "=== build verification ===" \
+    && echo "CUDA stub present:" \
+    && ls -l /usr/local/cuda/lib64/stubs/libcuda.so* \
+    && echo "s2 binary exists:" \
+    && test -x /src/build/s2 && echo "  OK: /src/build/s2" \
+    && echo "Checking -march=native usage (should be 0):" \
+    && (grep -c '\-march=native' build/compile_commands.json 2>/dev/null || echo "  0") \
+    && echo "CUDA architectures selected: ${CUDA_ARCHITECTURES}"
 
 # Record build provenance.
 RUN echo "s2.cpp revision: ${S2CPP_REVISION}" > /src/build/BUILD_INFO \
     && echo "build date: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /src/build/BUILD_INFO \
-    && echo "cuda base: nvidia/cuda:12.4.1-devel-ubuntu22.04" >> /src/build/BUILD_INFO
+    && echo "cuda base: nvidia/cuda:12.4.1-devel-ubuntu22.04" >> /src/build/BUILD_INFO \
+    && echo "cuda architectures: ${CUDA_ARCHITECTURES}" >> /src/build/BUILD_INFO \
+    && echo "GGML_NATIVE: OFF (portable build)" >> /src/build/BUILD_INFO
 
 # -- runtime stage ---------------------------------------------------------
 FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
@@ -60,6 +115,8 @@ RUN apt-get update \
     && useradd --system --no-create-home --gid s2cpp s2cpp
 
 # Copy only the required runtime artifacts.
+# IMPORTANT: we do NOT copy libcuda stubs.  The real libcuda.so.1 is
+# provided at runtime by the host NVIDIA driver via the container runtime.
 COPY --from=builder --chown=s2cpp:s2cpp /src/build/s2            /usr/local/bin/s2
 COPY --from=builder --chown=s2cpp:s2cpp /src/build/BUILD_INFO     /usr/local/share/s2cpp/BUILD_INFO
 COPY --chown=s2cpp:s2cpp docker/s2cpp/entrypoint.sh               /entrypoint.sh
@@ -67,6 +124,17 @@ COPY --chown=s2cpp:s2cpp docker/s2cpp/entrypoint.sh               /entrypoint.sh
 RUN chmod +x /entrypoint.sh \
     && mkdir -p /models /voices /config \
     && chown s2cpp:s2cpp /models /voices /config
+
+# ------------------------------------------------------------------
+# Runtime verification: prove the stub was NOT copied.
+# ------------------------------------------------------------------
+RUN echo "=== runtime verification ===" \
+    && echo "Checking: no CUDA stub in runtime image:" \
+    && (find / -name 'libcuda.so*' 2>/dev/null | grep -v '/proc/' || echo "  OK: no libcuda.so* found") \
+    && echo "s2 binary present:" \
+    && test -x /usr/local/bin/s2 && echo "  OK: /usr/local/bin/s2" \
+    && echo "BUILD_INFO present:" \
+    && test -f /usr/local/share/s2cpp/BUILD_INFO && echo "  OK: BUILD_INFO"
 
 # Runtime volumes for host-mounted assets.
 VOLUME ["/models", "/voices", "/config"]

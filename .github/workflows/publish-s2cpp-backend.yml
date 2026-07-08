@@ -63,6 +63,7 @@ jobs:
             type=raw,value=${{ inputs.release_tag }},enable=${{ inputs.release_tag != '' }}
 
       - name: Build and push Docker image
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: ${{ env.CONTEXT }}
@@ -71,6 +72,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            CUDA_ARCHITECTURES=86
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: mode=max

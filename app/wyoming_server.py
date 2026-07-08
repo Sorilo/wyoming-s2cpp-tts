@@ -20,7 +20,15 @@ from wyoming.info import Attribution, Describe, Info, TtsProgram, TtsVoice
 from wyoming.server import AsyncEventHandler, AsyncTcpServer
 from wyoming.tts import Synthesize
 
-from app.audio import PCM_CHANNELS, PCM_WIDTH_BYTES, StreamingPCMRechunker, chunk_pcm_s16le, pcm_s16le_test_tone
+from app.audio import (
+    PCM_CHANNELS,
+    PCM_WIDTH_BYTES,
+    StreamingPCMRechunker,
+    chunk_pcm_s16le,
+    parse_declared_pcm_s16le_format,
+    pcm_s16le_test_tone,
+    validate_declared_pcm_s16le,
+)
 from app.config import Settings
 import sys
 
@@ -194,6 +202,18 @@ def synthesize_s2cpp_tts_events(
 
     try:
         result = client.generate(request)
+        pcm_format = validate_declared_pcm_s16le(
+            result.audio,
+            content_type=result.content_type,
+            headers=result.response_headers,
+        )
+        audio_config = FakeTtsConfig(
+            sample_rate=pcm_format.sample_rate,
+            duration_ms=audio_config.duration_ms,
+            chunk_ms=audio_config.chunk_ms,
+            width=pcm_format.width,
+            channels=pcm_format.channels,
+        )
 
         # Buffered path: record when completed buffered response is available.
         # This is NOT the literal first network byte — the multipart response
@@ -258,23 +278,40 @@ async def synthesize_s2cpp_streaming_tts_events(
     if metrics is None:
         metrics = MetricsCollector(backend_type="s2cpp", synthesis_mode="streaming")
 
-    rechunker = StreamingPCMRechunker(
-        sample_rate=config.sample_rate,
-        chunk_ms=config.chunk_ms,
-        width=config.width,
-        channels=config.channels,
-    )
-
-    yield AudioStart(
-        rate=config.sample_rate,
-        width=config.width,
-        channels=config.channels,
-    ).event()
-
+    audio_config = config
+    rechunker: StreamingPCMRechunker | None = None
     backend_data_observed = False
 
     try:
         with client.generate_stream(request) as stream:
+            stream_content_type = getattr(stream, "content_type", None)
+            stream_headers = getattr(stream, "response_headers", None)
+            if stream_content_type is not None or stream_headers is not None:
+                pcm_format = parse_declared_pcm_s16le_format(
+                    content_type=stream_content_type or "",
+                    headers=stream_headers or {},
+                )
+                audio_config = FakeTtsConfig(
+                    sample_rate=pcm_format.sample_rate,
+                    duration_ms=config.duration_ms,
+                    chunk_ms=config.chunk_ms,
+                    width=pcm_format.width,
+                    channels=pcm_format.channels,
+                )
+
+            rechunker = StreamingPCMRechunker(
+                sample_rate=audio_config.sample_rate,
+                chunk_ms=audio_config.chunk_ms,
+                width=audio_config.width,
+                channels=audio_config.channels,
+            )
+
+            yield AudioStart(
+                rate=audio_config.sample_rate,
+                width=audio_config.width,
+                channels=audio_config.channels,
+            ).event()
+
             while True:
                 try:
                     chunk = await asyncio.to_thread(_read_stream_chunk, stream)
@@ -291,9 +328,9 @@ async def synthesize_s2cpp_streaming_tts_events(
                 for audio_bytes, timestamp_ms in rechunker.feed(chunk):
                     metrics.record_first_audio_chunk()
                     yield AudioChunk(
-                        rate=config.sample_rate,
-                        width=config.width,
-                        channels=config.channels,
+                        rate=audio_config.sample_rate,
+                        width=audio_config.width,
+                        channels=audio_config.channels,
                         audio=audio_bytes,
                         timestamp=timestamp_ms,
                     ).event()
@@ -303,9 +340,9 @@ async def synthesize_s2cpp_streaming_tts_events(
         for audio_bytes, timestamp_ms in rechunker.flush():
             metrics.record_first_audio_chunk()
             yield AudioChunk(
-                rate=config.sample_rate,
-                width=config.width,
-                channels=config.channels,
+                rate=audio_config.sample_rate,
+                width=audio_config.width,
+                channels=audio_config.channels,
                 audio=audio_bytes,
                 timestamp=timestamp_ms,
             ).event()
@@ -313,7 +350,7 @@ async def synthesize_s2cpp_streaming_tts_events(
 
         yield AudioStop(
             timestamp=int(
-                rechunker.cumulative_frames * 1000 / config.sample_rate
+                rechunker.cumulative_frames * 1000 / audio_config.sample_rate
             )
         ).event()
 

@@ -338,7 +338,15 @@ class TestBufferedS2CppMetrics:
                 self.requests = []
             def generate(self, request):
                 self.requests.append(request)
-                return S2GenerateResult(audio=audio, content_type="audio/L16")
+                return S2GenerateResult(
+                    audio=audio,
+                    content_type="audio/L16; rate=44100; channels=1",
+                    response_headers={
+                        "x-audio-encoding": "pcm_s16le",
+                        "x-audio-sample-rate": "44100",
+                        "x-audio-channels": "1",
+                    },
+                )
         return _Client()
 
     def test_buffered_produces_completed_metrics(self):
@@ -395,12 +403,15 @@ class TestBufferedS2CppMetrics:
         clock = _stepping_clock(1000, 100)
         metrics = MetricsCollector("s2cpp", "buffered", clock=clock)
 
-        synthesize_s2cpp_tts_events(
-            "hello", client=client, settings=settings,
-            config=self._config(), metrics=metrics,
-        )
+        with pytest.raises(ValueError, match="empty PCM response"):
+            synthesize_s2cpp_tts_events(
+                "hello", client=client, settings=settings,
+                config=self._config(), metrics=metrics,
+            )
 
         snapshot = _finalized(metrics)
+        assert snapshot.terminal_status == "error"
+        assert snapshot.error_type == "ValueError"
         assert snapshot.first_backend_data_ns is None
         assert snapshot.total_emitted_bytes == 0
         assert snapshot.emitted_chunk_count == 0

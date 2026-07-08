@@ -1,6 +1,12 @@
 import pytest
 
-from app.audio import chunk_pcm_s16le, pcm_s16le_silence, pcm_s16le_test_tone
+from app.audio import (
+    DeclaredPCMFormat,
+    chunk_pcm_s16le,
+    pcm_s16le_silence,
+    pcm_s16le_test_tone,
+    validate_declared_pcm_s16le,
+)
 
 
 def test_pcm_silence_byte_length():
@@ -27,3 +33,63 @@ def test_chunk_pcm_s16le_preserves_audio_bytes():
 
     assert len(chunks) == 3
     assert b"".join(chunks) == pcm
+
+
+def test_validate_declared_pcm_s16le_accepts_real_backend_contract():
+    pcm = b"\x00\x01\x02\x03"
+
+    fmt = validate_declared_pcm_s16le(
+        pcm,
+        content_type="audio/L16; rate=44100; channels=1",
+        headers={
+            "x-audio-encoding": "pcm_s16le",
+            "x-audio-sample-rate": "44100",
+            "x-audio-channels": "1",
+        },
+    )
+
+    assert fmt == DeclaredPCMFormat(sample_rate=44100, channels=1, width=2)
+
+
+def test_validate_declared_pcm_s16le_rejects_missing_metadata():
+    with pytest.raises(ValueError, match="missing PCM metadata"):
+        validate_declared_pcm_s16le(
+            b"\x00\x01",
+            content_type="audio/L16",
+            headers={},
+        )
+
+
+def test_validate_declared_pcm_s16le_rejects_contradictory_metadata():
+    with pytest.raises(ValueError, match="conflicting PCM metadata"):
+        validate_declared_pcm_s16le(
+            b"\x00\x01\x02\x03",
+            content_type="audio/L16; rate=44100; channels=1",
+            headers={
+                "x-audio-encoding": "pcm_s16le",
+                "x-audio-sample-rate": "48000",
+                "x-audio-channels": "1",
+            },
+        )
+
+
+def test_validate_declared_pcm_s16le_rejects_unaligned_payload():
+    with pytest.raises(ValueError, match="not frame-aligned"):
+        validate_declared_pcm_s16le(
+            b"\x00\x01\x02",
+            content_type="audio/L16; rate=44100; channels=1",
+            headers={
+                "x-audio-encoding": "pcm_s16le",
+                "x-audio-sample-rate": "44100",
+                "x-audio-channels": "1",
+            },
+        )
+
+
+def test_validate_declared_pcm_s16le_rejects_unknown_binary():
+    with pytest.raises(ValueError, match="unsupported PCM response"):
+        validate_declared_pcm_s16le(
+            b"\x00\x01\x02\x03",
+            content_type="application/octet-stream",
+            headers={},
+        )

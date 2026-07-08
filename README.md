@@ -2,7 +2,7 @@
 
 `wyoming-s2cpp-tts` is planned as a local Home Assistant Wyoming Protocol TTS service for running Fish Speech S2 Pro through `s2.cpp` GGUF models on a home server.
 
-This repository currently contains an early phased implementation through Phase 5D — including lightweight structured TTS metrics and tracing across all three synthesis paths (fake, buffered s2.cpp, streaming s2.cpp). It includes a minimal fake-audio Wyoming server, a small client for an already-running `s2.cpp` HTTP `/generate` endpoint, JSON and multipart/form-data request construction for that client, an opt-in non-streaming `s2cpp` backend mode, a Phase 3 container/process scaffold that runs the Python wrapper while leaving hooks for a future supervised s2.cpp process, and a Phase 4 CUDA/Unraid planning document. It does **not** yet build `s2.cpp`, download models, progressively stream backend audio, measure real latency, or implement final cancellation/barge-in behavior.
+This repository currently contains an early phased implementation through Phase 6A — including runtime handling of the verified real `s2.cpp` raw-PCM response contract, plus lightweight structured TTS metrics and tracing across fake, buffered s2.cpp, and streaming s2.cpp synthesis paths. It includes a minimal fake-audio Wyoming server, a small client for an already-running `s2.cpp` HTTP `/generate` endpoint, JSON and multipart/form-data request construction for that client, an opt-in `s2cpp` backend mode, a Phase 3 container/process scaffold that runs the Python wrapper while leaving hooks for a future supervised s2.cpp process, and a Phase 4 CUDA/Unraid planning document. It does **not** yet build `s2.cpp`, download models, deploy to Home Assistant, measure real end-to-end latency, or implement final cancellation/barge-in behavior.
 
 ## Target hardware for the first real version
 
@@ -41,25 +41,25 @@ Do not treat placeholder buffering values such as `1000 ms` or `4000 ms` as vali
 
 ## Current status
 
-Phase 5D is now implemented:
+Phase 6A is now implemented:
 
-- Repository structure exists with 128 passing tests.
+- Repository structure exists with 238 passing tests.
 - Docs describe the intended architecture and deployment path.
 - The Python package includes a Wyoming TCP TTS server.
 - The default `TTS_BACKEND=fake` path handles Wyoming `Describe` and `Synthesize` events with deterministic local PCM test-tone audio.
 - `app/s2_client.py` can POST JSON, multipart/form-data, or create streaming iterators for an already-running external `s2.cpp` HTTP `/generate` endpoint.
-- Optional `TTS_BACKEND=s2cpp` routes one buffered s2.cpp client result back through Wyoming `AudioStart`/`AudioChunk`/`AudioStop` events.
+- Optional `TTS_BACKEND=s2cpp` routes one buffered s2.cpp client result back through Wyoming `AudioStart`/`AudioChunk`/`AudioStop` events using validated backend PCM metadata.
 - `app/wyoming_server.py` has a streaming async generator (`synthesize_s2cpp_streaming_tts_events()`) that yields progressive Wyoming audio events with PCM frame-aligned rechunking.
-- `app/audio.py` has `StreamingPCMRechunker` for bounded frame-aligned PCM rechunking across arbitrary HTTP transport boundaries.
+- `app/audio.py` has declared `pcm_s16le` response validation and `StreamingPCMRechunker` for bounded frame-aligned PCM rechunking across arbitrary HTTP transport boundaries.
 - `app/metrics.py` provides `SynthesisMetrics` (frozen dataclass) and `MetricsCollector` (mutable per-request collector with DI clock) wired into all three synthesis paths — request start, first backend data, first Wyoming chunk, emitted bytes/chunks, terminal status, and monotonic duration.
 - `scripts/smoke_s2cpp_generate.py` provides an optional direct `/generate` smoke test.
 - `Dockerfile` installs Python requirements, exposes Wyoming/health ports, creates `/models`, `/voices`, and `/config`, and starts `entrypoint.sh`.
 - `entrypoint.sh` runs `python -m app.main` and includes TODO hooks for future internal s2.cpp supervision on `127.0.0.1:3030`.
 - `docs/CUDA_S2CPP_PLAN.md` documents the untested future CUDA/s2.cpp build plan.
 - `scripts/check_gpu_visibility.sh` provides a safe future `nvidia-smi` validation hook.
-- No s2.cpp build, CUDA setup, GGUF model download, Home Assistant integration, real latency measurement, or final cancellation/barge-in behavior is implemented yet.
+- No s2.cpp build, CUDA setup, GGUF model download, Home Assistant deployment, real end-to-end latency measurement, or final cancellation/barge-in behavior is implemented yet.
 
-Implementation continues in small phases. The exact next implementation phase is Phase 5B: streaming async iterator over s2.cpp response bytes with mocked chunked responses. See [`docs/ROADMAP.md`](docs/ROADMAP.md) and [`docs/NEXT_GOAL_PROMPTS.md`](docs/NEXT_GOAL_PROMPTS.md).
+Implementation continues in small phases. Phase 6A wires the verified real backend raw-PCM contract into the Wyoming runtime path; Home Assistant deployment remains future Phase 6B work. See [`docs/ROADMAP.md`](docs/ROADMAP.md) and [`docs/NEXT_GOAL_PROMPTS.md`](docs/NEXT_GOAL_PROMPTS.md).
 
 ## Manual Phase 1 test
 
@@ -120,7 +120,7 @@ result = client.generate(S2GenerateRequest.from_settings("hello", settings))
 print(result.content_type, len(result.audio))
 ```
 
-`TTS_BACKEND=s2cpp` is intentionally non-streaming in Phase 2.5: it buffers one backend result, assumes raw PCM s16le matching the configured audio format, then emits Wyoming `AudioStart`/`AudioChunk`/`AudioStop`. Progressive streaming, WAV-header handling, cancellation, and barge-in behavior are later phases.
+`TTS_BACKEND=s2cpp` remains opt-in and the default backend remains fake. Buffered runtime responses must be explicitly declared `pcm_s16le`/`audio/L16` with non-contradictory sample-rate/channel metadata and frame-aligned 16-bit PCM bytes; the Wyoming `AudioStart`/`AudioChunk` metadata is derived from the validated backend contract (for the verified real backend: 44100 Hz, mono, 16-bit). Cancellation, barge-in behavior, and Home Assistant deployment are later phases.
 
 For the mocked Phase 2/2.5 client and backend-route tests, run:
 
@@ -236,7 +236,7 @@ requires valid PCM metadata, frame alignment, and `verified_progressive` deliver
 validated buffered PCM acceptance/rejection, streaming progressive/inconclusive
 classification, header parsing, error categorisation, structured output,
 timeout/error cleanup, and the full orchestrator path. No real backend is
-contacted during the ordinary test suite. Full suite: 226 tests pass.
+contacted during the ordinary test suite. Full suite: 238 tests pass.
 
 Limitations:
 

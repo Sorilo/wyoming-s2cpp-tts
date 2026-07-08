@@ -12,10 +12,112 @@ from __future__ import annotations
 import hashlib
 import math
 from collections.abc import Iterator
+from dataclasses import dataclass
 
 
 PCM_WIDTH_BYTES = 2
 PCM_CHANNELS = 1
+
+
+@dataclass(frozen=True)
+class DeclaredPCMFormat:
+    """Validated raw PCM format declared by an s2.cpp HTTP response."""
+
+    sample_rate: int
+    channels: int
+    width: int = PCM_WIDTH_BYTES
+
+
+def _parse_content_type(value: str) -> tuple[str, dict[str, str]]:
+    """Return lowercase media type and semicolon parameters."""
+    parts = [p.strip() for p in value.split(";") if p.strip()]
+    media_type = parts[0].lower() if parts else ""
+    params: dict[str, str] = {}
+    for part in parts[1:]:
+        if "=" not in part:
+            continue
+        key, val = part.split("=", 1)
+        params[key.strip().lower()] = val.strip().strip('"')
+    return media_type, params
+
+
+def _parse_positive_int(value: str | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def parse_declared_pcm_s16le_format(
+    *,
+    content_type: str,
+    headers: dict[str, str] | None = None,
+) -> DeclaredPCMFormat:
+    """Validate response metadata for declared raw mono/stereo PCM s16le.
+
+    This intentionally accepts only explicitly declared raw PCM responses.
+    ``application/octet-stream`` or missing/contradictory metadata is rejected
+    so arbitrary binary payloads are not treated as Wyoming audio.
+    """
+    media_type, ct_params = _parse_content_type(content_type)
+    normalised_headers = {k.lower(): v for k, v in (headers or {}).items()}
+
+    x_encoding = normalised_headers.get("x-audio-encoding")
+    declares_pcm = (
+        media_type in {"audio/l16", "audio/pcm", "audio/x-pcm"}
+        or x_encoding == "pcm_s16le"
+    )
+    if not declares_pcm:
+        raise ValueError("unsupported PCM response format")
+
+    if x_encoding != "pcm_s16le":
+        raise ValueError("missing PCM metadata: x-audio-encoding=pcm_s16le required")
+
+    ct_rate = _parse_positive_int(ct_params.get("rate"))
+    ct_channels = _parse_positive_int(ct_params.get("channels"))
+    x_rate = _parse_positive_int(normalised_headers.get("x-audio-sample-rate"))
+    x_channels = _parse_positive_int(normalised_headers.get("x-audio-channels"))
+
+    if ct_rate is not None and x_rate is not None and ct_rate != x_rate:
+        raise ValueError("conflicting PCM metadata: sample rate")
+    if ct_channels is not None and x_channels is not None and ct_channels != x_channels:
+        raise ValueError("conflicting PCM metadata: channels")
+
+    sample_rate = x_rate or ct_rate
+    channels = x_channels or ct_channels
+    if sample_rate is None or channels is None:
+        raise ValueError("missing PCM metadata: sample rate and channels required")
+
+    return DeclaredPCMFormat(
+        sample_rate=sample_rate,
+        channels=channels,
+        width=PCM_WIDTH_BYTES,
+    )
+
+
+def validate_declared_pcm_s16le(
+    audio: bytes,
+    *,
+    content_type: str,
+    headers: dict[str, str] | None = None,
+) -> DeclaredPCMFormat:
+    """Validate declared raw PCM s16le metadata and frame alignment."""
+    fmt = parse_declared_pcm_s16le_format(
+        content_type=content_type,
+        headers=headers,
+    )
+    frame_size = fmt.width * fmt.channels
+    if not audio:
+        raise ValueError("empty PCM response")
+    if len(audio) % frame_size != 0:
+        raise ValueError(
+            f"PCM payload is not frame-aligned: {len(audio)} byte(s) for "
+            f"{frame_size}-byte frames"
+        )
+    return fmt
 
 
 def pcm_s16le_silence(duration_ms: int, sample_rate: int = 22050) -> bytes:

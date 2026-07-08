@@ -711,3 +711,117 @@ class TestStreamingWyomingEvents:
         assert len(events) == 2
         assert AudioStart.is_type(events[0].type)
         assert AudioStop.is_type(events[1].type)
+
+
+# ── Phase 6A real backend runtime contract tests ─────────────────────────────
+
+class _MetadataMockS2StreamResult:
+    def __init__(self, chunks, *, content_type, response_headers):
+        self._chunks = list(chunks)
+        self._index = 0
+        self._closed = False
+        self.content_type = content_type
+        self.response_headers = response_headers.copy()
+        self.status_code = 200
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self._closed = True
+        return False
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self._index >= len(self._chunks):
+            raise StopIteration
+        chunk = self._chunks[self._index]
+        self._index += 1
+        return chunk
+
+
+class _MetadataStreamingClient:
+    def __init__(self, chunks, *, content_type="audio/L16; rate=44100; channels=1", response_headers=None):
+        self._chunks = chunks
+        self._content_type = content_type
+        self._response_headers = {
+            "x-audio-encoding": "pcm_s16le",
+            "x-audio-channels": "1",
+            "x-audio-sample-rate": "44100",
+        } if response_headers is None else response_headers
+        self._last_stream = None
+
+    def generate_stream(self, request, files=None, boundary=None):
+        self._last_stream = _MetadataMockS2StreamResult(
+            self._chunks,
+            content_type=self._content_type,
+            response_headers=self._response_headers,
+        )
+        return self._last_stream
+
+
+@pytest.mark.asyncio
+async def test_real_contract_streaming_pcm_sets_wyoming_metadata_and_preserves_progression():
+    from app.s2_client import S2GenerateRequest
+
+    chunk1 = b"\x01\x00" * 4410  # exactly one 100ms Wyoming chunk at 44100 Hz
+    chunk2 = b"\x02\x00" * 2
+    client = _MetadataStreamingClient([chunk1, chunk2])
+    config = FakeTtsConfig(sample_rate=22050, chunk_ms=100)
+
+    gen = synthesize_s2cpp_streaming_tts_events(
+        client, S2GenerateRequest(text="real stream"), config
+    )
+
+    start = await anext(gen)
+    assert AudioStart.from_event(start).rate == 44100
+
+    first_chunk = await anext(gen)
+    assert AudioChunk.is_type(first_chunk.type)
+    first = AudioChunk.from_event(first_chunk)
+    assert first.rate == 44100
+    assert first.channels == 1
+    assert first.audio == chunk1
+    assert client._last_stream._index == 1
+
+    remaining = []
+    async for event in gen:
+        remaining.append(event)
+
+    chunks = [AudioChunk.from_event(event) for event in remaining if AudioChunk.is_type(event.type)]
+    assert b"".join(chunk.audio for chunk in chunks) == chunk2
+    assert AudioStop.is_type(remaining[-1].type)
+
+
+@pytest.mark.asyncio
+async def test_streaming_pcm_missing_metadata_is_rejected_before_audio_start():
+    from app.s2_client import S2GenerateRequest
+
+    client = _MetadataStreamingClient(
+        [b"\x01\x00"],
+        content_type="audio/L16",
+        response_headers={},
+    )
+
+    with pytest.raises(ValueError, match="missing PCM metadata"):
+        await _collect_events(
+            synthesize_s2cpp_streaming_tts_events(
+                client, S2GenerateRequest(text="missing metadata"), FakeTtsConfig()
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_streaming_pcm_unaligned_final_frame_error_is_clear():
+    from app.s2_client import S2GenerateRequest
+
+    client = _MetadataStreamingClient([b"\x01\x00\x02"])
+
+    with pytest.raises(ValueError, match="Final incomplete PCM frame"):
+        await _collect_events(
+            synthesize_s2cpp_streaming_tts_events(
+                client, S2GenerateRequest(text="unaligned"), FakeTtsConfig()
+            )
+        )

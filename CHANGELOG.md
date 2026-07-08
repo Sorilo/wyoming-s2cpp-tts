@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Phase 6A: wired the verified real `s2.cpp` raw-PCM response contract into the
+  Wyoming wrapper runtime path without rebuilding Docker images or modifying the
+  external backend container.
+- Added shared declared-PCM validation for `audio/L16` / `pcm_s16le` responses:
+  required encoding, sample-rate/channel metadata, conflict detection between
+  `Content-Type` parameters and `X-Audio-*` headers, non-empty buffered audio,
+  and 16-bit frame alignment.
+- Buffered `TTS_BACKEND=s2cpp` Wyoming synthesis now derives `AudioStart` and
+  `AudioChunk` metadata from validated backend response headers instead of the
+  fake-audio defaults.
+- Streaming Wyoming synthesis validates response metadata before `AudioStart`
+  when stream metadata is available, then emits progressive frame-aligned chunks
+  with the validated backend sample rate/channels.
+- Added runtime contract tests for real-contract buffered and streaming PCM,
+  missing/contradictory metadata rejection, unaligned PCM errors, and preserved
+  fake/default mocked behavior (238 total tests pass).
+
 - Phase 5.5B: verified the smoke harness against a real external
   `rodrigomatta/s2.cpp` backend at `s2cpp-backend:3030` without rebuilding the
   image or modifying the Unraid container.

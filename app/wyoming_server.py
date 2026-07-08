@@ -18,7 +18,13 @@ from wyoming.audio import AudioChunk, AudioStart, AudioStop
 from wyoming.event import Event
 from wyoming.info import Attribution, Describe, Info, TtsProgram, TtsVoice
 from wyoming.server import AsyncEventHandler, AsyncTcpServer
-from wyoming.tts import Synthesize
+from wyoming.tts import (
+    Synthesize,
+    SynthesizeStart,
+    SynthesizeChunk,
+    SynthesizeStop,
+    SynthesizeStopped,
+)
 
 from app.audio import (
     PCM_CHANNELS,
@@ -426,7 +432,13 @@ class SingleWorkerSynthesisQueue:
 
 
 class FakeTtsEventHandler(AsyncEventHandler):
-    """Wyoming event handler for Describe and Synthesize requests."""
+    """Wyoming event handler for Describe, Synthesize, and streaming TTS.
+
+    Supports:
+      - Legacy ``synthesize`` (single request)
+      - Streaming ``synthesize-start`` / ``synthesize-chunk`` /
+        ``synthesize-stop`` (HA multi-sentence preview)
+    """
 
     def __init__(
         self,
@@ -442,6 +454,9 @@ class FakeTtsEventHandler(AsyncEventHandler):
         self.queue = queue
         self.settings = settings
         self.s2_client_factory = s2_client_factory
+        # Streaming state
+        self._streaming_text_parts: list[str] = []
+        self._in_streaming_session: bool = False
 
     async def handle_event(self, event: Event) -> bool:
         """Handle one Wyoming event."""
@@ -449,32 +464,73 @@ class FakeTtsEventHandler(AsyncEventHandler):
             await self.write_event(build_info_event(self.settings))
             return True
 
+        # ── Legacy (non-streaming) Synthesize ────────────────────────
         if Synthesize.is_type(event.type):
             synthesize = Synthesize.from_event(event)
 
             async def send_audio() -> None:
-                if self.settings.tts_backend == "s2cpp":
-                    s2_client = self.s2_client_factory(self.settings)
-                    events = await asyncio.to_thread(
-                        synthesize_s2cpp_tts_events,
-                        synthesize.text,
-                        s2_client,
-                        self.settings,
-                        self.config,
-                    )
-                else:
-                    events = synthesize_fake_tts_events(
-                        synthesize.text,
-                        config=self.config,
-                    )
-
-                for audio_event in events:
+                audio_events = await self._synthesize_text(synthesize.text)
+                for audio_event in audio_events:
                     await self.write_event(audio_event)
 
             await self.queue.run(send_audio)
             return True
 
+        # ── Streaming TTS: synthesize-start ──────────────────────────
+        if SynthesizeStart.is_type(event.type):
+            self._streaming_text_parts = []
+            self._in_streaming_session = True
+            return True
+
+        # ── Streaming TTS: synthesize-chunk ──────────────────────────
+        if SynthesizeChunk.is_type(event.type):
+            chunk = SynthesizeChunk.from_event(event)
+            if self._in_streaming_session:
+                self._streaming_text_parts.append(chunk.text)
+            return True
+
+        # ── Streaming TTS: synthesize-stop ───────────────────────────
+        if SynthesizeStop.is_type(event.type):
+            if not self._in_streaming_session:
+                return True
+
+            accumulated = " ".join(self._streaming_text_parts).strip()
+            self._streaming_text_parts = []
+            self._in_streaming_session = False
+
+            if accumulated:
+                async def send_streaming_audio() -> None:
+                    audio_events = await self._synthesize_text(accumulated)
+                    for audio_event in audio_events:
+                        await self.write_event(audio_event)
+                    # Signal end of streaming response
+                    await self.write_event(SynthesizeStopped().event())
+
+                await self.queue.run(send_streaming_audio)
+            else:
+                # No text accumulated — still signal end of streaming response
+                await self.write_event(SynthesizeStopped().event())
+
+            return True
+
         return True
+
+    async def _synthesize_text(self, text: str) -> list[Event]:
+        """Run synthesis for given text and return Wyoming audio events."""
+        if self.settings.tts_backend == "s2cpp":
+            s2_client = self.s2_client_factory(self.settings)
+            return await asyncio.to_thread(
+                synthesize_s2cpp_tts_events,
+                text,
+                s2_client,
+                self.settings,
+                self.config,
+            )
+        else:
+            return synthesize_fake_tts_events(
+                text,
+                config=self.config,
+            )
 
 
 @dataclass

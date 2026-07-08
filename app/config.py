@@ -81,15 +81,20 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
-        """Load minimal Phase 2 environment overrides.
+        """Load environment overrides for production and development.
 
-        `TTS_BACKEND`, `S2_HOST`, and `S2_PORT` are parsed for now so the
-        default fake backend or an already-running external s2.cpp HTTP server
-        can be selected without changing code. Broader environment/profile
-        loading belongs in a later hardening phase.
+        ``TTS_BACKEND``, ``S2_HOST``, and ``S2_PORT`` select the backend.
+        ``WYOMING_URI`` sets the Wyoming TCP listen address/port.
+        ``S2_STREAM`` controls streaming vs buffered synthesis.
+        ``LOG_LEVEL`` controls application log verbosity.
+        Broader environment/profile loading belongs in a later hardening phase.
         """
         return cls(
+            wyoming_uri=os.getenv("WYOMING_URI", WYOMING_URI),
             tts_backend=os.getenv("TTS_BACKEND", TTS_BACKEND),
             s2_host=os.getenv("S2_HOST", S2_HOST),
             s2_port=int(os.getenv("S2_PORT", str(S2_PORT))),
+            s2_stream=os.getenv("S2_STREAM", str(S2_STREAM)).lower()
+            not in ("false", "0", "no", "off"),
+            log_level=os.getenv("LOG_LEVEL", LOG_LEVEL),
         )

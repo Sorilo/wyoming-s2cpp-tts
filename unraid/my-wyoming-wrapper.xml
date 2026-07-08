@@ -1,0 +1,62 @@
+<?xml version="1.0"?>
+<!--
+  Unraid Docker template for wyoming-s2cpp-tts (wrapper)
+  Phase 6B0: CPU-only Wyoming Protocol TTS wrapper
+
+  Install this template by copying it to:
+    /boot/config/plugins/dockerMan/templates-user/my-wyoming-wrapper.xml
+
+  Then add the container via:
+    Unraid WebUI → Docker → Add Container → Select "wyoming-s2cpp-tts" from the template dropdown.
+
+  IMPORTANT: The s2cpp-backend container must already be running on sorilonet
+  before this wrapper can serve real TTS requests.
+-->
+<Container version="2">
+  <Name>wyoming-s2cpp-tts</Name>
+  <Repository>ghcr.io/sorilo/wyoming-s2cpp-tts:edge</Repository>
+  <Registry>https://ghcr.io</Registry>
+  <Network>custom</Network>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/sorilo/wyoming-s2cpp-tts</Support>
+  <Project>https://github.com/sorilo/wyoming-s2cpp-tts</Project>
+  <Overview>
+CPU-only Wyoming Protocol TTS wrapper for s2.cpp backend.
+
+This container runs the Python Wyoming TCP server that translates Home
+Assistant Wyoming TTS requests into HTTP calls to the already-running
+s2.cpp backend (s2cpp-backend container on sorilonet).
+
+This image does NOT require NVIDIA runtime, CUDA, or GPU hardware.
+It does NOT bundle GGUF models or build s2.cpp.
+
+Home Assistant connects to this container at:
+  192.168.1.45:&lt;host port&gt;
+(unless Home Assistant is itself on sorilonet, in which case use
+container-name:10200).
+
+The s2cpp-backend container must be running before this wrapper.
+  </Overview>
+  <Category>Productivity</Category>
+  <WebUI></WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/sorilo/wyoming-s2cpp-tts/main/unraid/my-wyoming-wrapper.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/sorilo/wyoming-s2cpp-tts/main/unraid/s2cpp-icon.png</Icon>
+
+  <!-- No GPU parameters needed — this wrapper is CPU-only -->
+
+  <!-- Network -->
+  <Config Name="Wyoming TCP Host Port" Target="10200" Default="10200" Mode="tcp" Description="Host port mapped to the Wyoming TCP container port (10200). Home Assistant connects to 192.168.1.45:&lt;this port&gt; unless HA is on sorilonet." Type="Port" Display="always" Required="true" Mask="false">10200</Config>
+
+  <!-- Backend configuration -->
+  <Config Name="TTS Backend" Target="TTS_BACKEND" Default="s2cpp" Mode="" Description="Backend mode: 's2cpp' for real synthesis, 'fake' for deterministic local PCM test tones (development only)." Type="Variable" Display="always" Required="true" Mask="false">s2cpp</Config>
+  <Config Name="Backend Host" Target="S2_HOST" Default="s2cpp-backend" Mode="" Description="Hostname of the s2.cpp HTTP backend container (must be on the same Docker network). Default: s2cpp-backend." Type="Variable" Display="always" Required="true" Mask="false">s2cpp-backend</Config>
+  <Config Name="Backend Port" Target="S2_PORT" Default="3030" Mode="" Description="HTTP port of the s2.cpp backend (default: 3030). The backend generates audio at http://s2cpp-backend:3030/generate." Type="Variable" Display="always" Required="true" Mask="false">3030</Config>
+
+  <!-- Synthesis settings -->
+  <Config Name="Streaming" Target="S2_STREAM" Default="true" Mode="" Description="Enable progressive streaming synthesis (recommended). When enabled, audio chunks are sent to Home Assistant as they are generated." Type="Variable" Display="always" Required="false" Mask="false">true</Config>
+  <Config Name="Wyoming URI" Target="WYOMING_URI" Default="tcp://0.0.0.0:10200" Mode="" Description="Wyoming TCP listen address and port inside the container. Changing the port requires a matching Port mapping above." Type="Variable" Display="advanced" Required="false" Mask="false">tcp://0.0.0.0:10200</Config>
+  <Config Name="Log Level" Target="LOG_LEVEL" Default="info" Mode="" Description="Application log verbosity: debug, info, warn, error." Type="Variable" Display="advanced" Required="false" Mask="false">info</Config>
+
+  <!-- Host path for application data (future use) -->
+  <Config Name="App Data" Target="/app/data" Default="/mnt/user/appdata/wyoming-s2cpp-tts" Mode="rw" Description="Host directory for wrapper runtime data (currently reserved for future use)." Type="Path" Display="advanced" Required="false" Mask="false">/mnt/user/appdata/wyoming-s2cpp-tts</Config>
+</Container>

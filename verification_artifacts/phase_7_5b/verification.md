@@ -125,3 +125,19 @@ Investigate s2.cpp backend generation and flush behavior before assuming further
 wrapper optimization will help. The backend's 2,932 ms to first audio (with RTF ≈ 0.94)
 suggests the model generates audio nearly at realtime but buffers until near completion.
 
+
+
+## Replacement wrapper image published
+
+| Field | Value |
+|---|---|
+| Commit | `974e2205bd5994bab6b1a7c210eaf1e2756ec5d4` |
+| Tag | `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-974e220` |
+| Edge tag | `ghcr.io/sorilo/wyoming-s2cpp-tts:edge` |
+| Digest | `sha256:8eb504f4eca2ca04d63ddc41161b37f438a227ad05525cdc3849469bdad7cf12` |
+| Workflow run | https://github.com/Sorilo/wyoming-s2cpp-tts/actions/runs/28978680861 |
+
+**Runtime code changed:** No — `first_wyoming_audio`, `backend_stream_done`, and
+`audio_out` observability log fields only. The `syn_stopped` event added
+`total_synthesis_ms`. No synthesis behavior, chunking, or audio data paths
+were modified.

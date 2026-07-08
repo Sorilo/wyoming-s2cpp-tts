@@ -4,7 +4,7 @@
 
 The Wyoming TTS service is deployed as two Docker containers on the Unraid `sorilonet` network:
 
-- **Wrapper:** `wyoming-s2cpp-tts` (CPU-only), image `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-89ed2dc`, Wyoming port 10200
+- **Wrapper:** `wyoming-s2cpp-tts` (CPU-only), image `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-974e220`, Wyoming port 10200
 - **Backend:** `s2cpp-backend` (CUDA), image `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b`, HTTP port 3030
 
 The wrapper is exposed to LAN at `192.168.1.45:10200`. Home Assistant runs at `192.168.1.233`.
@@ -91,7 +91,7 @@ Fixed in wrapper image `sha-89ed2dc`. The handler supports the full Wyoming stre
 ### No audio / connection errors
 
 - Verify both containers are running on the `sorilonet` network.
-- Verify the wrapper image is pinned to `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-89ed2dc` or a newer intentionally tested immutable tag.
+- Verify the wrapper image is pinned to `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-974e220` or a newer intentionally tested immutable tag.
 - Verify the backend image is pinned to `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b` or a newer intentionally tested immutable tag.
 - Check that the backend is reachable from the wrapper at `http://s2cpp-backend:3030/generate`.
 - Check wrapper logs for `S2ClientError`; JSON 400 errors indicate an old wrapper path that is not using multipart/form-data.

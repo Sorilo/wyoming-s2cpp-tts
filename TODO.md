@@ -46,7 +46,7 @@
 ## Current verified deployment
 
 - Backend: `s2cpp-backend` (`ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b`)
-- Wrapper: `wyoming-s2cpp-tts` (`ghcr.io/sorilo/wyoming-s2cpp-tts:TBD (to be published)`)
+- Wrapper: `wyoming-s2cpp-tts` (`ghcr.io/sorilo/wyoming-s2cpp-tts:sha-974e220`)
 - Network: `sorilonet`
 - HA: `192.168.1.233` → `192.168.1.45:10200`
 - Audio: 44100 Hz mono s16le real speech via Wyoming protocol streaming lifecycle

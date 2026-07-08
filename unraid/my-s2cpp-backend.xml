@@ -11,7 +11,7 @@
 -->
 <Container version="2">
   <Name>s2cpp-backend</Name>
-  <Repository>ghcr.io/sorilo/wyoming-s2cpp-tts-backend:edge</Repository>
+  <Repository>ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-ddb8912</Repository>
   <Registry>https://ghcr.io</Registry>
   <Network>custom</Network>
   <Privileged>false</Privileged>
@@ -31,16 +31,16 @@ CUDA base: nvidia/cuda:12.4.1-runtime-ubuntu22.04
   <WebUI>http://[IP]:[PORT:3031]/</WebUI>
   <TemplateURL>https://raw.githubusercontent.com/sorilo/wyoming-s2cpp-tts/main/unraid/my-s2cpp-backend.xml</TemplateURL>
   <Icon>https://raw.githubusercontent.com/sorilo/wyoming-s2cpp-tts/main/unraid/s2cpp-icon.png</Icon>
-  <ExtraParams>--runtime=nvidia --gpus all</ExtraParams>
+  <ExtraParams>--runtime=nvidia</ExtraParams>
 
   <!-- GPU configuration -->
-  <Config Name="NVIDIA_VISIBLE_DEVICES" Target="NVIDIA_VISIBLE_DEVICES" Default="" Mode="" Description="GPU UUID or index. Leave empty for all GPUs, or set a specific UUID from nvidia-smi. Example: GPU-abc123-def456. Use nvidia-smi on the host to list available GPUs." Type="Variable" Display="always" Required="false" Mask="false">GPU-abc123-def456</Config>
+  <Config Name="NVIDIA_VISIBLE_DEVICES" Target="NVIDIA_VISIBLE_DEVICES" Default="" Mode="" Description="GPU UUID or index. Leave empty for all GPUs, or set a specific UUID from nvidia-smi. Example: GPU-abc123-def456. Use nvidia-smi on the host to list available GPUs." Type="Variable" Display="always" Required="false" Mask="false"></Config>
   <Config Name="NVIDIA_DRIVER_CAPABILITIES" Target="NVIDIA_DRIVER_CAPABILITIES" Default="compute,utility" Mode="" Description="NVIDIA driver capabilities required (default: compute,utility)" Type="Variable" Display="always" Required="false" Mask="false">compute,utility</Config>
   <Config Name="CUDA Device Index" Target="S2_CUDA_DEVICE" Default="0" Mode="" Description="CUDA device index inside the container (typically 0 when only one GPU is visible)" Type="Variable" Display="always" Required="false" Mask="false">0</Config>
 
   <!-- Network -->
   <Config Name="Internal Server Port" Target="S2_PORT" Default="3030" Mode="" Description="Port the s2.cpp HTTP server listens on inside the container. Same-network clients (e.g. Hermes Suite) reach this at http://s2cpp-backend:3030" Type="Variable" Display="always" Required="true" Mask="false">3030</Config>
-  <Config Name="Host Port (debug)" Target="HOST_PORT" Default="3031" Mode="tcp" Description="Host port mapped to container port 3030 for debugging. Port 3030 is already occupied on this server, so this template defaults to 3031. Do NOT use the container IP — reach the backend from the Wyoming container at http://s2cpp-backend:3030." Type="Port" Display="always" Required="false" Mask="false">3031</Config>
+  <Config Name="Host Port (debug)" Target="3030" Default="3031" Mode="tcp" Description="Host port mapped to container port 3030 for debugging. Port 3030 is already occupied on this server, so this template defaults to 3031. Do NOT use the container IP — reach the backend from the Wyoming container at http://s2cpp-backend:3030." Type="Port" Display="always" Required="false" Mask="false">3031</Config>
 
   <!-- Model and asset paths -->
   <Config Name="GGUF Model Directory" Target="/models" Default="/mnt/user/appdata/s2cpp/models" Mode="ro" Description="Host directory containing the GGUF model file and tokenizer.json. Mounted read-only. Expected layout: /models/s2-pro-q6_k.gguf and /models/tokenizer.json" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/s2cpp/models</Config>

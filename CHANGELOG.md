@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- Phase 5.5B: verified the smoke harness against a real external
+  `rodrigomatta/s2.cpp` backend at `s2cpp-backend:3030` without rebuilding the
+  image or modifying the Unraid container.
+- Added validated buffered raw-PCM acceptance for declared `pcm_s16le` /
+  `audio/L16` responses with non-empty audio, valid sample-rate/channel
+  metadata, no contradictory `Content-Type` vs `X-Audio-*` metadata, and
+  frame-aligned 16-bit PCM bytes; declared `audio/wav` responses still require
+  a valid RIFF/WAVE header.
+- Added buffered smoke-result fields for audio format, validity, PCM frame
+  alignment, sample rate, channels, audio duration, and validation error.
+- Tightened Phase 5.5B success criteria: buffered audio must be valid WAV or
+  valid declared PCM; streaming must have valid metadata, frame-aligned PCM,
+  and `verified_progressive` delivery.
+- Captured buffered response headers in `S2GenerateResult` so the harness can
+  validate real backend `X-Audio-*` metadata.
+- Added 8 mocked buffered-PCM compatibility tests (73 smoke-harness tests; 226
+  total tests pass).
+- Real backend verification command returned `phase_5_5b_status =
+  real_backend_verified` with no warnings; see
+  `docs/PHASE_5_5B_REAL_BACKEND_VERIFICATION.md`.
+
 - Phase 5.5A: implemented opt-in real-backend smoke-test harness.
 - Added ``app/smoke_harness.py`` with ``SmokeConfig``, ``BufferedMultipartResult``,
   ``StreamingMultipartResult``, ``LegacyJsonResult``, ``SmokeReport``, WAV header

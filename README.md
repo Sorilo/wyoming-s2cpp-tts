@@ -212,20 +212,31 @@ Without --run-real the script exits successfully with status=skipped.
 With --run-real but unreachable backend it reports status=unavailable
 (exit 0 unless --require-backend is also set).
 
-### Phase 5.5B: real backend verification (pending)
+### Phase 5.5B: real backend verification (complete)
 
-Phase 5.5B requires an already-running rodrigomatta/s2.cpp backend.
-When reached, the harness runs buffered multipart (WAV validation) and
-streaming multipart (PCM/header validation with progressive classification).
-Real s2.cpp compatibility is **not** claimed until this actually succeeds.
+Phase 5.5B was verified against an already-running real `rodrigomatta/s2.cpp`
+backend at `s2cpp-backend:3030`; see
+[`docs/PHASE_5_5B_REAL_BACKEND_VERIFICATION.md`](docs/PHASE_5_5B_REAL_BACKEND_VERIFICATION.md).
+The harness now accepts buffered output only when it is either:
+
+- declared `audio/wav` with a valid RIFF/WAVE header, or
+- declared `pcm_s16le`/`audio/L16` with valid, non-contradictory sample-rate
+  and channel metadata plus frame-aligned 16-bit PCM bytes.
+
+The observed real backend contract for the repository default request shape is
+raw `audio/L16; rate=44100; channels=1` with `X-Audio-Encoding=pcm_s16le`,
+`X-Audio-Channels=1`, and `X-Audio-Sample-Rate=44100`. Streaming verification
+requires valid PCM metadata, frame alignment, and `verified_progressive` delivery.
 
 ### Smoke harness tests
 
 
 
-65 focused mocked tests cover opt-in gates, WAV/PCM validation, progressive
-classification, header parsing, error categorisation, and the full orchestrator
-path. No real backend is contacted during the ordinary test suite.
+73 focused mocked smoke-harness tests cover opt-in gates, strict WAV validation,
+validated buffered PCM acceptance/rejection, streaming progressive/inconclusive
+classification, header parsing, error categorisation, structured output,
+timeout/error cleanup, and the full orchestrator path. No real backend is
+contacted during the ordinary test suite. Full suite: 226 tests pass.
 
 Limitations:
 

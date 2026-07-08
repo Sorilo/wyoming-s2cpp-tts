@@ -15,7 +15,7 @@ import json
 import uuid
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from app.config import Settings
@@ -236,6 +236,7 @@ class S2GenerateResult:
 
     audio: bytes
     content_type: str
+    response_headers: dict[str, str] = field(default_factory=dict)
 
 
 class S2StreamResult:
@@ -361,10 +362,15 @@ class S2Client:
                     "Content-Type",
                     "application/octet-stream",
                 )
+                response_headers = {k.lower(): v for k, v in response.headers.items()}
         except urllib.error.URLError as exc:
             raise S2ClientError(f"s2.cpp /generate failed: {exc}") from exc
 
-        return S2GenerateResult(audio=audio, content_type=content_type)
+        return S2GenerateResult(
+            audio=audio,
+            content_type=content_type,
+            response_headers=response_headers,
+        )
 
     def generate(self, request: S2GenerateRequest) -> S2GenerateResult:
         """POST JSON to ``/generate`` and return raw audio bytes.

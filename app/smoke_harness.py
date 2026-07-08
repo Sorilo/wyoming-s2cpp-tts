@@ -95,6 +95,13 @@ class BufferedMultipartResult:
     response_byte_count: int = 0
     audio_non_empty: bool = False
     wav_header_valid: bool | None = None  # None = not checked (no audio)
+    buffered_audio_format: str | None = None  # "wav" | "pcm_s16le"
+    buffered_audio_valid: bool = False
+    buffered_pcm_frame_aligned: bool | None = None
+    buffered_sample_rate: int | None = None
+    buffered_channels: int | None = None
+    buffered_duration_seconds: float | None = None
+    buffered_validation_error: str | None = None
     duration_ms: float = 0.0
     error_category: str | None = None
 
@@ -274,6 +281,10 @@ def _run_buffered_multipart(
         out_path = output_dir / "smoke_buffered_multipart.wav"
         out_path.write_bytes(audio)
 
+    validation = _buffered_audio_validation(
+        audio, result.content_type, result.response_headers
+    )
+
     return BufferedMultipartResult(
         status="success",
         endpoint=endpoint_url,
@@ -283,6 +294,7 @@ def _run_buffered_multipart(
         audio_non_empty=bool(audio),
         wav_header_valid=_validate_wav_header(audio) if audio else None,
         duration_ms=elapsed,
+        **validation,
     )
 
 
@@ -474,6 +486,117 @@ def _parse_audio_headers(
     return rate, channels, enc, missing
 
 
+def _parse_content_type(value: str) -> tuple[str, dict[str, str]]:
+    """Return lowercase media type and semicolon parameters."""
+    parts = [p.strip() for p in value.split(";") if p.strip()]
+    media_type = parts[0].lower() if parts else ""
+    params: dict[str, str] = {}
+    for part in parts[1:]:
+        if "=" not in part:
+            continue
+        key, val = part.split("=", 1)
+        params[key.strip().lower()] = val.strip().strip('"')
+    return media_type, params
+
+
+def _parse_positive_int(value: str | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _buffered_audio_validation(audio: bytes, content_type: str, headers: dict[str, str]) -> dict[str, Any]:
+    """Validate buffered audio as strict WAV or declared pcm_s16le."""
+    media_type, ct_params = _parse_content_type(content_type)
+    normalised_headers = {k.lower(): v for k, v in headers.items()}
+    x_rate = _parse_positive_int(normalised_headers.get("x-audio-sample-rate"))
+    x_channels = _parse_positive_int(normalised_headers.get("x-audio-channels"))
+    x_encoding = normalised_headers.get("x-audio-encoding")
+    ct_rate = _parse_positive_int(ct_params.get("rate"))
+    ct_channels = _parse_positive_int(ct_params.get("channels"))
+
+    result: dict[str, Any] = {
+        "buffered_audio_format": None,
+        "buffered_audio_valid": False,
+        "buffered_pcm_frame_aligned": None,
+        "buffered_sample_rate": None,
+        "buffered_channels": None,
+        "buffered_duration_seconds": None,
+        "buffered_validation_error": None,
+    }
+
+    if not audio:
+        result["buffered_validation_error"] = "buffered response was empty"
+        return result
+
+    if media_type in {"audio/wav", "audio/x-wav", "audio/wave"}:
+        result["buffered_audio_format"] = "wav"
+        wav_valid = _validate_wav_header(audio)
+        if not wav_valid:
+            result["buffered_validation_error"] = "buffered response has audio but no valid WAV header"
+            return result
+        params = _parse_wav_params(audio)
+        if params is None:
+            result["buffered_validation_error"] = "buffered WAV header could not be parsed"
+            return result
+        sample_rate = params["sample_rate"]
+        channels = params["channels"]
+        bits_per_sample = params["bits_per_sample"]
+        data_bytes = max(len(audio) - 44, 0)
+        frame_size = channels * max(bits_per_sample // 8, 1)
+        aligned = frame_size > 0 and data_bytes % frame_size == 0
+        result.update({
+            "buffered_audio_valid": aligned and sample_rate > 0 and channels > 0,
+            "buffered_pcm_frame_aligned": aligned,
+            "buffered_sample_rate": sample_rate,
+            "buffered_channels": channels,
+            "buffered_duration_seconds": data_bytes / frame_size / sample_rate
+            if aligned and sample_rate > 0 and frame_size > 0 else None,
+        })
+        if not result["buffered_audio_valid"]:
+            result["buffered_validation_error"] = "buffered WAV metadata is invalid"
+        return result
+
+    declares_pcm = media_type in {"audio/l16", "audio/pcm", "audio/x-pcm"} or x_encoding == "pcm_s16le"
+    if not declares_pcm:
+        result["buffered_validation_error"] = "unsupported buffered audio format"
+        return result
+
+    result["buffered_audio_format"] = "pcm_s16le"
+    if x_encoding is not None and x_encoding != "pcm_s16le":
+        result["buffered_validation_error"] = "unsupported buffered PCM encoding"
+        return result
+
+    if ct_rate is not None and x_rate is not None and ct_rate != x_rate:
+        result["buffered_validation_error"] = "conflicting buffered audio metadata"
+        return result
+    if ct_channels is not None and x_channels is not None and ct_channels != x_channels:
+        result["buffered_validation_error"] = "conflicting buffered audio metadata"
+        return result
+
+    sample_rate = x_rate or ct_rate
+    channels = x_channels or ct_channels
+    result["buffered_sample_rate"] = sample_rate
+    result["buffered_channels"] = channels
+    if sample_rate is None or channels is None:
+        result["buffered_validation_error"] = "missing buffered audio metadata"
+        return result
+
+    aligned = _validate_pcm_frame_alignment(len(audio), channels=channels, width=2)
+    result["buffered_pcm_frame_aligned"] = aligned
+    if not aligned:
+        result["buffered_validation_error"] = "buffered PCM is not frame-aligned"
+        return result
+
+    result["buffered_audio_valid"] = True
+    result["buffered_duration_seconds"] = len(audio) / (channels * 2) / sample_rate
+    return result
+
+
 def _classify_progressive(non_empty_reads: int, eof_reached: bool) -> str:
     """Classify whether streaming delivery was genuinely progressive."""
     if non_empty_reads == 0:
@@ -596,8 +719,14 @@ def run_smoke_harness(
         legacy = _run_legacy_json(client, request, endpoint_url)
 
     # --- Phase 5.5B determination -------------------------------------------
-    buffered_ok = buffered.status == "success" and buffered.wav_header_valid is True
-    streaming_ok = streaming.status == "success" and streaming.total_pcm_bytes > 0
+    buffered_ok = buffered.status == "success" and buffered.buffered_audio_valid is True
+    streaming_ok = (
+        streaming.status == "success"
+        and streaming.total_pcm_bytes > 0
+        and streaming.pcm_frame_aligned is True
+        and streaming.progressive_classification == "verified_progressive"
+        and not streaming.missing_audio_headers
+    )
 
     if buffered_ok and streaming_ok:
         phase_5_5b = "real_backend_verified"
@@ -605,8 +734,8 @@ def run_smoke_harness(
         phase_5_5b = "real_backend_failed"
 
     warnings: list[str] = []
-    if not buffered.wav_header_valid and buffered.audio_non_empty:
-        warnings.append("buffered response has audio but no valid WAV header")
+    if buffered.buffered_validation_error:
+        warnings.append(buffered.buffered_validation_error)
     if streaming.progressive_classification == "audio_received_but_progressiveness_inconclusive":
         warnings.append(
             "streaming returned audio but only one transport read — "
@@ -662,6 +791,12 @@ def format_summary(report: SmokeReport) -> str:
         lines.append(f"  Bytes:             {b.response_byte_count}")
         lines.append(f"  Audio non-empty:   {b.audio_non_empty}")
         lines.append(f"  WAV header valid:  {b.wav_header_valid}")
+        lines.append(f"  Audio format:      {b.buffered_audio_format}")
+        lines.append(f"  Audio valid:       {b.buffered_audio_valid}")
+        lines.append(f"  Sample rate:       {b.buffered_sample_rate}")
+        lines.append(f"  Channels:          {b.buffered_channels}")
+        lines.append(f"  PCM aligned:       {b.buffered_pcm_frame_aligned}")
+        lines.append(f"  Audio duration(s): {b.buffered_duration_seconds}")
         lines.append(f"  Duration (ms):     {b.duration_ms:.1f}")
         if b.error_category:
             lines.append(f"  Error:             {b.error_category}")

@@ -1,12 +1,12 @@
 # s2cpp Backend — Docker Image & Unraid Deployment
 
-Phase 5.5B0: minimal reproducible CUDA `rodrigomatta/s2.cpp` HTTP backend image for early testing.
+Phase 5.5B0: minimal reproducible CUDA `rodrigomatta/s2.cpp` HTTP backend image for early testing. Phase 5.5B real backend verification has since passed against the deployed `s2cpp-backend` container.
 
 ## What this is
 
 A standalone Docker image that builds and runs the `rodrigomatta/s2.cpp` inference engine with NVIDIA CUDA GPU acceleration. It exposes the `POST /generate` HTTP endpoint but does **not** include the Python Wyoming wrapper, GGUF models, tokenizer assets, reference audio, voices, secrets, or generated audio.
 
-This is an **early extraction** of backend-packaging work. It is **not** production-hardened and Phase 5.5B has **not yet been run**.
+This is an **early extraction** of backend-packaging work. It is **not** production-hardened, but Phase 5.5B real backend smoke verification has passed; see `../../docs/PHASE_5_5B_REAL_BACKEND_VERIFICATION.md`.
 
 ## Image details
 
@@ -162,11 +162,16 @@ Use an immutable SHA tag to pin to a specific build:
 
 ## What remains unverified
 
-- The image has **not been built and run on Unraid** yet.
-- Real CUDA GPU passthrough has not been tested.
-- Model loading, synthesis quality, VRAM usage, and realtime factor are unverified.
-- The HTTP `/generate` endpoint has not been tested with real audio output on this setup.
-- Phase 5.5B (real backend verification) has not yet been run.
+Phase 5.5B real backend smoke verification has passed on Unraid with CUDA using
+`ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b`, RTX 3080,
+`/models/s2-pro-q6_k.gguf`, and `/models/tokenizer.json`. The verified HTTP
+contract is documented in `../../docs/PHASE_5_5B_REAL_BACKEND_VERIFICATION.md`.
+
+Still unverified:
+
+- Home Assistant/Wyoming end-to-end playback.
+- Subjective synthesis quality, voice cloning quality, VRAM headroom, realtime
+  factor, cancellation, and barge-in behavior.
 
 ## Files in this phase
 
@@ -183,21 +188,21 @@ unraid/
   my-s2cpp-backend.xml       # Unraid Add Container template
 ```
 
-## Next steps: Phase 5.5B
+## Phase 5.5B verification
 
-After the image is built, pushed, and deployed on Unraid, run Phase 5.5B verification:
+Phase 5.5B has passed against the deployed `s2cpp-backend` container on the
+`sorilonet` Docker network. The exact command was:
 
+```bash
+.venv/bin/python scripts/smoke_s2cpp_generate.py \
+  --run-real \
+  --require-backend \
+  --endpoint s2cpp-backend:3030 \
+  --json
 ```
-/goal
-You are Hermes, acting as a senior CUDA Docker, Home Assistant, and Unraid integration engineer.
 
-Project: /workspace/wyoming-s2cpp-tts
-
-Goal: Run Phase 5.5B real backend verification.
-
-The s2cpp-backend container is deployed on Unraid as `s2cpp-backend`, listening internally on port 3030. The smoke harness is in app/smoke_harness.py. Run the real smoke tests against it.
-```
+Result: `phase_5_5b_status = real_backend_verified`, no warnings.
 
 ---
 
-*Phase 5.5B0 — backend image packaging only. Phase 5.5B real verification is pending.*
+*Phase 5.5B0 packaged the backend image; Phase 5.5B verified real backend HTTP compatibility.*

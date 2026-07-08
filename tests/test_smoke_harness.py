@@ -383,6 +383,70 @@ def _mock_s2client_with_results(buffered_audio, stream_chunks, stream_headers=No
     return MockClient
 
 
+def _mock_s2client_with_buffered_response(
+    *,
+    buffered_audio,
+    buffered_content_type,
+    buffered_headers=None,
+    stream_chunks=None,
+    stream_headers=None,
+):
+    """Build a mock S2Client with configurable buffered response metadata."""
+    from app.s2_client import S2GenerateResult
+
+    stream_chunks = [b"\x00\x01", b"\x02\x03"] if stream_chunks is None else stream_chunks
+    stream_headers = {
+        "x-audio-sample-rate": "44100",
+        "x-audio-channels": "1",
+        "x-audio-encoding": "pcm_s16le",
+    } if stream_headers is None else stream_headers
+
+    class MockStream:
+        def __init__(self):
+            self._chunks = list(stream_chunks)
+            self._idx = 0
+            self._closed = False
+            self.status_code = 200
+            self.content_type = "audio/L16; rate=44100; channels=1"
+            self.response_headers = stream_headers.copy()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self._closed = True
+            return False
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            if self._idx >= len(self._chunks):
+                raise StopIteration
+            chunk = self._chunks[self._idx]
+            self._idx += 1
+            return chunk
+
+    class MockClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def generate_multipart(self, request, files=None, boundary=None):
+            return S2GenerateResult(
+                audio=buffered_audio,
+                content_type=buffered_content_type,
+                response_headers=(buffered_headers or {}).copy(),
+            )
+
+        def generate_stream(self, request, files=None, boundary=None):
+            return MockStream()
+
+        def generate(self, request):
+            raise S2ClientError("HTTP Error 415: Unsupported Media Type")
+
+    return MockClient
+
+
 # ============================================================================
 # Real-backend simulation tests (Phase 5.5B-style but mocked)
 # ============================================================================
@@ -591,6 +655,156 @@ class TestRealBackendSimulation:
 
         report = self._harness_with_backend(wav, [])
 
+        assert report.phase_5_5b_status == "real_backend_failed"
+
+
+class TestBufferedPcmCompatibility:
+    """Buffered real-backend compatibility for declared raw PCM responses."""
+
+    def _harness_with_buffered_response(self, audio, content_type, headers=None, stream_chunks=None):
+        config = SmokeConfig(run_real=True, text="test")
+        settings = Settings()
+
+        def _probe_ok(_host, _port, timeout):
+            return True
+
+        MockClient = _mock_s2client_with_buffered_response(
+            buffered_audio=audio,
+            buffered_content_type=content_type,
+            buffered_headers=headers,
+            stream_chunks=stream_chunks,
+        )
+
+        with patch("app.smoke_harness.S2Client", MockClient):
+            return run_smoke_harness(
+                config, settings,
+                repo_root=Path.cwd(),
+                now_iso="2026-07-07T00:00:00Z",
+                _probe_fn=_probe_ok,
+            )
+
+    def test_valid_buffered_wav_records_audio_fields(self):
+        wav = _wav_header(sample_rate=44100, channels=1, data_size=4) + b"\x00\x00\x00\x00"
+
+        report = self._harness_with_buffered_response(wav, "audio/wav")
+
+        b = report.buffered_multipart
+        assert b.buffered_audio_format == "wav"
+        assert b.buffered_audio_valid is True
+        assert b.wav_header_valid is True
+        assert b.buffered_sample_rate == 44100
+        assert b.buffered_channels == 1
+        assert b.buffered_pcm_frame_aligned is True
+        assert b.buffered_duration_seconds == 4 / 2 / 44100
+        assert report.phase_5_5b_status == "real_backend_verified"
+
+    def test_malformed_declared_wav_is_rejected(self):
+        report = self._harness_with_buffered_response(b"not a wav", "audio/wav")
+
+        b = report.buffered_multipart
+        assert b.buffered_audio_format == "wav"
+        assert b.buffered_audio_valid is False
+        assert b.wav_header_valid is False
+        assert report.phase_5_5b_status == "real_backend_failed"
+        assert any("no valid WAV header" in w for w in report.warnings)
+
+    def test_valid_buffered_audio_l16_pcm_is_accepted(self):
+        pcm = b"\x00\x01\x02\x03\x04\x05\x06\x07"
+        headers = {
+            "x-audio-sample-rate": "44100",
+            "x-audio-channels": "1",
+            "x-audio-encoding": "pcm_s16le",
+        }
+
+        report = self._harness_with_buffered_response(
+            pcm, "audio/L16; rate=44100; channels=1", headers
+        )
+
+        b = report.buffered_multipart
+        assert b.buffered_audio_format == "pcm_s16le"
+        assert b.buffered_audio_valid is True
+        assert b.wav_header_valid is False
+        assert b.buffered_sample_rate == 44100
+        assert b.buffered_channels == 1
+        assert b.buffered_pcm_frame_aligned is True
+        assert b.buffered_duration_seconds == 8 / 2 / 44100
+        assert not any("no valid WAV header" in w for w in report.warnings)
+        assert report.phase_5_5b_status == "real_backend_verified"
+
+    def test_unaligned_buffered_pcm_is_rejected(self):
+        headers = {
+            "x-audio-sample-rate": "44100",
+            "x-audio-channels": "1",
+            "x-audio-encoding": "pcm_s16le",
+        }
+
+        report = self._harness_with_buffered_response(
+            b"\x00\x01\x02", "audio/L16; rate=44100; channels=1", headers
+        )
+
+        b = report.buffered_multipart
+        assert b.buffered_audio_format == "pcm_s16le"
+        assert b.buffered_pcm_frame_aligned is False
+        assert b.buffered_audio_valid is False
+        assert report.phase_5_5b_status == "real_backend_failed"
+
+    def test_missing_buffered_pcm_metadata_is_rejected(self):
+        report = self._harness_with_buffered_response(b"\x00\x01", "audio/L16")
+
+        b = report.buffered_multipart
+        assert b.buffered_audio_format == "pcm_s16le"
+        assert b.buffered_audio_valid is False
+        assert b.buffered_sample_rate is None
+        assert b.buffered_channels is None
+        assert report.phase_5_5b_status == "real_backend_failed"
+        assert any("missing buffered audio metadata" in w for w in report.warnings)
+
+    def test_conflicting_buffered_pcm_metadata_is_rejected(self):
+        headers = {
+            "x-audio-sample-rate": "48000",
+            "x-audio-channels": "2",
+            "x-audio-encoding": "pcm_s16le",
+        }
+
+        report = self._harness_with_buffered_response(
+            b"\x00\x01\x02\x03", "audio/L16; rate=44100; channels=1", headers
+        )
+
+        b = report.buffered_multipart
+        assert b.buffered_audio_valid is False
+        assert report.phase_5_5b_status == "real_backend_failed"
+        assert any("conflicting buffered audio metadata" in w for w in report.warnings)
+
+    def test_unknown_binary_buffered_response_is_rejected(self):
+        report = self._harness_with_buffered_response(
+            b"\x00\x01\x02\x03", "application/octet-stream"
+        )
+
+        b = report.buffered_multipart
+        assert b.buffered_audio_format is None
+        assert b.buffered_audio_valid is False
+        assert report.phase_5_5b_status == "real_backend_failed"
+        assert any("unsupported buffered audio format" in w for w in report.warnings)
+
+    def test_phase_5_5b_requires_verified_progressive_streaming(self):
+        pcm = b"\x00\x01\x02\x03"
+        headers = {
+            "x-audio-sample-rate": "44100",
+            "x-audio-channels": "1",
+            "x-audio-encoding": "pcm_s16le",
+        }
+
+        report = self._harness_with_buffered_response(
+            pcm,
+            "audio/L16; rate=44100; channels=1",
+            headers,
+            stream_chunks=[b"\x00\x01\x02\x03"],
+        )
+
+        assert report.buffered_multipart.buffered_audio_valid is True
+        assert report.streaming_multipart.progressive_classification == (
+            "audio_received_but_progressiveness_inconclusive"
+        )
         assert report.phase_5_5b_status == "real_backend_failed"
 
 

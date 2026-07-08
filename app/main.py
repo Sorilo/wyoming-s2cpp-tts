@@ -8,11 +8,13 @@ Later phases will supervise s2.cpp and add real streaming/cancellation behavior.
 from __future__ import annotations
 
 from app.config import Settings
+from app.observability import setup_logging
 from app.wyoming_server import run_server
 
 
 def main() -> int:
     """Run the configured Wyoming TTS server."""
+    setup_logging()
     run_server(Settings.from_env())
     return 0
 

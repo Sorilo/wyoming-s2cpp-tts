@@ -13,12 +13,56 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import secrets
+import sys
 import time
 from dataclasses import dataclass, field
 from typing import Any
 
 logger = logging.getLogger("wyoming-s2cpp-tts.obs")
+
+# ── Logging setup ──────────────────────────────────────────────────────
+
+def setup_logging(level: str | None = None,
+                   stream: "typing.Any" = None) -> None:
+    """Configure the observability logger to write JSON to stderr.
+
+    Must be called once at startup before any synthesis paths run.
+    Idempotent — subsequent calls are harmless.
+
+    When *level* is ``None`` the ``LOG_LEVEL`` environment variable is
+    consulted (default ``"info"``).
+
+    When *stream* is ``None`` (the default) output goes to ``sys.stderr``.
+    Pass an explicit ``io.StringIO`` for test capture.
+    """
+    if level is None:
+        level = os.getenv("LOG_LEVEL", "info")
+    effective = _level_name_to_int(level)
+
+    # Avoid duplicate handlers when called more than once.
+    if logger.handlers:
+        return
+
+    logger.setLevel(effective)
+    logger.propagate = False
+
+    target = stream if stream is not None else sys.stderr
+    handler = logging.StreamHandler(target)
+    handler.setLevel(effective)
+    # Raw JSON message — obs_log already formats the payload.
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    logger.addHandler(handler)
+
+
+def _level_name_to_int(name: str) -> int:
+    """Convert a level name string to an int, defaulting to INFO."""
+    try:
+        return getattr(logging, name.upper())
+    except AttributeError:
+        return logging.INFO
+
 
 # ── ID generators ──────────────────────────────────────────────────────
 

@@ -198,6 +198,19 @@ def test_builder_collects_non_system_ggml_runtime_libraries() -> None:
     )
 
 
+def test_runtime_installs_openmp_runtime_package() -> None:
+    """Runtime stage installs libgomp1, which provides libgomp.so.1."""
+    content = _read(DOCKERFILE)
+    runtime_section = content.split("# -- runtime stage")[1] if "# -- runtime stage" in content else ""
+    runtime_apt = runtime_section.split("# Copy only the required runtime artifacts.")[0]
+
+    assert "apt-get install -y --no-install-recommends" in runtime_apt
+    assert "libgomp1" in runtime_apt, (
+        "Runtime image should install libgomp1 for libgomp.so.1"
+    )
+    assert "rm -rf /var/lib/apt/lists/*" in runtime_apt
+
+
 def test_runtime_copies_ggml_libs_and_runs_ldconfig() -> None:
     """Runtime stage installs collected GGML libraries into the linker cache."""
     content = _read(DOCKERFILE)

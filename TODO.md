@@ -114,7 +114,7 @@
 - Context validation: only 4, 64, 160 accepted; others rejected with clear error.
 - 23 new tests. Full suite: 397/397 passing.
 - No backend image change required.
-- Wrapper image to be published.
+- Wrapper image: ghcr.io/sorilo/wyoming-s2cpp-tts:sha-4c23aa8
 
 ## Approved remaining v0.1 phases
 

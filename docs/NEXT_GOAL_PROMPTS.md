@@ -3,7 +3,65 @@
 Run phases one at a time. This file is regenerated from the actual repository
 state after every `/goal` run. Do not copy stale assumptions forward.
 
-## Current state after Phase 7.5B
+## Current state after Phase 7.5C
+
+- Repository branch: `main`.
+- Backend image: `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b`
+- s2.cpp revision: `rodrigomatta/s2.cpp` @ `2c33261938da1a41d713768b1b391b4d368d7d2c`
+- Wrapper image: `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-974e220`
+- Test baseline: 374/374 passing.
+- **Root cause confirmed**: cpp-httplib's `DataSink.write()` buffers all
+  intermediate writes. Transfer-Encoding: chunked headers arrive at 0-1ms,
+  but zero audio data reaches the client until `sink.done()` is called at
+  synthesis completion. All 7 tested configurations (stride=1 through 16,
+  low_latency on/off, start_buffer 0/3000ms) produce identical non-progressive
+  behavior.
+- Architecture: Type E — transport-chunked but NOT inference-progressive.
+- The pipeline codec already decodes incrementally during generation. The
+  bottleneck is purely in the HTTP framework's output buffering.
+
+## Next phase: Phase 7.5D — Backend httplib Flush Implementation
+
+Goal: Modify the s2.cpp backend's chunked content provider to flush HTTP
+writes progressively, so audio data reaches the client during generation
+rather than only at completion.
+
+### Required work
+
+1. Inspect the bundled `third_party/httplib.h` at the pinned revision
+   (`2c33261938da1a41d713768b1b391b4d368d7d2c`) for `DataSink` flush support:
+   - Check for `DataSink::flush()`, `DataSink::write_and_flush()`, or socket
+     access methods
+   - Check for write-buffer-size configuration on `httplib::Server` or
+     `httplib::Response`
+
+2. If flush support exists:
+   - Add a `sink.flush()` call (or equivalent) after every `sink.write()` in
+     the chunked content provider lambda at `src/s2_server.cpp:840-847`
+   - Or add flush after a byte threshold (e.g., every 4096 bytes accumulated)
+
+3. If no flush support exists:
+   - Implement Option C: call `sink.done()` periodically to force chunk
+     finalization, then re-initialize chunked streaming
+   - Or implement Option D: bypass the chunked content provider and write
+     chunked-framed data directly to the socket with `fflush()`
+
+4. Rebuild the backend Docker image with the modified source.
+
+5. Benchmark the rebuilt image against the live backend:
+   - Verify progressive transport reads arrive within 500ms of generation start
+   - Measure time-to-first-audio for short/medium/long text
+   - Compare against Phase 7.5C baseline
+
+6. Publish the rebuilt backend image as
+   `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-<new-commit>`.
+
+7. Update documentation: CHANGELOG, TODO, ROADMAP, NEXT_GOAL_PROMPTS.
+
+Target: first audio within 500ms for medium text (currently 6500ms).
+
+Do not modify wrapper code, voice profiles, or Home Assistant during this phase.
+
 
 - Repository branch: `main`.
 - Wrapper image: to be published by CI workflow.

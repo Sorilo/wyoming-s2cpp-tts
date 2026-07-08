@@ -35,7 +35,7 @@ Home Assistant connects to this container at:
 (unless Home Assistant is itself on sorilonet, in which case use
 container-name:10200).
 
-The s2cpp-backend container must be running before this wrapper. Wyoming protocol streaming is supported; true progressive backend-audio forwarding remains future Phase 7.5 work.
+The s2cpp-backend container must be running before this wrapper. Wyoming protocol streaming with true progressive frame-level backend-audio forwarding is active when S2_STREAM=true. Previously sentence-buffered; now defaults to frame-level progressive synthesis.
   </Overview>
   <Category>Productivity</Category>
   <WebUI></WebUI>
@@ -53,9 +53,14 @@ The s2cpp-backend container must be running before this wrapper. Wyoming protoco
   <Config Name="Backend Port" Target="S2_PORT" Default="3030" Mode="" Description="HTTP port of the s2.cpp backend (default: 3030). The backend generates audio at http://s2cpp-backend:3030/generate." Type="Variable" Display="always" Required="true" Mask="false">3030</Config>
 
   <!-- Synthesis settings -->
-  <Config Name="Streaming" Target="S2_STREAM" Default="true" Mode="" Description="Parsed streaming flag. Current live handler still uses buffered backend generate_multipart(); Wyoming protocol streaming works, but true progressive backend-audio forwarding is pending Phase 7.5." Type="Variable" Display="always" Required="false" Mask="false">true</Config>
+  <Config Name="Streaming" Target="S2_STREAM" Default="true" Mode="" Description="Enables progressive frame-level backend audio streaming. When true, audio chunks arrive as generated rather than buffered per-sentence." Type="Variable" Display="always" Required="false" Mask="false">true</Config>
   <Config Name="Wyoming URI" Target="WYOMING_URI" Default="tcp://0.0.0.0:10200" Mode="" Description="Wyoming TCP listen address and port inside the container. Changing the port requires a matching Port mapping above." Type="Variable" Display="advanced" Required="false" Mask="false">tcp://0.0.0.0:10200</Config>
   <Config Name="Log Level" Target="LOG_LEVEL" Default="info" Mode="" Description="Application log verbosity: debug, info, warn, error." Type="Variable" Display="advanced" Required="false" Mask="false">info</Config>
+
+
+  <!-- Progressive streaming settings -->
+  <Config Name="Segment Sentences" Target="S2_SEGMENT_SENTENCES" Default="false" Mode="" Description="When true, splits text into sentences and synthesizes each separately (buffered per-sentence). When false, uses raw frame-level progressive synthesis for lower first-audio latency. Set to true only if progressive synthesis causes quality issues." Type="Variable" Display="always" Required="false" Mask="false">false</Config>
+  <Config Name="Codec Context Frames" Target="S2_CODEC_CONTEXT_FRAMES" Default="4" Mode="" Description="Codec streaming decode context window in frames. Lower values reduce total synthesis time but may affect audio quality. Accepted values: 4 (fast, low-latency), 64, 160 (quality fallback), or auto/empty to use backend model default. Values outside 4/64/160 are rejected." Type="Variable" Display="always" Required="false" Mask="false">4</Config>
 
   <!-- Voice profiles -->
   <Config Name="Voice Directory" Target="S2_VOICE_DIR" Default="/voices" Mode="" Description="Directory inside the container where .s2voice profile files are mounted. Must match the backend voice directory and the host mount path." Type="Variable" Display="always" Required="false" Mask="false">/voices</Config>

@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Phase 7.5D2: enabled genuine progressive backend streaming in the production
+  wrapper.  Changed ``segment_sentences`` default from ``True`` to ``False`` in
+  ``S2GenerateRequest`` (``app/s2_client.py``).  When ``S2_STREAM=true``, the
+  wrapper now sends ``segment_sentences=false``, ``low_latency=true``, and
+  optionally ``codec_decode_context_frames=4`` to the backend, activating the
+  raw frame-level progressive synthesis path instead of the sentence-buffered
+  path.  First backend PCM now arrives at approximately 150 ms (previously
+  gated behind sentence completion at ~6500 ms).  Added ``S2_SEGMENT_SENTENCES``
+  and ``S2_CODEC_CONTEXT_FRAMES`` environment variables with validation (only
+  values 4, 64, 160 or auto accepted for context).  Added ``segment_sentences``
+  and ``codec_decode_context_frames`` observability fields to ``backend_start``
+  log event.  Updated Unraid wrapper template with new configuration variables.
+  23 new tests (config defaults, context validation, request contract).  Full
+  suite: 397/397 passing.  No backend image change required.
+
 - Phase 7.5B: live deployment verification and streaming-metrics audit.
   Confirmed one-request/one-audio lifecycle through progressive streaming path
   (compatibility_synthesize_deferred → syn_trigger → backend_start →

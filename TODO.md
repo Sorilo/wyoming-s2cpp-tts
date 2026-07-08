@@ -105,6 +105,17 @@
 - Backend image, voices, live containers, and Home Assistant untouched.
 - Wrapper image to be published with corrected observability.
 
+
+## Phase 7.5D2 results
+
+- Wrapper now sends ``segment_sentences=false`` + ``low_latency=true`` + optionally ``codec_decode_context_frames=4``.
+- First backend PCM arrives at approximately 150 ms (was gated behind sentence completion).
+- Added ``S2_SEGMENT_SENTENCES`` and ``S2_CODEC_CONTEXT_FRAMES`` env vars.
+- Context validation: only 4, 64, 160 accepted; others rejected with clear error.
+- 23 new tests. Full suite: 397/397 passing.
+- No backend image change required.
+- Wrapper image to be published.
+
 ## Approved remaining v0.1 phases
 
 21. ~~Phase 7.5: wire true progressive backend HTTP audio streaming into the production Wyoming event handler when `S2_STREAM=true`~~ ✅ Phase 7.5A complete

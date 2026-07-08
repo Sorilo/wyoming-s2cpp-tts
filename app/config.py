@@ -11,6 +11,17 @@ from dataclasses import dataclass
 import os
 
 
+def _parse_optional_int(raw: str) -> int | None:
+    """Parse an optional integer, returning None for empty/auto sentinel values."""
+    stripped = raw.strip().strip('"').strip("'")
+    if stripped == "" or stripped.lower() in ("auto", "none", "null", "-1"):
+        return None
+    try:
+        return int(stripped)
+    except (TypeError, ValueError):
+        return None
+
+
 WYOMING_URI = "tcp://0.0.0.0:10200"
 TTS_BACKEND = "fake"
 S2_HOST = "127.0.0.1"
@@ -24,7 +35,8 @@ S2_CODEC_CPU = False
 S2_STREAM = True
 S2_CHUNKED = True
 S2_OUTPUT_FORMAT = "pcm_s16le"
-S2_SEGMENT_SENTENCES = True
+S2_SEGMENT_SENTENCES = False
+S2_CODEC_CONTEXT_FRAMES = 4
 S2_STREAM_START_BUFFER_MS = 1000
 S2_STREAM_START_BUFFER_MS_STABLE = 4000
 S2_MAX_NEW_TOKENS = 512
@@ -44,10 +56,7 @@ LOG_LEVEL = "info"
 
 @dataclass(frozen=True)
 class Settings:
-    """Planned runtime settings for the service.
-
-    TODO: Load these from environment variables in Phase 1 or Phase 2.
-    """
+    """Planned runtime settings for the service."""
 
     wyoming_uri: str = WYOMING_URI
     tts_backend: str = TTS_BACKEND
@@ -63,6 +72,7 @@ class Settings:
     s2_chunked: bool = S2_CHUNKED
     s2_output_format: str = S2_OUTPUT_FORMAT
     s2_segment_sentences: bool = S2_SEGMENT_SENTENCES
+    s2_codec_decode_context_frames: int | None = S2_CODEC_CONTEXT_FRAMES
     s2_stream_start_buffer_ms: int = S2_STREAM_START_BUFFER_MS
     s2_stream_start_buffer_ms_stable: int = S2_STREAM_START_BUFFER_MS_STABLE
     s2_max_new_tokens: int = S2_MAX_NEW_TOKENS
@@ -81,16 +91,7 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
-        """Load environment overrides for production and development.
-
-        ``TTS_BACKEND``, ``S2_HOST``, and ``S2_PORT`` select the backend.
-        ``WYOMING_URI`` sets the Wyoming TCP listen address/port.
-        ``S2_STREAM`` controls streaming vs buffered synthesis.
-        ``S2_VOICE_DIR`` sets the directory for saved ``.s2voice`` profiles.
-        ``S2_DEFAULT_VOICE`` sets the default voice profile ID.
-        ``LOG_LEVEL`` controls application log verbosity.
-        Broader environment/profile loading belongs in a later hardening phase.
-        """
+        """Load environment overrides for production and development."""
         return cls(
             wyoming_uri=os.getenv("WYOMING_URI", WYOMING_URI),
             tts_backend=os.getenv("TTS_BACKEND", TTS_BACKEND),
@@ -100,5 +101,10 @@ class Settings:
             not in ("false", "0", "no", "off"),
             s2_voice_dir=os.getenv("S2_VOICE_DIR", S2_VOICE_DIR),
             s2_default_voice=os.getenv("S2_DEFAULT_VOICE", S2_DEFAULT_VOICE),
+            s2_segment_sentences=os.getenv("S2_SEGMENT_SENTENCES", str(S2_SEGMENT_SENTENCES)).lower()
+            not in ("false", "0", "no", "off"),
+            s2_codec_decode_context_frames=_parse_optional_int(
+                os.getenv("S2_CODEC_CONTEXT_FRAMES", str(S2_CODEC_CONTEXT_FRAMES))
+            ),
             log_level=os.getenv("LOG_LEVEL", LOG_LEVEL),
         )

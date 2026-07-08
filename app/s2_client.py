@@ -133,13 +133,14 @@ class S2GenerateRequest:
     stream: bool = True
     chunked: bool = True
     output_format: str = "pcm_s16le"
-    segment_sentences: bool = True
+    segment_sentences: bool = False
     max_new_tokens: int = 512
     temperature: float = 0.58
     top_p: float = 0.88
     top_k: int = 40
     prompt_text: str = ""
     voice_dir: str = ""
+    codec_decode_context_frames: int | None = None
 
     @classmethod
     def from_settings(
@@ -164,6 +165,7 @@ class S2GenerateRequest:
             top_k=settings.s2_top_k,
             prompt_text=prompt_text,
             voice_dir=settings.s2_voice_dir,
+            codec_decode_context_frames=settings.s2_codec_decode_context_frames,
         )
 
     def to_payload(self) -> dict[str, Any]:
@@ -217,6 +219,17 @@ class S2GenerateRequest:
             params["chunked"] = True
             params["output_format"] = "pcm_s16le"
             params["low_latency"] = True
+            params["segment_sentences"] = False
+
+        _VALID_CONTEXTS = frozenset({4, 64, 160})
+        if self.codec_decode_context_frames is not None:
+            if self.codec_decode_context_frames not in _VALID_CONTEXTS:
+                raise ValueError(
+                    f"codec_decode_context_frames must be one of "
+                    f"{sorted(_VALID_CONTEXTS)} or None, got "
+                    f"{self.codec_decode_context_frames}"
+                )
+            params["codec_decode_context_frames"] = self.codec_decode_context_frames
         fields: dict[str, Any] = {
             "text": self.text,
             "params": json.dumps(params),

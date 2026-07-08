@@ -750,3 +750,164 @@ def test_stream_multiple_iterations_are_idempotent():
 
     assert first_pass == [b"only-once"]
     assert second_pass == []
+
+
+# ---------------------------------------------------------------------------
+# Phase 7.5D2: progressive streaming contract and context validation
+# ---------------------------------------------------------------------------
+
+class TestProgressiveStreamingContract:
+    """segment_sentences=False and codec context validation for S2_STREAM=true."""
+
+    def test_streaming_defaults_segment_sentences_to_false(self):
+        """When S2_STREAM=true, the streaming params include segment_sentences=false."""
+        req = S2GenerateRequest(text="hello", stream=True)
+        fields = req.to_multipart_fields(streaming=True)
+        params = json.loads(fields["params"])
+        assert params.get("segment_sentences") is False
+
+    def test_streaming_includes_low_latency(self):
+        """Streaming params must include low_latency=true."""
+        req = S2GenerateRequest(text="hello")
+        fields = req.to_multipart_fields(streaming=True)
+        params = json.loads(fields["params"])
+        assert params["low_latency"] is True
+
+    def test_context_4_accepted(self):
+        """codec_decode_context_frames=4 is a verified working value."""
+        req = S2GenerateRequest(text="hello", codec_decode_context_frames=4)
+        fields = req.to_multipart_fields(streaming=True)
+        params = json.loads(fields["params"])
+        assert params["codec_decode_context_frames"] == 4
+
+    def test_context_64_accepted(self):
+        """codec_decode_context_frames=64 is a verified working value."""
+        req = S2GenerateRequest(text="hello", codec_decode_context_frames=64)
+        fields = req.to_multipart_fields(streaming=True)
+        params = json.loads(fields["params"])
+        assert params["codec_decode_context_frames"] == 64
+
+    def test_context_160_accepted(self):
+        """codec_decode_context_frames=160 is a verified working value."""
+        req = S2GenerateRequest(text="hello", codec_decode_context_frames=160)
+        fields = req.to_multipart_fields(streaming=True)
+        params = json.loads(fields["params"])
+        assert params["codec_decode_context_frames"] == 160
+
+    def test_context_none_omits_field(self):
+        """When codec_decode_context_frames is None, the field is omitted from params."""
+        req = S2GenerateRequest(text="hello", codec_decode_context_frames=None)
+        fields = req.to_multipart_fields(streaming=True)
+        params = json.loads(fields["params"])
+        assert "codec_decode_context_frames" not in params
+
+    def test_context_1_rejected(self):
+        """Unverified context value 1 must be rejected."""
+        req = S2GenerateRequest(text="hello", codec_decode_context_frames=1)
+        with pytest.raises(ValueError, match="codec_decode_context_frames"):
+            req.to_multipart_fields(streaming=True)
+
+    def test_context_8_rejected(self):
+        """Unverified context value 8 must be rejected."""
+        req = S2GenerateRequest(text="hello", codec_decode_context_frames=8)
+        with pytest.raises(ValueError, match="codec_decode_context_frames"):
+            req.to_multipart_fields(streaming=True)
+
+    def test_context_32_rejected(self):
+        """Unverified context value 32 must be rejected."""
+        req = S2GenerateRequest(text="hello", codec_decode_context_frames=32)
+        with pytest.raises(ValueError, match="codec_decode_context_frames"):
+            req.to_multipart_fields(streaming=True)
+
+    def test_context_negative_rejected(self):
+        """Negative context values must be rejected."""
+        req = S2GenerateRequest(text="hello", codec_decode_context_frames=-1)
+        with pytest.raises(ValueError, match="codec_decode_context_frames"):
+            req.to_multipart_fields(streaming=True)
+
+    def test_context_0_rejected(self):
+        """Zero context must be rejected."""
+        req = S2GenerateRequest(text="hello", codec_decode_context_frames=0)
+        with pytest.raises(ValueError, match="codec_decode_context_frames"):
+            req.to_multipart_fields(streaming=True)
+
+    def test_buffered_segment_sentences_preserved(self):
+        """Non-streaming requests preserve the explicit segment_sentences default."""
+        req = S2GenerateRequest(text="hello", segment_sentences=True)
+        fields = req.to_multipart_fields(streaming=False)
+        params = json.loads(fields["params"])
+        # In non-streaming mode, segment_sentences comes from the request default
+        assert params.get("segment_sentences") is True
+
+    def test_streaming_overrides_segment_sentences(self):
+        """Even if segment_sentences=True in request, streaming mode overrides to False."""
+        req = S2GenerateRequest(text="hello", segment_sentences=True)
+        fields = req.to_multipart_fields(streaming=True)
+        params = json.loads(fields["params"])
+        assert params["segment_sentences"] is False
+
+    def test_voice_and_dir_preserved(self):
+        """Voice and voice_dir are still forwarded in streaming requests."""
+        req = S2GenerateRequest(text="hello", voice="test_voice", voice_dir="/test")
+        fields = req.to_multipart_fields(streaming=True)
+        assert fields["voice"] == "test_voice"
+        assert fields["voice_dir"] == "/test"
+
+    def test_generic_fallback_omits_voice(self):
+        """When voice is empty and voice_dir is empty, they are omitted from fields."""
+        req = S2GenerateRequest(text="hello", voice="", voice_dir="")
+        fields = req.to_multipart_fields(streaming=True)
+        assert "voice" not in fields or not fields.get("voice")
+        assert "voice_dir" not in fields or not fields.get("voice_dir")
+
+
+class TestConfigProgressiveDefaults:
+    """Configuration defaults for progressive streaming."""
+
+    def test_segment_sentences_env_default_false(self):
+        """S2_SEGMENT_SENTENCES defaults to False."""
+        settings = Settings()
+        assert settings.s2_segment_sentences is False
+
+    def test_codec_context_env_default(self):
+        """S2_CODEC_CONTEXT_FRAMES defaults to 4."""
+        settings = Settings()
+        assert settings.s2_codec_decode_context_frames == 4
+
+    def test_segment_sentences_from_env_true(self, monkeypatch):
+        """S2_SEGMENT_SENTENCES=true is parsed correctly."""
+        monkeypatch.setenv("S2_SEGMENT_SENTENCES", "true")
+        settings = Settings.from_env()
+        assert settings.s2_segment_sentences is True
+
+    def test_codec_context_from_env(self, monkeypatch):
+        """S2_CODEC_CONTEXT_FRAMES=64 is parsed correctly."""
+        monkeypatch.setenv("S2_CODEC_CONTEXT_FRAMES", "64")
+        settings = Settings.from_env()
+        assert settings.s2_codec_decode_context_frames == 64
+
+    def test_codec_context_auto_returns_none(self, monkeypatch):
+        """S2_CODEC_CONTEXT_FRAMES=auto returns None (omit field)."""
+        monkeypatch.setenv("S2_CODEC_CONTEXT_FRAMES", "auto")
+        settings = Settings.from_env()
+        assert settings.s2_codec_decode_context_frames is None
+
+    def test_codec_context_empty_returns_none(self, monkeypatch):
+        """Empty S2_CODEC_CONTEXT_FRAMES returns None."""
+        monkeypatch.setenv("S2_CODEC_CONTEXT_FRAMES", "")
+        settings = Settings.from_env()
+        assert settings.s2_codec_decode_context_frames is None
+
+    def test_request_from_settings_propagates_context(self):
+        """S2GenerateRequest.from_settings propagates codec context."""
+        settings = Settings(s2_codec_decode_context_frames=4)
+        req = S2GenerateRequest.from_settings("hello", settings)
+        assert req.codec_decode_context_frames == 4
+
+    def test_request_from_settings_propagates_segment_sentences(self):
+        """S2GenerateRequest.from_settings propagates segment_sentences."""
+        settings = Settings(s2_segment_sentences=True)
+        req = S2GenerateRequest.from_settings("hello", settings)
+        assert req.segment_sentences is True
+
+

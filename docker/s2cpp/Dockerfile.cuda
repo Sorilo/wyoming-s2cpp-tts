@@ -94,6 +94,53 @@ RUN echo "=== build verification ===" \
     && (grep -c '\-march=native' build/compile_commands.json 2>/dev/null || echo "  0") \
     && echo "CUDA architectures selected: ${CUDA_ARCHITECTURES}"
 
+# Inspect and collect the dynamically linked s2.cpp/GGML shared libraries.
+# The runtime image must package every non-system library produced by this
+# build that /src/build/s2 needs, while still excluding CUDA driver stubs.
+RUN echo "=== s2 dynamic dependency inspection: ldd /src/build/s2 ===" \
+    && ldd /src/build/s2 \
+    && echo "=== s2 dynamic dependency inspection: readelf -d /src/build/s2 ===" \
+    && readelf -d /src/build/s2 \
+    && echo "=== produced libggml*.so* files under /src/build ===" \
+    && find /src/build -name 'libggml*.so*' -exec ls -l {} + | sort \
+    && echo "=== produced libggml*.so* SONAMEs ===" \
+    && while IFS= read -r lib; do \
+        echo "--- ${lib}"; \
+        readelf -d "${lib}" 2>/dev/null | grep -E 'SONAME|NEEDED' || true; \
+      done < <(find /src/build -type f -name 'libggml*.so*' | sort) \
+    && echo "=== produced libggml*.so* symlink chains ===" \
+    && find /src/build -name 'libggml*.so*' -printf '%p -> %l\n' | sort \
+    && mkdir -p /src/runtime-libs \
+    && mapfile -t runtime_deps < <( \
+        ldd /src/build/s2 \
+          | awk '/=> \/src\/build\// { print $3 } /^\/src\/build\// { print $1 }' \
+          | sort -u \
+      ) \
+    && if [ "${#runtime_deps[@]}" -eq 0 ]; then \
+        echo "ERROR: no /src/build runtime dependencies were found for /src/build/s2"; \
+        exit 1; \
+      fi \
+    && echo "=== non-system build dependencies selected for runtime packaging ===" \
+    && printf '  %s\n' "${runtime_deps[@]}" \
+    && for dep in "${runtime_deps[@]}"; do \
+        dep_base="$(basename "${dep}")"; \
+        if [[ "${dep_base}" == libcuda.so* ]]; then \
+          echo "ERROR: refusing to package CUDA driver stub dependency: ${dep}"; \
+          exit 1; \
+        fi; \
+        if [[ "${dep_base}" != libggml*.so* ]]; then \
+          echo "ERROR: unexpected non-GGML /src/build dependency: ${dep}"; \
+          exit 1; \
+        fi; \
+        dep_real="$(readlink -f "${dep}")"; \
+        cp -av "${dep_real}" /src/runtime-libs/; \
+        while IFS= read -r chain_entry; do \
+          cp -av -P "${chain_entry}" /src/runtime-libs/; \
+        done < <(find "$(dirname "${dep}")" -maxdepth 1 -name "${dep_base%%.so*}.so*" -exec sh -c 'for p do [ "$(readlink -f "$p")" = "$1" ] && printf "%s\n" "$p"; done' sh "${dep_real}" {} +); \
+      done \
+    && echo "=== packaged runtime shared libraries ===" \
+    && find /src/runtime-libs -maxdepth 1 -name '*.so*' -exec ls -l {} + | sort
+
 # Record build provenance.
 RUN echo "s2.cpp revision: ${S2CPP_REVISION}" > /src/build/BUILD_INFO \
     && echo "build date: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /src/build/BUILD_INFO \
@@ -119,9 +166,11 @@ RUN apt-get update \
 # provided at runtime by the host NVIDIA driver via the container runtime.
 COPY --from=builder --chown=s2cpp:s2cpp /src/build/s2            /usr/local/bin/s2
 COPY --from=builder --chown=s2cpp:s2cpp /src/build/BUILD_INFO     /usr/local/share/s2cpp/BUILD_INFO
+COPY --from=builder --chown=root:root     /src/runtime-libs/       /usr/local/lib/
 COPY --chown=s2cpp:s2cpp docker/s2cpp/entrypoint.sh               /entrypoint.sh
 
 RUN chmod +x /entrypoint.sh \
+    && ldconfig \
     && mkdir -p /models /voices /config \
     && chown s2cpp:s2cpp /models /voices /config
 
@@ -129,12 +178,58 @@ RUN chmod +x /entrypoint.sh \
 # Runtime verification: prove the stub was NOT copied.
 # ------------------------------------------------------------------
 RUN echo "=== runtime verification ===" \
-    && echo "Checking: no CUDA stub in runtime image:" \
-    && (find / -name 'libcuda.so*' 2>/dev/null | grep -v '/proc/' || echo "  OK: no libcuda.so* found") \
+    && echo "Checking packaged GGML libraries:" \
+    && find /usr/local/lib -maxdepth 1 -name 'libggml*.so*' -exec ls -l {} + | sort \
+    && echo "Checking: no CUDA driver stub in runtime image:" \
+    && test ! -e /usr/local/cuda/lib64/stubs/libcuda.so \
+    && test ! -e /usr/local/cuda/lib64/stubs/libcuda.so.1 \
+    && echo "  OK: no /usr/local/cuda/lib64/stubs/libcuda.so*" \
     && echo "s2 binary present:" \
     && test -x /usr/local/bin/s2 && echo "  OK: /usr/local/bin/s2" \
     && echo "BUILD_INFO present:" \
-    && test -f /usr/local/share/s2cpp/BUILD_INFO && echo "  OK: BUILD_INFO"
+    && test -f /usr/local/share/s2cpp/BUILD_INFO && echo "  OK: BUILD_INFO" \
+    && echo "=== runtime dependency verification: ldd /usr/local/bin/s2 ===" \
+    && { \
+        set +e; \
+        ldd /usr/local/bin/s2 | tee /tmp/s2-runtime-ldd.txt; \
+        ldd_status="${PIPESTATUS[0]}"; \
+        set -e; \
+        echo "ldd exit status: ${ldd_status}"; \
+      } \
+    && unresolved="$(awk '/not found/ && $1 != "libcuda.so.1" { print }' /tmp/s2-runtime-ldd.txt)" \
+    && if [ -n "${unresolved}" ]; then \
+        echo "ERROR: unresolved runtime dependencies other than host-injected libcuda.so.1:"; \
+        echo "${unresolved}"; \
+        exit 1; \
+      fi \
+    && if awk '/libcuda.so.1 => .*stubs/ { found=1 } END { exit found ? 0 : 1 }' /tmp/s2-runtime-ldd.txt; then \
+        echo "ERROR: /usr/local/bin/s2 resolves libcuda.so.1 to a CUDA driver stub"; \
+        exit 1; \
+      fi \
+    && mapfile -t ggml_needed < <(awk '/^[[:space:]]*libggml[^[:space:]]*[[:space:]]+=>/ { print $1 }' /tmp/s2-runtime-ldd.txt | sort -u) \
+    && if [ "${#ggml_needed[@]}" -eq 0 ]; then \
+        echo "ERROR: no GGML SONAME dependencies found in /usr/local/bin/s2"; \
+        exit 1; \
+      fi \
+    && echo "=== explicit GGML SONAME resolution ===" \
+    && for soname in "${ggml_needed[@]}"; do \
+        if ! grep -E "^\s*${soname//./\\.}\s+=>\s+/usr/local/lib/" /tmp/s2-runtime-ldd.txt; then \
+          echo "ERROR: ${soname} did not resolve from /usr/local/lib"; \
+          exit 1; \
+        fi; \
+      done \
+    && if printf '%s\n' "${ggml_needed[@]}" | grep -qx 'libggml-cpu.so.0'; then \
+        echo "  OK: libggml-cpu.so.0 resolves"; \
+      else \
+        echo "ERROR: expected libggml-cpu.so.0 dependency was not present"; \
+        exit 1; \
+      fi \
+    && printf '  OK: %s resolves\n' "${ggml_needed[@]}" \
+    && if grep -q '^\s*libcuda.so.1\s+=>\s+not found' /tmp/s2-runtime-ldd.txt; then \
+        echo "  OK: libcuda.so.1 unresolved until host NVIDIA driver injection"; \
+      else \
+        echo "  NOTE: libcuda.so.1 resolved in this build environment; verified it is not a stub"; \
+      fi
 
 # Runtime volumes for host-mounted assets.
 VOLUME ["/models", "/voices", "/config"]

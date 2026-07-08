@@ -83,9 +83,28 @@ def test_cuda_stub_runtime_verification() -> None:
     content = _read(DOCKERFILE)
     runtime_section = content.split("# -- runtime stage")[1] if "# -- runtime stage" in content else ""
 
-    # Should check for absence of libcuda in runtime
-    assert "no libcuda" in runtime_section.lower() or "no CUDA stub" in runtime_section.lower(), (
-        "Missing runtime verification: no CUDA stub in runtime image"
+    # Should check for absence of the build-time CUDA driver stubs in runtime.
+    assert "no /usr/local/cuda/lib64/stubs/libcuda.so*" in runtime_section, (
+        "Missing runtime verification: no CUDA driver stub in runtime image"
+    )
+    assert "test ! -e /usr/local/cuda/lib64/stubs/libcuda.so" in runtime_section, (
+        "Runtime verification should reject libcuda.so stub"
+    )
+    assert "test ! -e /usr/local/cuda/lib64/stubs/libcuda.so.1" in runtime_section, (
+        "Runtime verification should reject libcuda.so.1 stub"
+    )
+
+
+def test_cuda_stub_not_packaged_with_runtime_libs() -> None:
+    """The runtime-library collector refuses to package CUDA driver stubs."""
+    content = _read(DOCKERFILE)
+    builder_section = content.split("# -- runtime stage")[0]
+
+    assert "refusing to package CUDA driver stub dependency" in builder_section, (
+        "Runtime-library collection must reject libcuda stubs"
+    )
+    assert '[[ "${dep_base}" == libcuda.so* ]]' in builder_section, (
+        "Runtime-library collection must explicitly detect libcuda.so*"
     )
 
 
@@ -152,6 +171,68 @@ def test_build_verification_no_march_native() -> None:
 # ---------------------------------------------------------------------------
 # Dockerfile: BUILD_INFO provenance
 # ---------------------------------------------------------------------------
+
+def test_builder_inspects_s2_dynamic_dependencies() -> None:
+    """Builder stage emits ldd/readelf and produced GGML library evidence."""
+    content = _read(DOCKERFILE)
+    builder_section = content.split("# -- runtime stage")[0]
+
+    assert "ldd /src/build/s2" in builder_section
+    assert "readelf -d /src/build/s2" in builder_section
+    assert "find /src/build -name 'libggml*.so*'" in builder_section
+    assert "produced libggml*.so* SONAMEs" in builder_section
+    assert "produced libggml*.so* symlink chains" in builder_section
+
+
+def test_builder_collects_non_system_ggml_runtime_libraries() -> None:
+    """Runtime libraries are derived from ldd /src/build/s2, not hard-coded."""
+    content = _read(DOCKERFILE)
+    builder_section = content.split("# -- runtime stage")[0]
+
+    assert "/src/runtime-libs" in builder_section
+    assert "runtime_deps" in builder_section
+    assert "awk '/=> \\/src\\/build\\// { print $3 }" in builder_section
+    assert '[[ "${dep_base}" != libggml*.so* ]]' in builder_section
+    assert "cp -av -P" in builder_section, (
+        "GGML SONAME symlink chains should be copied as symlinks"
+    )
+
+
+def test_runtime_copies_ggml_libs_and_runs_ldconfig() -> None:
+    """Runtime stage installs collected GGML libraries into the linker cache."""
+    content = _read(DOCKERFILE)
+    runtime_section = content.split("# -- runtime stage")[1] if "# -- runtime stage" in content else ""
+
+    assert "COPY --from=builder --chown=root:root     /src/runtime-libs/       /usr/local/lib/" in runtime_section
+    assert "&& ldconfig" in runtime_section
+
+
+def test_runtime_ldd_fails_unresolved_non_cuda_dependencies() -> None:
+    """Runtime verification permits only host-injected libcuda.so.1 to be unresolved."""
+    content = _read(DOCKERFILE)
+    runtime_section = content.split("# -- runtime stage")[1] if "# -- runtime stage" in content else ""
+
+    assert "ldd /usr/local/bin/s2 | tee /tmp/s2-runtime-ldd.txt" in runtime_section
+    assert "&& {" in runtime_section
+    assert 'ldd_status="${PIPESTATUS[0]}"' in runtime_section
+    assert "ldd exit status: ${ldd_status}" in runtime_section
+    assert "readelf -d /usr/local/bin/s2" not in runtime_section
+    assert 'awk \'/not found/ && $1 != "libcuda.so.1" { print }\'' in runtime_section
+    assert "unresolved runtime dependencies other than host-injected libcuda.so.1" in runtime_section
+    assert "libcuda.so.1 unresolved until host NVIDIA driver injection" in runtime_section
+
+
+def test_runtime_explicitly_verifies_ggml_soname_resolution() -> None:
+    """Runtime verification requires every GGML SONAME dependency to resolve."""
+    content = _read(DOCKERFILE)
+    runtime_section = content.split("# -- runtime stage")[1] if "# -- runtime stage" in content else ""
+
+    assert "ggml_needed" in runtime_section
+    assert "awk '/^[[:space:]]*libggml" in runtime_section
+    assert "libggml-cpu.so.0 resolves" in runtime_section
+    assert "did not resolve from /usr/local/lib" in runtime_section
+    assert "OK: %s resolves" in runtime_section
+
 
 def test_build_info_records_cuda_architectures() -> None:
     """BUILD_INFO records the selected CUDA architectures."""

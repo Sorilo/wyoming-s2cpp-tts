@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Phase 7B.3: fixed duplicate synthesis for Wyoming compatibility events. 355 tests.
+
 - Phase 7B.1: added structured request-level observability.
   New app/observability.py module generates per-connection and per-synthesis
   correlation IDs, fingerprints text with SHA-256 (never logs full text), and

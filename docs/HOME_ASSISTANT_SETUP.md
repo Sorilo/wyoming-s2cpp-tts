@@ -1,49 +1,61 @@
-# Home Assistant setup draft
+# Home Assistant setup
 
-This guide is for validating the current Wyoming boundary and, later, the real Fish Speech S2 Pro service. The current repository can run a Wyoming TTS server with the safe default `TTS_BACKEND=fake`; that returns deterministic test-tone audio, not real speech. Real s2.cpp inference, progressive streaming, cancellation/barge-in validation, and final Home Assistant end-to-end latency measurement are not implemented yet.
+## Verified deployment
+
+The Wyoming TTS service is deployed as two Docker containers on the Unraid
+`sorilonet` network:
+
+- **Wrapper:** `wyoming-s2cpp-tts` (CPU-only) on port 10200
+- **Backend:** `s2cpp-backend` (CUDA) on port 3030
+
+The wrapper is exposed to LAN at `192.168.1.45:10200`.
 
 ## Add the Wyoming integration
 
-1. Start the service in fake mode:
+1. In Home Assistant, go to **Settings → Devices & services**
+2. Select **Add Integration**
+3. Search for **Wyoming Protocol**
+4. Enter host: `192.168.1.45`
+5. Enter port: `10200`
 
-   ```bash
-   python -m app.main
-   ```
-
-2. In Home Assistant, go to **Settings -> Devices & services**.
-3. Select **Add Integration**.
-4. Search for **Wyoming Protocol**.
-5. Enter the host/IP of the machine running this service.
-6. Enter port `10200`.
+The service auto-discovers as `wyoming-s2cpp-tts` with voice `s2-pro`
+(en, zh), 44100 Hz, streaming=true.
 
 ## Assist pipeline
 
-After Home Assistant discovers or connects to the Wyoming service:
+1. Go to Assist pipeline settings
+2. Select `wyoming-s2cpp-tts` as the TTS engine
+3. Save the pipeline
+4. Test with "Try text-to-speech" in the integration settings
 
-1. Go to the Assist pipeline settings.
-2. Select this Wyoming service as the TTS engine.
-3. Save the pipeline.
-4. Test with a short phrase, for example:
+Expected behavior: Home Assistant sends a streaming request
+(synthesize-start -> synthesize-chunk x N -> synthesize-stop), the
+wrapper synthesizes via the s2.cpp backend, and real speech plays
+through the selected media player.
 
-```text
-Hello from the local Wyoming test TTS service.
-```
+## Verified behavior (2026-07-08)
 
-Expected current behavior in fake mode: Home Assistant receives deterministic test-tone audio. Do not treat this as real Fish Speech, s2.cpp, streaming, audio-quality, cancellation, or latency validation.
+- HA discovers the Wyoming service at 192.168.1.45:10200
+- s2-pro voice appears in TTS settings
+- "Try text-to-speech" generates and audibly plays real speech
+- Streaming TTS lifecycle complete (synthesize-stopped emitted)
+- Full STT -> conversation -> TTS satellite workflow not yet verified
+- Cancellation and barge-in not yet tested
 
-## Future real-backend validation
+## Troubleshooting
 
-Real Home Assistant validation belongs after the approved streaming/cancellation/backend phases. The final end-to-end test should document, where measurable:
+### Spinner hangs on preview
+Fixed in wrapper image `sha-89ed2dc`. The handler now supports the full
+streaming TTS lifecycle. Older images only handled the legacy `synthesize`
+event and ignored streaming events.
 
-- Assist pipeline connection.
-- STT-to-conversation-to-TTS operation.
-- streamed playback.
-- audio correctness.
-- cancellation/barge-in behavior where supported.
-- TTS-side and end-to-end latency timestamps.
+### No audio / connection errors
+- Verify both containers are running on the `sorilonet` network
+- Check that the backend is reachable from the wrapper:
+  `docker exec wyoming-s2cpp-tts curl -s http://s2cpp-backend:3030/generate`
+- Check wrapper logs for S2ClientError (JSON 400 = multipart not enabled,
+  update to sha-15884c0 or later)
 
-## Barge-in note
-
-This TTS wrapper should eventually be barge-in friendly by streaming chunks early and cancelling synthesis on disconnect. However, true barge-in also depends on Home Assistant, wake word handling, VAD, microphone capture, satellite behavior, and whether the playback device can be interrupted.
-
-If playback cannot be interrupted by the satellite or media device, changing only this TTS service will not provide full barge-in.
+### Voice not found
+Voice profiles are stored under `/voices` on the backend container.
+Ensure the host directory is mounted and populated.

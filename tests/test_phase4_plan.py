@@ -8,7 +8,7 @@ def test_phase4_cuda_plan_doc_records_unverified_build_plan_and_sources():
     doc = (ROOT / "docs" / "CUDA_S2CPP_PLAN.md").read_text()
 
     assert "Phase 4" in doc
-    assert "not yet tested" in doc.lower()
+    assert "not yet verified" in doc.lower()
     assert "sinfisum/s2pro-gguf" in doc
     assert "--server" in doc
     assert "--ngl 36" in doc

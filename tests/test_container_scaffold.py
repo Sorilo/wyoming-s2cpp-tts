@@ -28,6 +28,6 @@ def test_entrypoint_starts_python_wrapper_and_keeps_s2cpp_hook_as_todo():
 def test_container_docs_describe_current_capabilities_and_limits():
     readme = (ROOT / "README.md").read_text()
 
-    assert "Phase 3" in readme
+    assert "two-container" in readme.lower()
     assert "container" in readme.lower()
-    assert "does not build s2.cpp" in readme.lower()
+    assert "cpu-only" in readme.lower()

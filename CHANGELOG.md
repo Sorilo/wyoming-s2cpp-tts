@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Phase 7A: created six CMU ARCTIC voice profiles and verified direct backend synthesis.
+  Created `.s2voice` profiles for bdl, rms, jmk, slt, clb, and eey under
+  `/mnt/user/appdata/s2cpp/voices`. All six profiles are visible via `s2 --list-voices`
+  and pass direct multipart synthesis (6/6, valid RIFF/WAVE output). Human listening:
+  acceptable temporary voices, somewhat robotic, no downstream defect confirmed;
+  personal clean recording planned for later quality test. Operational caveats
+  documented: FestVox HTTPS unreachable (HTTP fallback used), `--list-voices` requires
+  GPU runtime due to CUDA library linkage. Wrapper behavior, images, and Home
+  Assistant settings unchanged.
+
 - Phase 6E: corrected deployment safety baseline and forward plan.
   Updated Unraid templates to pin verified immutable images, rewrote stale
   README deployment/status claims, clarified that Wyoming protocol streaming is

@@ -1,6 +1,6 @@
 # TODO
 
-## Completed through Phase 6E (2026-07-08)
+## Completed through Phase 7A (2026-07-08)
 
 1. Scaffold, minimal Wyoming server, config loading, queue ✅
 2. s2.cpp HTTP client with mocked tests ✅
@@ -21,6 +21,27 @@
 17. Phase 6C: streaming TTS state machine — HA preview hang fix ✅
 18. Phase 6D: Home Assistant deployment verified — real speech playback ✅
 19. Phase 6E: deployment safety documentation and immutable Unraid template correction ✅
+20. Phase 7A: CMU ARCTIC voice profile creation — 6 profiles, 6/6 direct synthesis ✅
+
+## Phase 7A results
+
+- Six one-time `.s2voice` profiles created from CMU ARCTIC reference recordings:
+
+  | Profile ID | Gender | Accent | Size |
+  |---|---|---|---|
+  | `cmu_bdl_male_us` | male | US English | ~5.0 KB |
+  | `cmu_rms_male_us` | male | US English | ~5.9 KB |
+  | `cmu_jmk_male_canadian` | male | Canadian English | ~5.1 KB |
+  | `cmu_slt_female_us` | female | US English | ~4.7 KB |
+  | `cmu_clb_female_us` | female | US English | ~5.5 KB |
+  | `cmu_eey_female_us` | female | US English | ~5.2 KB |
+
+- Persistent profile directory: `/mnt/user/appdata/s2cpp/voices`
+- All six profiles visible via `s2 --list-voices` with GPU-backed execution (libcuda.so.1 linked even for listing)
+- Direct backend multipart synthesis: **6/6 passed** (all profiles produce valid RIFF/WAVE audio)
+- Human listening: acceptable as temporary assistant voices; sound somewhat robotic; no downstream defect confirmed; personal clean recording expected to be a better long-term quality test
+- Operational caveats: FestVox HTTPS endpoint unreachable from Unraid host (HTTP fallback used); `--list-voices` requires GPU runtime due to CUDA library linkage
+- Comparison WAVs saved: `/mnt/user/appdata/s2cpp/verification_artifacts/phase_7a/`
 
 ## Current verified deployment
 
@@ -29,13 +50,12 @@
 - Network: `sorilonet`
 - HA: `192.168.1.233` → `192.168.1.45:10200`
 - Audio: 44100 Hz mono s16le real speech via Wyoming protocol streaming lifecycle
-- Tests baseline: 287/287 pass before Phase 6E
+- Tests baseline: 287/287 pass before Phase 7A
 - Runtime caveat: true progressive backend HTTP audio streaming is not wired into the production event handler yet; the live handler still uses buffered `generate_multipart()`.
 
 ## Approved remaining v0.1 phases
 
-20. Phase 7A: one-time custom `.s2voice` profile creation and direct backend verification
-21. Phase 7B: wrapper voice discovery, voice selection, default voice configuration, Wyoming Describe exposure, and Home Assistant selection
+21. Phase 7B: wrapper voice discovery, voice selection, default voice configuration, Wyoming Describe exposure, Home Assistant selection, and drop-in discovery for later personal voice profiles
 22. Phase 7.5: wire true progressive backend HTTP audio streaming into the production Wyoming event handler when `S2_STREAM=true`
 23. Phase 8: client disconnect cleanup, open HTTP stream closure, cancellation behavior, and documented backend cancellation limitations
 24. Phase 9: queue capacity, busy handling, backend HTTP 503 handling, queue wait timeout, synthesis timeout, and controlled Wyoming failure behavior

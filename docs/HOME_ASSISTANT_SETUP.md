@@ -11,7 +11,7 @@ The wrapper is exposed to LAN at `192.168.1.45:10200`. Home Assistant runs at `1
 
 ## Add the Wyoming integration
 
-1. In Home Assistant, go to **Settings → Devices & services**
+1. In Home Assistant, go to **Settings \u2192 Devices & services**
 2. Select **Add Integration**
 3. Search for **Wyoming Protocol**
 4. Enter host: `192.168.1.45`
@@ -26,7 +26,33 @@ The service auto-discovers as `wyoming-s2cpp-tts` with voice `s2-pro` (en, zh), 
 3. Save the pipeline
 4. Test with "Try text-to-speech" in the integration settings
 
-Expected behavior: Home Assistant sends a Wyoming streaming request (`synthesize-start` → `synthesize-chunk` x N → `synthesize-stop`), the wrapper synthesizes via the s2.cpp backend, emits `AudioStart` / `AudioChunk` / `AudioStop` / `synthesize-stopped`, and real speech plays through the selected media player.
+Expected behavior: Home Assistant sends a Wyoming streaming request (`synthesize-start` \u2192 `synthesize-chunk` x N \u2192 `synthesize-stop`), the wrapper synthesizes via the s2.cpp backend, emits `AudioStart` / `AudioChunk` / `AudioStop` / `synthesize-stopped`, and real speech plays through the selected media player.
+
+## Available voice profiles
+
+Six custom `.s2voice` profiles were created from CMU ARCTIC reference recordings
+and verified via direct backend synthesis (Phase 7A). They are stored on the
+Unraid host at `/mnt/user/appdata/s2cpp/voices`:
+
+| Profile ID | Gender | Accent |
+|-----------|--------|--------|
+| `cmu_bdl_male_us` | male | US English |
+| `cmu_rms_male_us` | male | US English |
+| `cmu_jmk_male_canadian` | male | Canadian English |
+| `cmu_slt_female_us` | female | US English |
+| `cmu_clb_female_us` | female | US English |
+| `cmu_eey_female_us` | female | US English |
+
+**Voice selection in Home Assistant is not yet wired** — the wrapper does not
+currently discover or expose these profiles through Wyoming Describe. This is
+the work of Phase 7B. Until then, expect only the generic `s2-pro` voice in
+Home Assistant.
+
+Human listening assessment: all six voices are acceptable as temporary assistant
+voices but sound somewhat robotic. This is not a confirmed downstream defect;
+perceived quality may be influenced by the older CMU ARCTIC recordings, the
+short reference clip, and the model quantization. A personal clean recording is
+planned for later as a better quality test.
 
 ## Verified behavior (2026-07-08)
 
@@ -34,7 +60,7 @@ Expected behavior: Home Assistant sends a Wyoming streaming request (`synthesize
 - `s2-pro` voice appears in TTS settings
 - "Try text-to-speech" generates and audibly plays real speech
 - Wyoming streaming TTS lifecycle completes (`synthesize-stopped` emitted)
-- Full STT → conversation → TTS satellite workflow not yet verified
+- Full STT \u2192 conversation \u2192 TTS satellite workflow not yet verified
 - Cancellation and barge-in not yet tested
 
 ## Streaming caveat
@@ -59,4 +85,7 @@ Fixed in wrapper image `sha-89ed2dc`. The handler supports the full Wyoming stre
 
 ### Voice not found
 
-Custom voice selection is not implemented in the wrapper yet. Saved `.s2voice` profile creation and direct backend verification are Phase 7A; wrapper discovery and Home Assistant selectable voices are Phase 7B. Until then, expect only the generic `s2-pro` voice in Home Assistant.
+Custom voice selection is not implemented in the wrapper yet. Saved `.s2voice`
+profiles were created in Phase 7A and verified via direct backend synthesis (6/6
+passed). Wrapper discovery and Home Assistant selectable voices are Phase 7B.
+Until then, expect only the generic `s2-pro` voice in Home Assistant.

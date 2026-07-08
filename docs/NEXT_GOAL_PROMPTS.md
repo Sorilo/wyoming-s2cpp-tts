@@ -3,11 +3,12 @@
 Run phases one at a time. This file is regenerated from the actual repository
 state after every `/goal` run. Do not copy stale assumptions forward.
 
-## Current state after Phase 6E
+## Current state after Phase 7A
 
 - Repository branch: `main`.
-- Deployment reconciliation baseline commit before Phase 6E: `b97e4ea6ec041cfb0b750b0b05c1b99d35909b29`.
-- Full test baseline before Phase 6E: 287 tests passing.
+- Deployment reconciliation baseline commit: `ea72838`.
+- Full test baseline before Phase 7A: 287 tests passing. No application Python
+  files were changed in Phase 7A.
 - Two-container deployment verified on Unraid:
   - Backend: `s2cpp-backend`, image `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b`
   - Wrapper: `wyoming-s2cpp-tts`, image `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-89ed2dc`
@@ -16,151 +17,112 @@ state after every `/goal` run. Do not copy stale assumptions forward.
   - Home Assistant endpoint: `192.168.1.45:10200`
   - Home Assistant VM: `192.168.1.233`
 - Home Assistant preview produces real audible speech.
-- Wyoming protocol streaming is implemented and verified: the wrapper handles `synthesize-start`, `synthesize-chunk`, and `synthesize-stop`, then emits `AudioStart`, `AudioChunk`, `AudioStop`, and `synthesize-stopped` for Home Assistant.
-- Progressive backend-audio streaming is not currently used by the production handler: although `S2_STREAM` is parsed and `synthesize_s2cpp_streaming_tts_events()` / `generate_stream()` exist, the live handler still calls buffered `synthesize_s2cpp_tts_events()` via `generate_multipart()`, then sends Wyoming audio events.
-- Custom `.s2voice` profile creation and wrapper voice selection are not implemented.
-- Do not assume an HTTP voice-management API. The pinned behavior to plan against is `POST /generate`, reference audio plus exact reference transcript, saved voice selection through `voice` and `voice_dir`, CLI voice profile creation with `--prompt-audio`, `--prompt-text`, `--voice`, `--save-voice`, and `--voice-dir`, and CLI voice listing with `--list-voices`.
+- Wyoming protocol streaming is implemented and verified; progressive
+  backend-audio streaming is not yet wired (Phase 7.5).
+- Six CMU ARCTIC `.s2voice` profiles created in Phase 7A:
+  `cmu_bdl_male_us`, `cmu_rms_male_us`, `cmu_jmk_male_canadian`,
+  `cmu_slt_female_us`, `cmu_clb_female_us`, `cmu_eey_female_us`.
+  Persistent directory: `/mnt/user/appdata/s2cpp/voices`.
+  All six visible via `s2 --list-voices` (GPU-backed, libcuda.so.1 linked).
+  Direct multipart synthesis: 6/6 passed (valid RIFF/WAVE).
+- Human listening: acceptable temporary voices, somewhat robotic, no downstream
+  defect; personal clean recording planned for later quality test.
+- Operational caveats: FestVox HTTPS unreachable from Unraid (HTTP fallback
+  used); `--list-voices` requires GPU runtime.
+- Wrapper does not yet discover or expose voice profiles through Wyoming
+  Describe. Voice selection in Home Assistant is not yet wired. These are
+  Phase 7B.
+- Do not assume an HTTP voice-management API. The pinned behavior is
+  `POST /generate`, voice/voice_dir multipart fields, CLI voice creation with
+  `--prompt-audio`/`--prompt-text`/`--voice`/`--save-voice`/`--voice-dir`, and
+  CLI voice listing with `--list-voices`.
 
-## Phase 7A prompt — one-time custom `.s2voice` profile creation and direct backend verification
+## Phase 7A prompt — one-time custom `.s2voice` profile creation and direct backend verification (COMPLETED)
 
-```text
-/goal
+Phase 7A is complete. Six CMU ARCTIC voice profiles were created and verified
+via direct backend synthesis (6/6 passed). See `docs/PHASE_7A_VERIFICATION.md`
+for full results. Wrapper behavior, images, and Home Assistant settings were not
+changed.
 
-Proceed with Phase 7A only: one-time custom .s2voice profile creation and direct backend verification.
-
-Project:
-/workspace/wyoming-s2cpp-tts
-
-Current verified deployment:
-- Backend container: s2cpp-backend
-- Backend image: ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b
-- Backend internal endpoint: http://s2cpp-backend:3030/generate
-- Backend GPU: NVIDIA RTX 3080
-- Backend model: /models/s2-pro-q6_k.gguf
-- Backend persistent voices directory inside container: /voices
-- Host voices directory: /mnt/user/appdata/s2cpp/voices
-- Wrapper container: wyoming-s2cpp-tts
-- Wrapper image: ghcr.io/sorilo/wyoming-s2cpp-tts:sha-89ed2dc
-- Wyoming endpoint: 192.168.1.45:10200
-- Home Assistant VM: 192.168.1.233
-- Docker network: sorilonet
-- Home Assistant discovery succeeds, s2-pro is visible, and real speech is audible
-- Tests before Phase 7A: 287 passing
-
-Important constraints:
-- Do not modify wrapper behavior during Phase 7A.
-- Do not rebuild or publish Docker images.
-- Do not modify Home Assistant settings.
-- Do not implement wrapper voice discovery or Home Assistant voice selection; that is Phase 7B.
-- Do not implement true progressive backend streaming; that is Phase 7.5.
-- Do not assume an HTTP voice-management endpoint such as /v1/voices unless source inspection proves it exists.
-
-Real upstream behavior to plan against:
-- Backend supports POST /generate.
-- Voice creation uses the s2 CLI, not a proven HTTP management API.
-- User supplies a consented 5-30 second clean recording.
-- User supplies the exact transcript for that recording.
-- CLI voice profile creation uses flags like:
-  --prompt-audio
-  --prompt-text
-  --voice
-  --save-voice
-  --voice-dir
-- CLI voice listing uses:
-  --list-voices
-- Saved voice synthesis uses multipart fields:
-  voice
-  voice_dir
-
-Required work:
-1. Inspect git status, recent commits, docs/ROADMAP.md, TODO.md, CHANGELOG.md, docs/ARCHITECTURE.md, docs/HOME_ASSISTANT_SETUP.md, docs/NEXT_GOAL_PROMPTS.md, docker/s2cpp/entrypoint.sh, unraid/my-s2cpp-backend.xml, and the available pinned s2.cpp documentation/source.
-2. Confirm the installed backend image/container has the expected s2 CLI capabilities for --prompt-audio, --prompt-text, --voice, --save-voice, --voice-dir, and --list-voices, using safe read-only commands first.
-3. Ask the user for the approved voice profile ID, the path to the consented 5-30 second clean recording, and the exact transcript if they are not already provided.
-4. Prefer a one-off command/container execution for voice creation rather than adding another permanent service.
-5. Avoid simultaneous backend and one-off model loading on the 10 GB RTX 3080. If the one-off command would load the model separately, stop the backend temporarily to release GPU memory, and restart it after profile creation.
-6. Create the .s2voice profile under the persistent /voices directory mounted from /mnt/user/appdata/s2cpp/voices.
-7. Verify the resulting .s2voice file exists, has sane permissions, and is visible through the backend's voice-listing command.
-8. Restart the backend if it was stopped.
-9. Perform a direct backend synthesis test using voice=<profile id> and voice_dir=/voices through POST /generate multipart/form-data.
-10. Save any generated verification audio only under verification_artifacts/ or another explicitly temporary/artifact path; do not commit private voice samples or generated voice audio unless the user explicitly asks.
-11. Update TODO.md, CHANGELOG.md, docs/ROADMAP.md, docs/HOME_ASSISTANT_SETUP.md, and docs/NEXT_GOAL_PROMPTS.md to reflect Phase 7A results and keep Phase 7B as the next wrapper work.
-12. Run focused checks for any docs/templates changed. Run the full Python suite only if application Python files were touched accidentally.
-13. Make one focused commit and push it.
-
-Acceptance criteria:
-- A user-approved custom .s2voice profile exists in /mnt/user/appdata/s2cpp/voices and /voices.
-- The profile is listed by the s2 CLI voice-list command.
-- Direct backend synthesis with voice=<profile id> succeeds via multipart POST /generate.
-- Backend is running again after any temporary stop.
-- Wrapper behavior and image are unchanged.
-- Home Assistant settings are unchanged.
-- No model files, private source audio, or generated voice audio are committed.
-- Documentation accurately states what was verified and what remains for Phase 7B.
-- Working tree is clean after commit.
-- Commit is pushed to origin/main.
-
-Suggested commit:
-docs: verify custom s2voice profile creation
-
-Final report must include:
-1. Commit hash.
-2. Voice profile ID and verified .s2voice path.
-3. Exact command shape used for profile creation, with private paths/transcripts redacted if needed.
-4. Direct backend synthesis verification result.
-5. Whether the backend was temporarily stopped and restarted.
-6. Confirmation that wrapper behavior, images, Home Assistant settings, model files, and runtime Python behavior were not changed.
-7. The next ready-to-paste Phase 7B prompt.
-```
-
-## Phase 7B prompt — wrapper voice discovery, selection, and Home Assistant exposure
+## Phase 7B prompt — wrapper voice discovery, selection, default voice, Wyoming Describe, Home Assistant selection, and drop-in discovery
 
 ```text
 /goal
 
-Proceed with Phase 7B only: wrapper voice discovery, voice selection, default voice configuration, Wyoming Describe exposure, and Home Assistant selection.
+Proceed with Phase 7B only: wrapper voice discovery, voice selection, default
+voice configuration, Wyoming Describe exposure, Home Assistant selection, and
+drop-in discovery for later personal voice profiles.
 
 Project:
 /workspace/wyoming-s2cpp-tts
 
 Current verified deployment:
 - Backend: s2cpp-backend at http://s2cpp-backend:3030/generate
-- Backend image: ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b or newer explicitly verified immutable tag from Phase 7A
+- Backend image: ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b
 - Wrapper image before this phase: ghcr.io/sorilo/wyoming-s2cpp-tts:sha-89ed2dc
 - Docker network: sorilonet
 - Home Assistant endpoint: 192.168.1.45:10200
 - Backend voice directory inside backend: /voices
 - Host voices directory: /mnt/user/appdata/s2cpp/voices
-- A custom .s2voice profile should already exist from Phase 7A
+- Six .s2voice profiles already exist from Phase 7A:
+  cmu_bdl_male_us, cmu_rms_male_us, cmu_jmk_male_canadian,
+  cmu_slt_female_us, cmu_clb_female_us, cmu_eey_female_us
+- All six verified via direct backend synthesis (6/6 passed)
+- A personal clean voice recording will be added later; the wrapper must support
+  drop-in discovery of new .s2voice files without rebuild
 
 Important constraints:
-- Do not create voice profiles in Phase 7B; Phase 7A handles profile creation.
+- Do not create voice profiles in Phase 7B; Phase 7A already created six.
 - Do not change backend image or model unless explicitly required and approved.
 - Do not implement true progressive backend HTTP streaming; that is Phase 7.5.
 - Do not implement cancellation or barge-in; those are later phases.
 
 Required work:
-1. Inspect git status, recent commits, app/config.py, app/s2_client.py, app/wyoming_server.py, tests, docker/wrapper/Dockerfile, docker/wrapper/entrypoint.sh, unraid/my-wyoming-wrapper.xml, docs/ARCHITECTURE.md, docs/HOME_ASSISTANT_SETUP.md, docs/ROADMAP.md, TODO.md, CHANGELOG.md, and docs/NEXT_GOAL_PROMPTS.md.
-2. Add a read-only /voices mount to the wrapper template and image/runtime documentation, or explicitly justify an alternative that still lets the wrapper discover profiles safely.
-3. Implement safe enumeration of valid .s2voice files.
-4. Sanitize profile IDs and prevent path traversal; reject names containing path separators, parent-directory traversal, unexpected suffixes, or unsafe characters.
+1. Inspect git status, recent commits, app/config.py, app/s2_client.py,
+   app/wyoming_server.py, tests, docker/wrapper/Dockerfile,
+   docker/wrapper/entrypoint.sh, unraid/my-wyoming-wrapper.xml,
+   docs/ARCHITECTURE.md, docs/HOME_ASSISTANT_SETUP.md, docs/ROADMAP.md,
+   TODO.md, CHANGELOG.md, and docs/NEXT_GOAL_PROMPTS.md.
+2. Add a read-only /voices mount to the wrapper template and image/runtime
+   documentation, or explicitly justify an alternative that still lets the
+   wrapper discover profiles safely.
+3. Implement automatic .s2voice discovery: enumerate valid .s2voice files from
+   the /voices directory at startup (and optionally on Describe events).
+4. Sanitize profile IDs and prevent path traversal; reject names containing path
+   separators, parent-directory traversal, unexpected suffixes, or unsafe
+   characters.
 5. Add S2_DEFAULT_VOICE environment/config support.
-6. Preserve generic s2-pro/default fallback when no voice is configured or requested.
-7. Expose selectable voices through Wyoming Describe.
-8. Read the requested Wyoming voice selection from Home Assistant/Wyoming events.
-9. Pass voice and voice_dir in the multipart request to the backend.
-10. Add deterministic tests for voice enumeration, sanitization, Describe exposure, selected voice propagation, default voice config, and fallback behavior.
-11. Update wrapper Docker/Unraid docs and templates for the /voices read-only mount and new environment variables.
-12. Run focused tests first, then the full Python suite.
-13. Build and publish one immutable wrapper image only after tests pass.
-14. Deploy the new wrapper image to Unraid and verify Home Assistant can select the custom voice and produce speech.
-15. Update TODO.md, CHANGELOG.md, docs/ROADMAP.md, docs/HOME_ASSISTANT_SETUP.md, docs/ARCHITECTURE.md, README.md if needed, and docs/NEXT_GOAL_PROMPTS.md.
-16. Make one focused commit and push it.
+6. Preserve generic s2-pro/default fallback when no voice is configured or
+   requested.
+7. Expose all discovered voice profiles through Wyoming Describe so Home
+   Assistant can list and select them.
+8. Read the requested Wyoming voice selection from Home Assistant/Wyoming
+   events.
+9. Pass voice and voice_dir in the multipart request to the backend for each
+   synthesis.
+10. Support drop-in discovery: new .s2voice files placed in /voices (e.g. a
+    future personal profile) should be discoverable without rebuilding or
+    restarting the wrapper container (e.g. periodic re-scan or event-driven).
+11. Add deterministic tests for voice enumeration, sanitization, Describe
+    exposure, selected voice propagation, default voice config, fallback
+    behavior, and drop-in discovery.
+12. Update wrapper Docker/Unraid docs and templates for the /voices read-only
+    mount and new environment variables.
+13. Run focused tests first, then the full Python suite.
+14. Build and publish one immutable wrapper image only after tests pass.
+15. Deploy the new wrapper image to Unraid and verify Home Assistant can select
+    each of the six CMU ARCTIC voices and produce speech.
+16. Update TODO.md, CHANGELOG.md, docs/ROADMAP.md, docs/HOME_ASSISTANT_SETUP.md,
+    docs/ARCHITECTURE.md, README.md if needed, and docs/NEXT_GOAL_PROMPTS.md.
+17. Make one focused commit and push it.
 
 Acceptance criteria:
-- Wrapper sees .s2voice files through a read-only /voices mount or documented safer equivalent.
+- Wrapper discovers all existing .s2voice files through a read-only /voices
+  mount or documented safer equivalent.
+- New .s2voice files dropped into /voices are discoverable without rebuild.
 - Unsafe voice IDs cannot escape the voices directory.
-- Wyoming Describe advertises selectable voices.
-- Home Assistant displays/selects the custom voice.
+- Wyoming Describe advertises all discovered selectable voices.
+- Home Assistant displays and can select each of the six custom voices.
 - Selected voice and voice_dir are sent in multipart /generate requests.
 - S2_DEFAULT_VOICE works and default s2-pro fallback remains available.
 - Tests pass, including full Python suite.
@@ -168,7 +130,7 @@ Acceptance criteria:
 - Working tree is clean after commit and push.
 
 Suggested commit:
-feat: expose saved s2 voices through Wyoming
+feat: expose saved s2 voices through Wyoming with drop-in discovery
 ```
 
 ## Phase 7.5 prompt — true progressive backend HTTP audio streaming

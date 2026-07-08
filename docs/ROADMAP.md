@@ -22,40 +22,40 @@ implement later phases.
 
 ## Completed phases
 
-### Phase 0-4: scaffold, Wyoming server, s2.cpp client, container scaffold, CUDA plan ✅
+### Phase 0-4: scaffold, Wyoming server, s2.cpp client, container scaffold, CUDA plan \u2705
 
-### Phase 5A-5D: multipart client, streaming helpers, Wyoming events, metrics ✅
+### Phase 5A-5D: multipart client, streaming helpers, Wyoming events, metrics \u2705
 
-### Phase 5.5A: smoke-test harness ✅
+### Phase 5.5A: smoke-test harness \u2705
 
-### Phase 5.5B: real backend verification ✅
+### Phase 5.5B: real backend verification \u2705
 Backend contract verified: `audio/L16; rate=44100; channels=1` via multipart/form-data.
 
-### Phase 6A: backend CUDA image ✅
+### Phase 6A: backend CUDA image \u2705
 Built and deployed `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b`.
 
-### Phase 6B0: wrapper Docker image ✅
+### Phase 6B0: wrapper Docker image \u2705
 Built and deployed the CPU-only wrapper. Added GitHub Actions workflow for GHCR publication.
 
-### Phase 6B1: multipart fix + dynamic Describe ✅
-Fixed `generate()` → `generate_multipart()`. Describe returns real metadata.
+### Phase 6B1: multipart fix + dynamic Describe \u2705
+Fixed `generate()` \u2192 `generate_multipart()`. Describe returns real metadata.
 
-### Phase 6C: Wyoming streaming TTS state machine ✅
+### Phase 6C: Wyoming streaming TTS state machine \u2705
 HA preview hang fixed. `synthesize-stopped` emitted. 287 tests pass.
 
-### Phase 6D: Home Assistant deployment verification ✅
+### Phase 6D: Home Assistant deployment verification \u2705
 Real speech audible through Home Assistant. Wyoming streaming lifecycle verified.
 
-### Phase 6E: deployment safety corrections and forward-plan refinement ✅
+### Phase 6E: deployment safety corrections and forward-plan refinement \u2705
 Pinned Unraid templates to verified immutable images, corrected stale README/deployment documentation, documented the `S2_STREAM` production-handler caveat, and split the remaining roadmap.
+
+### Phase 7A: CMU ARCTIC voice profile creation \u2705
+Six `.s2voice` profiles created from CMU ARCTIC reference recordings (bdl, rms, jmk, slt, clb, eey) under `/mnt/user/appdata/s2cpp/voices`. All six visible via `s2 --list-voices`. Direct backend multipart synthesis: 6/6 passed (valid RIFF/WAVE). Human listening: acceptable temporary voices, somewhat robotic, no downstream defect; personal recording planned. Caveats: FestVox HTTPS unreachable (HTTP fallback); `--list-voices` requires GPU runtime. Wrapper, images, and HA unchanged.
 
 ## Remaining phases
 
-### Phase 7A: one-time custom `.s2voice` profile creation and direct backend verification (NEXT)
-Create one custom voice profile using a user-supplied, consented 5-30 second clean recording plus exact transcript. Use the s2 CLI with `--prompt-audio`, `--prompt-text`, `--voice`, `--save-voice`, and `--voice-dir`; write the `.s2voice` file to the persistent `/voices` host mount; verify direct backend synthesis with `voice=<profile id>`. Do not modify the wrapper in Phase 7A.
-
-### Phase 7B: wrapper voice discovery and Home Assistant voice selection
-Mount `/voices` read-only into the wrapper or explicitly justify an alternative. Safely enumerate `.s2voice` files, sanitize profile IDs, expose selectable voices through Wyoming Describe, read requested Wyoming voice selection, pass `voice` and `voice_dir` in multipart requests, support `S2_DEFAULT_VOICE`, preserve generic `s2-pro` fallback, verify Home Assistant selection, and publish one immutable wrapper image after tests pass.
+### Phase 7B: wrapper voice discovery and Home Assistant voice selection (NEXT)
+Mount `/voices` read-only into the wrapper or explicitly justify an alternative. Safely enumerate `.s2voice` files, sanitize profile IDs, expose selectable voices through Wyoming Describe, read requested Wyoming voice selection, pass `voice` and `voice_dir` in multipart requests, support `S2_DEFAULT_VOICE`, preserve generic `s2-pro` fallback, support drop-in discovery of later personal voice profiles, verify Home Assistant selection, and publish one immutable wrapper image after tests pass.
 
 ### Phase 7.5: true progressive backend HTTP audio streaming
 Tests first. When `S2_STREAM=true`, route production synthesis through `synthesize_s2cpp_streaming_tts_events()` without building a complete list of audio events before writing. Preserve `S2_STREAM=false` as buffered fallback and preserve Wyoming streaming-text behavior.

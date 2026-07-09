@@ -72,8 +72,12 @@ DEFAULT_MEASURED_RUNS = 3
 DEFAULT_TIMEOUT = 120.0
 DEFAULT_SAMPLE_RATE = 44100
 DEFAULT_TEXT = (
-    "The quick brown fox jumps over the lazy dog. "
-    "This is a benchmark test for real time speech synthesis performance."
+    "The morning sun cast long shadows across the quiet neighborhood "
+    "as residents began their daily routines. A gentle breeze carried "
+    "the scent of fresh coffee from the corner cafe, where early "
+    "customers sat reading newspapers and checking their phones. "
+    "Children hurried past with backpacks slung over their shoulders, "
+    "their laughter echoing off the brick buildings."
 )
 
 

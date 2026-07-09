@@ -17,8 +17,8 @@ Keep:
 
 - `S2_STREAM=true`
 - `S2_SEGMENT_SENTENCES=false`
-- same backend image: `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b`
-- same wrapper image where possible
+- same backend image: `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-edf89bd`
+- same wrapper image: `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-9c134cc`
 - same voice for every run
 
 Do **not** test known-crashing context values. Phase 7.5D1 found that values

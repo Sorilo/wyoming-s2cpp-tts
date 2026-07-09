@@ -21,17 +21,17 @@ index 19b3c3d..2b690e1 100644
 
  struct PipelineParams {
 diff --git src/s2_pipeline.cpp src/s2_pipeline.cpp
-index 0dd5f01..af6b33f 100644
+index 0dd5f01..2eb74dd 100644
 --- src/s2_pipeline.cpp
 +++ src/s2_pipeline.cpp
-@@ -1028,6 +1028,7 @@ bool Pipeline::synthesize_streaming_prompt_codes_locked(const PipelineParams & p
-             stream_aborted = true;
+@@ -1091,6 +1091,7 @@ bool Pipeline::synthesize_streaming_prompt_codes_locked(const PipelineParams & p
+         if (!emit_pcm_range(pcm, emit_begin_samples, emit_end_samples)) {
              return false;
          }
-+        sink.on_stream_decode(total_frames, delta_count);
-         emitted_samples += delta_count;
-         return true;
-     };
++        sink.on_stream_decode(total_frames, emit_end_samples - emit_begin_samples);
+
+         committed_frames = finalize ? total_frames : stable_frames;
+         last_decoded_frames = total_frames;
 @@ -1101,6 +1102,7 @@ bool Pipeline::synthesize_streaming_prompt_codes_locked(const PipelineParams & p
      gen_params.on_frame = [&](const FrameCallbackData & fcd) -> bool {
          if (sink.is_cancelled()) {

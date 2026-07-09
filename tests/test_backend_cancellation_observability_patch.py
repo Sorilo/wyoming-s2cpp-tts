@@ -87,3 +87,5 @@ def test_generation_counters_threaded_to_terminal_event() -> None:
     assert "on_generation_cancelled" in text
     assert "on_final_decode_skipped" in text
     assert "on_stream_decode" in text
+    assert "sink.on_stream_decode(total_frames, emit_end_samples - emit_begin_samples);" in text
+    assert "sink.on_stream_decode(total_frames, delta_count);" not in text

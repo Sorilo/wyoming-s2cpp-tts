@@ -106,6 +106,15 @@ Path(os.environ["METADATA_PATH"]).write_text(json.dumps(metadata, indent=2) + "\
 METADATA_PY
 }
 
+capture_post_run_logs() {
+  # The long-lived docker logs -f readers can miss buffered terminal output when
+  # the capture process is stopped. Always write a post-run snapshot bounded by
+  # the original capture start timestamp so wrapper/backend events visible in
+  # the terminal are preserved in artifacts too.
+  docker logs --since "$START_TS" "$WRAPPER" > "$OUTDIR/wrapper-post.log" 2>&1 || true
+  docker logs --since "$START_TS" "$BACKEND" > "$OUTDIR/backend-post.log" 2>&1 || true
+}
+
 cleanup() {
   local end_ts
   end_ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -115,12 +124,14 @@ cleanup() {
     fi
   done
   wait ${WPID:-} ${BPID:-} ${GPID:-} 2>/dev/null || true
+  capture_post_run_logs
   write_metadata "$end_ts"
   echo "Capture: $START_TS -> $end_ts"
   echo "Metadata: $OUTDIR/capture-metadata.json"
+  echo "Post-run logs: $OUTDIR/wrapper-post.log $OUTDIR/backend-post.log"
   echo "Events found:"
-  grep -c "cancel" "$OUTDIR/backend-live.log" 2>/dev/null || echo "0 backend cancel events"
-  grep -c "disconnect" "$OUTDIR/wrapper-live.log" 2>/dev/null || echo "0 wrapper disconnect events"
+  grep -c "cancel" "$OUTDIR/backend-post.log" 2>/dev/null || echo "0 backend cancel events"
+  grep -c "disconnect" "$OUTDIR/wrapper-post.log" 2>/dev/null || echo "0 wrapper disconnect events"
 }
 trap cleanup EXIT
 trap 'STOP_REASON=signal; exit 0' INT TERM
@@ -136,12 +147,12 @@ capture_identity "$WRAPPER" wrapper > "$OUTDIR/container-identities.txt" || true
 capture_identity "$BACKEND" backend >> "$OUTDIR/container-identities.txt" || true
 
 # Capture existing logs and then live logs.
-docker logs "$WRAPPER" --tail 500 2>&1 > "$OUTDIR/wrapper-pre.log" || true
-docker logs "$BACKEND" --tail 500 2>&1 > "$OUTDIR/backend-pre.log" || true
+docker logs "$WRAPPER" --tail 500 > "$OUTDIR/wrapper-pre.log" 2>&1 || true
+docker logs "$BACKEND" --tail 500 > "$OUTDIR/backend-pre.log" 2>&1 || true
 
-docker logs -f "$WRAPPER" 2>&1 > "$OUTDIR/wrapper-live.log" &
+docker logs -f "$WRAPPER" > "$OUTDIR/wrapper-live.log" 2>&1 &
 WPID=$!
-docker logs -f "$BACKEND" 2>&1 > "$OUTDIR/backend-live.log" &
+docker logs -f "$BACKEND" > "$OUTDIR/backend-live.log" 2>&1 &
 BPID=$!
 
 (

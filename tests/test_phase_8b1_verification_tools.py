@@ -139,3 +139,54 @@ def test_capture_script_duration_mode_is_background_safe(tmp_path: Path) -> None
     assert (outdir / "backend-live.log").stat().st_size > 0
     assert (outdir / "nvidia-smi.log").stat().st_size > 0
     assert "Press Enter" not in completed.stdout
+
+
+
+def test_capture_script_writes_post_run_since_snapshots(tmp_path: Path) -> None:
+    """Capture must save post-run docker logs --since snapshots, not only logs -f."""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    calls = tmp_path / "docker-calls.txt"
+    docker = fake_bin / "docker"
+    docker.write_text(
+        "#!/bin/sh\n"
+        f"echo \"$@\" >> {calls}\n"
+        "if [ \"$1\" = inspect ]; then echo fake-image-or-status; exit 0; fi\n"
+        "if [ \"$1\" = logs ] && [ \"$2\" = --since ]; then echo \"post $4 logs\"; exit 0; fi\n"
+        "if [ \"$1\" = logs ] && [ \"$2\" = -f ]; then echo \"$3 live logs\"; sleep 5; exit 0; fi\n"
+        "if [ \"$1\" = logs ]; then echo \"$2 pre logs\"; exit 0; fi\n"
+        "echo docker-$@\n",
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+    nvidia = fake_bin / "nvidia-smi"
+    nvidia.write_text("#!/bin/sh\necho '1, 2, 3, 4, 5'\n", encoding="utf-8")
+    nvidia.chmod(0o755)
+
+    outdir = tmp_path / "artifacts"
+    env = dict(os.environ)
+    env["PATH"] = f"{fake_bin}:{env['PATH']}"
+    completed = subprocess.run(
+        [
+            "bash",
+            "scripts/capture_phase_8b1_logs.sh",
+            "--duration",
+            "0.2",
+            "--outdir",
+            str(outdir),
+            "wrapper-test",
+            "backend-test",
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr + completed.stdout
+    call_text = calls.read_text(encoding="utf-8")
+    assert "logs --since" in call_text
+    assert (outdir / "wrapper-post.log").read_text(encoding="utf-8").strip() == "post wrapper-test logs"
+    assert (outdir / "backend-post.log").read_text(encoding="utf-8").strip() == "post backend-test logs"

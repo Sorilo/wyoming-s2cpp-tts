@@ -1,50 +1,200 @@
---- src/s2_server.cpp.bak	2026-07-08 21:02:52.050752883 -0400
-+++ src/s2_server.cpp	2026-07-08 21:03:15.839520999 -0400
-@@ -297,6 +297,11 @@
+diff --git include/s2_pipeline.h include/s2_pipeline.h
+index 19b3c3d..2b690e1 100644
+--- include/s2_pipeline.h
++++ include/s2_pipeline.h
+@@ -22,6 +22,17 @@ public:
+     virtual void on_done() = 0;
+     virtual void on_error(const std::string& message) = 0;
+     virtual bool is_cancelled() const { return false; }
++    virtual void on_generation_cancelled(int32_t total_frames, int32_t frame_index) {
++        (void)total_frames;
++        (void)frame_index;
++    }
++    virtual void on_stream_decode(int32_t decoded_frames, size_t pcm_samples) {
++        (void)decoded_frames;
++        (void)pcm_samples;
++    }
++    virtual void on_final_decode_skipped(int32_t generated_frames) {
++        (void)generated_frames;
++    }
+ };
+
+ struct PipelineParams {
+diff --git src/s2_pipeline.cpp src/s2_pipeline.cpp
+index 0dd5f01..af6b33f 100644
+--- src/s2_pipeline.cpp
++++ src/s2_pipeline.cpp
+@@ -1028,6 +1028,7 @@ bool Pipeline::synthesize_streaming_prompt_codes_locked(const PipelineParams & p
+             stream_aborted = true;
+             return false;
+         }
++        sink.on_stream_decode(total_frames, delta_count);
+         emitted_samples += delta_count;
+         return true;
+     };
+@@ -1101,6 +1102,7 @@ bool Pipeline::synthesize_streaming_prompt_codes_locked(const PipelineParams & p
+     gen_params.on_frame = [&](const FrameCallbackData & fcd) -> bool {
+         if (sink.is_cancelled()) {
+             stream_aborted = true;
++            sink.on_generation_cancelled(fcd.total_frames, fcd.frame_index);
+             return false;
+         }
+
+@@ -1130,6 +1132,10 @@ bool Pipeline::synthesize_streaming_prompt_codes_locked(const PipelineParams & p
+     }
+
+     if (stream_failed || stream_aborted) {
++        if (stream_aborted) {
++            sink.on_final_decode_skipped(res.n_frames);
++            sink.on_done();
++        }
+         model().clear_kv_cache();
+         return false;
+     }
+diff --git src/s2_server.cpp src/s2_server.cpp
+index 08fea2d..c2255a7 100644
+--- src/s2_server.cpp
++++ src/s2_server.cpp
+@@ -297,6 +297,47 @@ struct StreamContext {
      bool error = false;
      std::string error_message;
      std::atomic<bool> cancelled{false};
++    std::atomic<bool> cancel_recorded{false};
 +    std::string cancel_reason;
-+    std::chrono::steady_clock::time_point cancel_time;
-+    std::chrono::steady_clock::time_point request_start;
-+    int32_t generated_frames = 0;
-+    size_t pcm_bytes_produced = 0;
++    std::string cancel_detection_point;
++    std::chrono::steady_clock::time_point cancel_time{};
++    std::chrono::steady_clock::time_point generation_cancel_time{};
++    std::chrono::steady_clock::time_point request_start{};
++    std::atomic<int32_t> generated_frames{0};
++    std::atomic<int32_t> last_frame_index{-1};
++    std::atomic<int32_t> decoded_frames{0};
++    std::atomic<size_t> pcm_bytes_produced{0};
++
++    bool mark_cancelled(const std::string& reason, const std::string& detection_point) {
++        const auto now = std::chrono::steady_clock::now();
++        bool expected = false;
++        if (cancel_recorded.compare_exchange_strong(expected, true)) {
++            {
++                std::lock_guard<std::mutex> lock(mtx);
++                cancel_reason = reason;
++                cancel_detection_point = detection_point;
++                cancel_time = now;
++            }
++            cancelled.store(true);
++            cv.notify_all();
++            S2_LOG_INFO_STREAM("[CANCEL] backend_cancel_detected"
++                << " reason=" << reason
++                << " point=" << detection_point
++                << std::endl);
++            return true;
++        }
++        cancelled.store(true);
++        cv.notify_all();
++        return false;
++    }
++
++    long long detection_elapsed_ms(std::chrono::steady_clock::time_point when) const {
++        if (!cancel_recorded.load()) {
++            return -1;
++        }
++        return std::chrono::duration_cast<std::chrono::milliseconds>(
++            when - cancel_time).count();
++    }
  };
- 
+
  class BufferedAudioSink : public s2::StreamingSink {
-@@ -813,6 +818,9 @@
+@@ -379,9 +420,13 @@ public:
+     }
+
+     bool on_pcm_data(const float* data, size_t n_samples) override {
+-        if (ctx_->cancelled.load()) return false;
++        if (ctx_->cancelled.load()) {
++            ctx_->mark_cancelled("client_disconnect", "http_sink_on_pcm_after_cancel");
++            return false;
++        }
+         const std::vector<int16_t> pcm16 = s2::audio_to_pcm16(data, n_samples);
+         const size_t byte_count = pcm16.size() * sizeof(int16_t);
++        ctx_->pcm_bytes_produced.fetch_add(byte_count);
+         std::vector<uint8_t> chunk(reinterpret_cast<const uint8_t*>(pcm16.data()),
+                                     reinterpret_cast<const uint8_t*>(pcm16.data()) + byte_count);
+         {
+@@ -410,6 +455,37 @@ public:
+         return ctx_->cancelled.load();
+     }
+
++    void on_generation_cancelled(int32_t total_frames, int32_t frame_index) override {
++        const auto now = std::chrono::steady_clock::now();
++        ctx_->generated_frames.store(total_frames);
++        ctx_->last_frame_index.store(frame_index);
++        ctx_->generation_cancel_time = now;
++        const long long elapsed = ctx_->detection_elapsed_ms(now);
++        S2_LOG_INFO_STREAM("[CANCEL] generation_cancel_observed"
++            << " reason=" << ctx_->cancel_reason
++            << " point=" << ctx_->cancel_detection_point
++            << " total_frames=" << total_frames
++            << " frame_index=" << frame_index
++            << " detection_to_generation_cancel_ms=" << elapsed
++            << std::endl);
++    }
++
++    void on_stream_decode(int32_t decoded_frames, size_t pcm_samples) override {
++        ctx_->decoded_frames.store(decoded_frames);
++        (void)pcm_samples;
++    }
++
++    void on_final_decode_skipped(int32_t generated_frames) override {
++        const auto now = std::chrono::steady_clock::now();
++        ctx_->generated_frames.store(generated_frames);
++        S2_LOG_INFO_STREAM("[CANCEL] final_decode_skipped"
++            << " reason=" << ctx_->cancel_reason
++            << " point=" << ctx_->cancel_detection_point
++            << " generated_frames=" << generated_frames
++            << " elapsed_ms=" << ctx_->detection_elapsed_ms(now)
++            << std::endl);
++    }
++
+ private:
+     std::shared_ptr<StreamContext> ctx_;
+     StreamAudioFormat format_;
+@@ -812,7 +888,7 @@ namespace s2
+                         std::unique_lock<std::mutex> lock(ctx->mtx);
                          while (ctx->chunks.empty() && !ctx->done && !ctx->error) {
                              if (!sink.is_writable()) {
-                                 ctx->cancelled.store(true);
-+                                ctx->cancel_reason = "client_disconnect_wait";
-+                                ctx->cancel_time = std::chrono::steady_clock::now();
-+                                S2_LOG_INFO_STREAM("[CANCEL] backend_cancel_detected reason=client_disconnect point=content_provider_wait" << std::endl);
+-                                ctx->cancelled.store(true);
++                                ctx->mark_cancelled("client_disconnect", "content_provider_wait");
                                  return false;
                              }
                              ctx->cv.wait_for(lock, std::chrono::milliseconds(100));
-@@ -824,6 +832,9 @@
+@@ -823,7 +899,7 @@ namespace s2
+                                ctx->queued_bytes < ctx->startup_buffer_bytes &&
                                 !ctx->done && !ctx->error) {
                              if (!sink.is_writable()) {
-                                 ctx->cancelled.store(true);
-+                                ctx->cancel_reason = "client_disconnect_startup_buffer";
-+                                ctx->cancel_time = std::chrono::steady_clock::now();
-+                                S2_LOG_INFO_STREAM("[CANCEL] backend_cancel_detected reason=client_disconnect point=startup_buffer" << std::endl);
+-                                ctx->cancelled.store(true);
++                                ctx->mark_cancelled("client_disconnect", "startup_buffer");
                                  return false;
                              }
                              ctx->cv.wait_for(lock, std::chrono::milliseconds(100));
-@@ -843,6 +854,9 @@
+@@ -842,7 +918,7 @@ namespace s2
+                             lock.unlock();
                              if (!sink.write(reinterpret_cast<const char*>(chunk.data()),
                                             chunk.size())) {
-                                 ctx->cancelled.store(true);
-+                                ctx->cancel_reason = "client_disconnect_write_failed";
-+                                ctx->cancel_time = std::chrono::steady_clock::now();
-+                                S2_LOG_INFO_STREAM("[CANCEL] backend_cancel_detected reason=client_disconnect point=sink_write" << std::endl);
+-                                ctx->cancelled.store(true);
++                                ctx->mark_cancelled("client_disconnect", "sink_write");
                                  return false;
                              }
                              lock.lock();
-@@ -870,14 +884,24 @@
+@@ -862,24 +938,44 @@ namespace s2
+                     },
+                     [ctx](bool success) {
+                         if (!success) {
+-                            ctx->cancelled.store(true);
+-                            std::lock_guard<std::mutex> lock(ctx->mtx);
+-                            ctx->cv.notify_all();
++                            ctx->mark_cancelled("client_disconnect", "content_provider_complete");
+                         }
+                     }
                  );
- 
+
                  std::thread synth_thread([pipeline, pipelineParams, ref_audio, sink, server_busy,
 -                                          segment_sentences, segmented_texts, sentence_pause_ms]() mutable {
 +                                          segment_sentences, segmented_texts, sentence_pause_ms, ctx]() mutable {
@@ -58,41 +208,28 @@
 -
 +                    }
 +                    if (ctx->cancelled.load()) {
-+                        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-+                            std::chrono::steady_clock::now() - ctx->cancel_time).count();
++                        const auto exit_time = std::chrono::steady_clock::now();
 +                        S2_LOG_INFO_STREAM("[CANCEL] backend_request_cancelled"
 +                            << " reason=" << ctx->cancel_reason
-+                            << " generated_frames=" << ctx->generated_frames
-+                            << " pcm_bytes=" << ctx->pcm_bytes_produced
-+                            << " detection_to_exit_ms=" << elapsed
++                            << " point=" << ctx->cancel_detection_point
++                            << " generated_frames=" << ctx->generated_frames.load()
++                            << " last_frame_index=" << ctx->last_frame_index.load()
++                            << " decoded_frames=" << ctx->decoded_frames.load()
++                            << " pcm_bytes_produced=" << ctx->pcm_bytes_produced.load()
++                            << " queued_pcm_bytes=" << ctx->queued_bytes
++                            << " detection_to_exit_ms=" << ctx->detection_elapsed_ms(exit_time)
 +                            << std::endl);
                      }
                      server_busy->store(false);
++                    if (ctx->cancelled.load()) {
++                        const auto cleanup_time = std::chrono::steady_clock::now();
++                        S2_LOG_INFO_STREAM("[CANCEL] backend_request_cleanup_done"
++                            << " reason=" << ctx->cancel_reason
++                            << " point=" << ctx->cancel_detection_point
++                            << " detection_to_cleanup_ms=" << ctx->detection_elapsed_ms(cleanup_time)
++                            << " server_busy=false"
++                            << std::endl);
++                    }
                  });
---- src/s2_pipeline.cpp.bak	2026-07-08 21:02:52.052752948 -0400
-+++ src/s2_pipeline.cpp	2026-07-08 21:03:28.918943314 -0400
-@@ -1101,6 +1101,10 @@
-     gen_params.on_frame = [&](const FrameCallbackData & fcd) -> bool {
-         if (sink.is_cancelled()) {
-             stream_aborted = true;
-+            S2_LOG_INFO_STREAM("[CANCEL] generation_cancel_observed"
-+                << " total_frames=" << fcd.total_frames
-+                << " frame_index=" << fcd.frame_index
-+                << std::endl);
-             return false;
-         }
- 
-@@ -1134,6 +1138,13 @@
-         return false;
-     }
- 
-+    if (stream_aborted) {
-+        // Generation was aborted by cancellation — skip final decode.
-+        model().clear_kv_cache();
-+        sink.on_done();
-+        return false;  // return false to signal cancellation (not error)
-+    }
-+
-     if (res.n_frames > last_decoded_frames || committed_frames < res.n_frames) {
-         if (!decode_window_and_emit(res.n_frames, true)) {
-             model().clear_kv_cache();
+                 {
+                     std::lock_guard<std::mutex> lock(active_threads_mtx);

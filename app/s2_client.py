@@ -141,6 +141,10 @@ class S2GenerateRequest:
     prompt_text: str = ""
     voice_dir: str = ""
     codec_decode_context_frames: int | None = None
+    low_latency: bool = True
+    stream_decode_stride_frames: int = 4
+    stream_holdback_frames: int = 0
+    stream_start_buffer_ms: int = 0
 
     @classmethod
     def from_settings(
@@ -166,6 +170,10 @@ class S2GenerateRequest:
             prompt_text=prompt_text,
             voice_dir=settings.s2_voice_dir,
             codec_decode_context_frames=settings.s2_codec_decode_context_frames,
+            low_latency=settings.s2_low_latency,
+            stream_decode_stride_frames=settings.s2_stream_decode_stride_frames,
+            stream_holdback_frames=settings.s2_stream_holdback_frames,
+            stream_start_buffer_ms=settings.s2_stream_start_buffer_ms,
         )
 
     def to_payload(self) -> dict[str, Any]:
@@ -218,8 +226,14 @@ class S2GenerateRequest:
             params["stream"] = True
             params["chunked"] = True
             params["output_format"] = "pcm_s16le"
-            params["low_latency"] = True
+            params["low_latency"] = self.low_latency
             params["segment_sentences"] = False
+            if self.stream_decode_stride_frames > 0:
+                params["stream_decode_stride_frames"] = self.stream_decode_stride_frames
+            if self.stream_holdback_frames >= 0:
+                params["stream_holdback_frames"] = self.stream_holdback_frames
+            if self.stream_start_buffer_ms >= 0:
+                params["stream_start_buffer_ms"] = self.stream_start_buffer_ms
 
         _VALID_CONTEXTS = frozenset({4, 64, 160})
         if self.codec_decode_context_frames is not None:

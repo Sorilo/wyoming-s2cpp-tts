@@ -3,6 +3,52 @@
 Run phases one at a time. This file is regenerated from the actual repository
 state after every `/goal` run. Do not copy stale assumptions forward.
 
+## Current state after Phase 11 realtime stride tuning
+
+- Repository branch: ``perf/realtime-stride-tuning``.
+- Backend image unchanged: ``ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-edf89bd``.
+- Wrapper image unchanged; rollback remains ``ghcr.io/sorilo/wyoming-s2cpp-tts:sha-9c134cc``.
+- New wrapper env vars: ``S2_STREAM_DECODE_STRIDE_FRAMES`` (1-64, default 4),
+  ``S2_STREAM_HOLDBACK_FRAMES`` (non-negative, default 0),
+  ``S2_STREAM_START_BUFFER_MS`` (non-negative, default 0),
+  ``S2_LOW_LATENCY`` (bool, default true).
+- Environment audit complete: ``S2_MAX_NEW_TOKENS``, ``S2_TEMPERATURE``,
+  ``S2_TOP_P``, ``S2_TOP_K``, ``S2_CHUNKED``, ``S2_OUTPUT_FORMAT``,
+  ``S2_MODEL``, ``S2_GPU_INDEX``, ``S2_GPU_LAYERS``, ``S2_CODEC_CPU``,
+  ``BARGE_IN_FRIENDLY``, ``CANCEL_ON_CLIENT_DISCONNECT``,
+  ``CANCEL_ON_NEW_REQUEST``, and ``MAX_QUEUE_SIZE`` are now parseable
+  from environment with strict validation.
+- All new tuning params are sent explicitly in streaming multipart requests.
+- ``backend_start`` observability includes all tuning parameters.
+- ``scripts/benchmark_realtime_tuning.py``: dry-run-safe stride-sweep harness.
+- ``scripts/run_realtime_tuning_unraid.sh``: one-command Unraid host script.
+- 80 new tests; full suite: **540/540 passing**.
+- No live RTX 3080 performance was measured. Stride 4 is a candidate only.
+
+## Next phase: live RTX 3080 benchmark and apply
+
+```text
+/goal
+
+On your Unraid host at 192.168.1.45, pull the ``perf/realtime-stride-tuning``
+branch and run the real-time tuning benchmark against the live s2.cpp backend:
+
+  bash scripts/run_realtime_tuning_unraid.sh --benchmark
+
+This will:
+1. Capture system state (git commit, image IDs, GPU info, container logs).
+2. Run a stride sweep (1, 2, 4, 8) with warm-up and measured repetitions.
+3. Save PCM artifacts and a JSON + Markdown summary.
+4. Recommend a winning candidate based on RTF (below 1.0 preferred).
+
+After listening to candidate audio, apply the winning stride:
+
+  bash scripts/run_realtime_tuning_unraid.sh --apply <STRIDE> --yes
+
+Do NOT apply any stride without listening to the candidate audio first.
+RTF alone does not guarantee audio quality.
+```
+
 ## Current state after Phase 8B2 production backend promotion
 
 - Repository branch: `main`.

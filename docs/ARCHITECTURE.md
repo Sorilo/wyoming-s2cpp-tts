@@ -73,6 +73,66 @@ Progressive backend-audio streaming is now wired (Phase 7.5A). When `S2_STREAM=t
 
 Time-to-first-audio with the real backend was previously observed at ~3.8 seconds (both first-audio and total request). Phase 7.5A does not guarantee a major latency reduction; measure live latency after deployment (Phase 7.5B).
 
+
+## Streaming decode stride tuning (Phase 11)
+
+The s2.cpp backend interprets ``low_latency=true`` as approximately
+``stream_decode_stride_frames=1`` and ``stream_holdback_frames=0``.
+With ``codec_decode_context_frames=4``, stride 1 may cause excessive
+repeated codec decoding and CUDA launch overhead on the RTX 3080.
+
+### Tuning parameters
+
+| Parameter | Env var | Default | Range | Description |
+|---|---|---|---|---|
+| Decode stride | ``S2_STREAM_DECODE_STRIDE_FRAMES`` | 4 | 1--64 | Frames decoded per streaming step |
+| Holdback | ``S2_STREAM_HOLDBACK_FRAMES`` | 0 | ≥0 | Frames held before first chunk |
+| Start buffer | ``S2_STREAM_START_BUFFER_MS`` | 0 | ≥0 | Initial buffer before streaming begins |
+| Low latency | ``S2_LOW_LATENCY`` | true | bool | Backend low-latency streaming mode |
+
+### Difference from wrapper initial buffer
+
+- **Codec context** (``codec_decode_context_frames``): how many prior frames
+  the codec re-decodes for continuity during streaming generation.
+- **Decode stride** (``stream_decode_stride_frames``): how many new frames
+  are decoded per step; higher stride reduces CUDA launch overhead.
+- **Holdback** (``stream_holdback_frames``): backend-side frame holdback
+  before first emission.
+- **Backend start buffer** (``stream_start_buffer_ms``): backend-side
+  initial accumulation before streaming begins.
+- **Wrapper initial buffer** (``S2_INITIAL_BUFFER_MS`` et al.): wrapper-side
+  PCM buffering before emitting ``AudioStart``.
+
+### Why stride 1 may be inefficient
+
+With ``low_latency=true``, the backend defaults to stride 1 — one frame per
+CUDA kernel launch.  At 44100 Hz with codec context 4, this means ~11,025
+CUDA launches per second of audio, each re-decoding 4 context frames.
+Stride 4 reduces this to ~2,756 launches (4x reduction) with the same
+context re-decode cost per stride step.
+
+⚠️ Stride 4 is a **candidate only** — real RTX 3080 benchmarks are required
+to confirm actual RTF improvement.  Streaming s2.cpp repeatedly re-decodes
+codec context and is not yet fully stateful/incremental.
+
+### Benchmarking
+
+```bash
+# On Unraid host (safe, no container changes):
+bash scripts/run_realtime_tuning_unraid.sh --benchmark
+
+# Apply a winning stride (after listening to candidate audio):
+bash scripts/run_realtime_tuning_unraid.sh --apply 4 --yes
+```
+
+### RTF interpretation
+
+| RTF | Meaning |
+|---|---|
+| < 1.0 | Faster than real time — can keep up with playback |
+| = 1.0 | Exactly real time — marginal |
+| > 1.0 | Slower than playback — will stutter |
+
 ## Voice profile boundary
 
 The pinned s2.cpp behavior to plan against is:

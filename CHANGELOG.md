@@ -2,6 +2,41 @@
 
 ## Unreleased
 
+- Phase 11: real-time stride tuning infrastructure for RTX 3080 performance
+  optimisation.  Added four new environment-backed wrapper settings:
+  ``S2_STREAM_DECODE_STRIDE_FRAMES`` (1--64, default 4),
+  ``S2_STREAM_HOLDBACK_FRAMES`` (non-negative, default 0),
+  ``S2_STREAM_START_BUFFER_MS`` (non-negative ms, default 0), and
+  ``S2_LOW_LATENCY`` (bool, default true).  All are strictly validated at
+  startup — invalid values raise clear errors rather than falling back to
+  unsafe defaults.  The ``S2GenerateRequest`` streaming multipart params
+  now explicitly include ``low_latency``, ``stream_decode_stride_frames``,
+  ``stream_holdback_frames``, and ``stream_start_buffer_ms``.  The
+  buffered generation path is unchanged.
+  Audited ``Settings.from_env()``: ``S2_MAX_NEW_TOKENS``, ``S2_TEMPERATURE``,
+  ``S2_TOP_P``, ``S2_TOP_K``, ``S2_CHUNKED``, ``S2_OUTPUT_FORMAT``,
+  ``S2_MODEL``, ``S2_GPU_INDEX``, ``S2_GPU_LAYERS``, ``S2_CODEC_CPU``,
+  ``BARGE_IN_FRIENDLY``, ``CANCEL_ON_CLIENT_DISCONNECT``,
+  ``CANCEL_ON_NEW_REQUEST``, and ``MAX_QUEUE_SIZE`` are now parseable
+  from environment variables with strict validation.
+  Extended streaming ``backend_start`` observability with all tuning
+  parameters: ``low_latency``, ``stream_decode_stride_frames``,
+  ``stream_holdback_frames``, ``stream_start_buffer_ms``,
+  ``codec_decode_context_frames``, ``segment_sentences``, and ``model``.
+  Added ``scripts/benchmark_realtime_tuning.py`` — an opt-in,
+  dry-run-safe Python benchmark harness that sweeps stride values
+  against a real s2.cpp backend, measures RTF/time-to-first-PCM/total
+  synthesis, saves PCM artifacts, and produces JSON + Markdown summaries.
+  Added ``scripts/run_realtime_tuning_unraid.sh`` — a one-command Unraid
+  host orchestration script (default: safe benchmark-only; ``--apply``
+  requires ``--yes`` with rollback support).
+  Updated Unraid wrapper template with all new tuning variables and
+  clear descriptions.  80 new tests (config validation, request contract,
+  benchmark math, dry-run safety, env audit, shell syntax).  Full suite:
+  **540/540 passing**.  No backend image change; no live RTX 3080
+  performance measurement was performed — stride 4 is a candidate only.
+
+
 - Phase 8B2 production backend promotion: promoted the Phase 8B1.1-proven
   backend cancellation patch from diagnostic image `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-b8e54f9`
   into the production backend build.  Final live retry artifacts under

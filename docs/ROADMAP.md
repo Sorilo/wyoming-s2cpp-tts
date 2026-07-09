@@ -86,6 +86,15 @@ Production backend image: `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-edf89bd`
 Rollback backend image: `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b`.
 Wrapper unchanged: `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-9c134cc`.
 
+### Phase 11: realtime stride tuning infrastructure ✅
+Implemented configurable streaming decode stride, holdback, start-buffer,
+and low-latency settings with strict validation, explicit multipart
+request parameters, enhanced observability, an opt-in Python benchmark
+harness, and a one-command Unraid orchestration script. 80 new tests,
+540/540 passing. No backend image change; no live RTX 3080 performance
+was measured — stride 4 is a candidate only. See ``CHANGELOG.md`` and
+``scripts/benchmark_realtime_tuning.py`` for the benchmark workflow.
+
 ### Phase 9: queue, busy handling, and timeout policy
 Define queue capacity behavior, busy responses, backend HTTP 503 handling, queue wait timeout, synthesis timeout, and controlled Wyoming failure behavior.
 

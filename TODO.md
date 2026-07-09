@@ -125,6 +125,18 @@
 - Diagnostic test: backend GPU inference continues after HTTP close (no s2.cpp cancellation API).
 - Wrapper image to be published.
 
+
+## Phase 8B0 results
+
+- Backend ALREADY has cooperative cancellation mechanism: StreamContext::cancelled checked at frame boundaries.
+- Disconnect detected by content provider (is_writable/sink.write failure) → cancelled=true.
+- Synthesizer's on_frame checks is_cancelled() → aborts generate() within ~45ms.
+- Skip final batch decode when generation was aborted (avoids expensive codec work).
+- Added observability events: backend_cancel_detected, generation_cancel_observed, backend_request_cancelled.
+- Diagnostic backend image: ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-29a5a2c
+- Expected disconnect-to-stop latency: ~145ms (100ms cv wait + 45ms frame).
+- Wrapper tests: 407/407 passing. Backend unchanged except instrumentation patch.
+
 ## Approved remaining v0.1 phases
 
 21. ~~Phase 7.5: wire true progressive backend HTTP audio streaming into the production Wyoming event handler when `S2_STREAM=true`~~ ✅ Phase 7.5A complete

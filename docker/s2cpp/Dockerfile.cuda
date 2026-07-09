@@ -51,7 +51,7 @@ RUN git clone --recurse-submodules "${S2CPP_REPO}" . \
 
 # Phase 8B0: apply cancellation observability instrumentation
 COPY docker/s2cpp/patches/cancellation-observability.patch /tmp/
-RUN cd /src && patch -p1 < /tmp/cancellation-observability.patch
+RUN cd /src && patch -p0 < /tmp/cancellation-observability.patch
 
 # ------------------------------------------------------------------
 # CUDA driver stub setup for GPU-less build runners.

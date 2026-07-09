@@ -306,3 +306,12 @@ def test_workflow_no_gpu_required() -> None:
     assert "runs-on: ubuntu-24.04" in content or "runs-on: ubuntu-latest" in content, (
         "Workflow runs on CPU-only runner"
     )
+
+def test_backend_image_labels_are_production_ready() -> None:
+    text = DOCKERFILE.read_text(encoding="utf-8")
+
+    assert 'org.opencontainers.image.version="0.1.0-alpha"' in text
+    assert 'wyoming-s2cpp-tts.role="backend-only"' in text
+    assert 'wyoming-s2cpp-tts.phase="8B2-production-cancellation"' in text
+    assert "diagnostic" not in text.lower()
+

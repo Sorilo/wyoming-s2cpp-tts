@@ -1,6 +1,6 @@
-"""Static tests for the diagnostic backend cancellation observability patch.
+"""Static tests for the backend cancellation observability patch.
 
-The repository builds the diagnostic backend by applying
+The repository builds the backend by applying
 ``docker/s2cpp/patches/cancellation-observability.patch`` to the pinned upstream
 s2.cpp source. These tests validate the patch-level contract without requiring a
 CUDA backend build in unit tests.

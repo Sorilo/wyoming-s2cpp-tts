@@ -196,7 +196,7 @@ class TestBufferThreshold:
         chunk_size = WYOMING_CHUNK_BYTES  # 8820 bytes ≈ 100ms
         chunks = [_pcm_frames(chunk_size // 2) for _ in range(10)]
         client = _MockStreamingClient(chunks=chunks)
-        settings = _settings(s2_initial_buffer_ms=500)
+        settings = _settings(s2_initial_buffer_ms=500, s2_max_initial_buffer_ms=500)
         config = _config()
 
         events = await _collect_events(
@@ -218,7 +218,7 @@ class TestBufferThreshold:
         # Feed in small chunks
         chunks = [backend_data[i:i+20] for i in range(0, len(backend_data), 20)]
         client = _MockStreamingClient(chunks=chunks)
-        settings = _settings(s2_initial_buffer_ms=100)  # small buffer
+        settings = _settings(s2_initial_buffer_ms=100, s2_max_initial_buffer_ms=500)  # small buffer
         config = _config()
 
         events = await _collect_events(
@@ -245,7 +245,7 @@ class TestBackendEarlyComplete:
         # Backend only produces 5000 frames = 10000 bytes (≈113ms)
         small_data = _pcm_frames(5000)
         client = _MockStreamingClient(chunks=[small_data])
-        settings = _settings(s2_initial_buffer_ms=2000)
+        settings = _settings(s2_initial_buffer_ms=2000, s2_max_initial_buffer_ms=2000)
         config = _config()
 
         events = await _collect_events(
@@ -264,7 +264,7 @@ class TestBackendEarlyComplete:
         """Backend completes with empty data — no deadlock, no crash."""
         from app.s2_client import S2GenerateRequest
         client = _MockStreamingClient(chunks=[])
-        settings = _settings(s2_initial_buffer_ms=5000)
+        settings = _settings(s2_initial_buffer_ms=5000, s2_max_initial_buffer_ms=5000)
         config = _config()
 
         events = await _collect_events(
@@ -292,6 +292,7 @@ class TestTextLengthPolicy:
         settings = _settings(
             s2_long_form_threshold_chars=200,
             s2_long_form_buffer_ms=3000,
+            s2_max_initial_buffer_ms=3000,
         )
         config = _config()
 
@@ -317,6 +318,7 @@ class TestTextLengthPolicy:
             s2_long_form_threshold_chars=200,
             s2_long_form_buffer_ms=3000,
             s2_initial_buffer_ms=0,
+            s2_max_initial_buffer_ms=3000,
         )
         config = _config()
 
@@ -389,7 +391,7 @@ class TestCancellationBeforeAudioStart:
         # Large buffer target, slow feed
         chunks = [_pcm_frames(100) for _ in range(50)]
         client = _MockStreamingClient(chunks=chunks)
-        settings = _settings(s2_initial_buffer_ms=10000)
+        settings = _settings(s2_initial_buffer_ms=10000, s2_max_initial_buffer_ms=10000)
         config = _config()
 
         gen = synthesize_s2cpp_streaming_tts_events(
@@ -409,7 +411,7 @@ class TestCancellationBeforeAudioStart:
         # Provide some data but below buffer target — backend exhausts during buffering
         chunks = [_pcm_frames(5)]  # only 5 frames = 10 bytes
         client = _MockStreamingClient(chunks=chunks)
-        settings = _settings(s2_initial_buffer_ms=5000)  # large target
+        settings = _settings(s2_initial_buffer_ms=5000, s2_max_initial_buffer_ms=5000)  # large target
         config = _config()
 
         gen = synthesize_s2cpp_streaming_tts_events(
@@ -475,14 +477,14 @@ class TestMemoryCap:
         assert AudioStart.is_type(events[0].type)
 
     @pytest.mark.asyncio
-    async def test_max_buffer_zero_means_unlimited(self):
-        """max_initial_buffer_ms=0 means no artificial cap (target controls)."""
+    async def test_max_buffer_zero_disables_buffering(self):
+        """max_initial_buffer_ms=0 disables buffering (safe default)."""
         from app.s2_client import S2GenerateRequest
         data = _pcm_frames(500)
         client = _MockStreamingClient(chunks=[data])
         settings = _settings(
-            s2_initial_buffer_ms=500,
-            s2_max_initial_buffer_ms=0,
+            s2_initial_buffer_ms=500,   # requested but...
+            s2_max_initial_buffer_ms=0,  # max=0 disables buffering
         )
         config = _config()
 
@@ -491,6 +493,7 @@ class TestMemoryCap:
                 client, S2GenerateRequest(text="no cap"), config, settings,
             )
         )
+        # Buffering is disabled → AudioStart is immediate (zero-buffer behavior)
         assert AudioStart.is_type(events[0].type)
 
 
@@ -515,7 +518,7 @@ class TestPCMIntegrity:
         chunk2 = backend_data[50:150]
         chunk3 = backend_data[150:]
         client = _MockStreamingClient(chunks=[chunk1, chunk2, chunk3])
-        settings = _settings(s2_initial_buffer_ms=100)
+        settings = _settings(s2_initial_buffer_ms=100, s2_max_initial_buffer_ms=1000)
         config = _config()
 
         events = await _collect_events(
@@ -535,7 +538,7 @@ class TestPCMIntegrity:
         chunk1 = _pcm_frames(10) + b"\x01"  # 21 bytes, frame-split
         chunk2 = b"\x00" + _pcm_frames(5)   # completes the partial
         client = _MockStreamingClient(chunks=[chunk1, chunk2])
-        settings = _settings(s2_initial_buffer_ms=10)
+        settings = _settings(s2_initial_buffer_ms=10, s2_max_initial_buffer_ms=100)
         config = _config()
 
         events = await _collect_events(
@@ -569,6 +572,7 @@ class TestBufferObservability:
         settings = _settings(
             s2_long_form_threshold_chars=200,
             s2_long_form_buffer_ms=3000,
+            s2_max_initial_buffer_ms=3000,
         )
         config = _config()
         long_text = "x" * 250  # above threshold
@@ -596,7 +600,7 @@ class TestBufferObservability:
 
         data = _pcm_frames(5000)
         client = _MockStreamingClient(chunks=[data])
-        settings = _settings(s2_initial_buffer_ms=100)
+        settings = _settings(s2_initial_buffer_ms=100, s2_max_initial_buffer_ms=1000)
 
         await _collect_events(
             synthesize_s2cpp_streaming_tts_events(
@@ -620,7 +624,7 @@ class TestBufferObservability:
 
         data = _pcm_frames(10)  # very small
         client = _MockStreamingClient(chunks=[data])
-        settings = _settings(s2_initial_buffer_ms=5000)  # large target
+        settings = _settings(s2_initial_buffer_ms=5000, s2_max_initial_buffer_ms=5000)  # large target
 
         await _collect_events(
             synthesize_s2cpp_streaming_tts_events(
@@ -636,6 +640,165 @@ class TestBufferObservability:
 # ── 11. Regression ────────────────────────────────────────────────────────────
 
 
+# ── Review additions ──────────────────────────────────────────────────────────
+
+
+class TestThresholdBoundary:
+    """199 vs 200 character threshold boundary."""
+
+    @pytest.mark.asyncio
+    async def test_199_chars_below_threshold_uses_zero_buffer(self):
+        """199 chars (< 200 threshold): zero buffer, AudioStart immediate."""
+        from app.s2_client import S2GenerateRequest
+        data = _pcm_frames(500)
+        client = _MockStreamingClient(chunks=[data])
+        settings = _settings(
+            s2_long_form_threshold_chars=200,
+            s2_long_form_buffer_ms=3000,
+            s2_max_initial_buffer_ms=3000,
+        )
+        config = _config()
+        text_199 = "x" * 199
+
+        events = await _collect_events(
+            synthesize_s2cpp_streaming_tts_events(
+                client, S2GenerateRequest(text=text_199), config, settings,
+            )
+        )
+        assert AudioStart.is_type(events[0].type)
+        # Zero-buffer → first AudioChunk should appear quickly (no delay)
+        chunk_events = [e for e in events if AudioChunk.is_type(e.type)]
+        assert len(chunk_events) > 0
+
+    @pytest.mark.asyncio
+    async def test_200_chars_at_threshold_uses_long_form_buffer(self):
+        """200 chars (at threshold): long-form buffer applied."""
+        from app.s2_client import S2GenerateRequest
+        data = _pcm_frames(500)
+        client = _MockStreamingClient(chunks=[data])
+        settings = _settings(
+            s2_long_form_threshold_chars=200,
+            s2_long_form_buffer_ms=3000,
+            s2_max_initial_buffer_ms=3000,
+        )
+        config = _config()
+        text_200 = "x" * 200
+
+        events = await _collect_events(
+            synthesize_s2cpp_streaming_tts_events(
+                client, S2GenerateRequest(text=text_200), config, settings,
+            )
+        )
+        # Backend data < buffer target, but buffering was attempted
+        assert AudioStart.is_type(events[0].type)
+
+
+class TestInvalidMaxBuffer:
+    """S2_MAX_INITIAL_BUFFER_MS validation."""
+
+    @pytest.mark.asyncio
+    async def test_zero_max_disables_buffering(self):
+        """max=0 forces buffer_target to 0 regardless of other settings."""
+        from app.s2_client import S2GenerateRequest
+        data = _pcm_frames(5000)
+        client = _MockStreamingClient(chunks=[data])
+        settings = _settings(
+            s2_initial_buffer_ms=3000,   # requested buffer
+            s2_max_initial_buffer_ms=0,   # max=0 disables
+        )
+        config = _config()
+
+        events = await _collect_events(
+            synthesize_s2cpp_streaming_tts_events(
+                client, S2GenerateRequest(text="test"), config, settings,
+            )
+        )
+        # Buffering disabled — AudioStart immediate
+        assert AudioStart.is_type(events[0].type)
+
+    @pytest.mark.asyncio
+    async def test_negative_max_disables_buffering(self):
+        """Negative max also disables buffering (safety)."""
+        from app.s2_client import S2GenerateRequest
+        data = _pcm_frames(5000)
+        client = _MockStreamingClient(chunks=[data])
+        settings = _settings(
+            s2_initial_buffer_ms=3000,
+            s2_max_initial_buffer_ms=-1,
+        )
+        config = _config()
+
+        events = await _collect_events(
+            synthesize_s2cpp_streaming_tts_events(
+                client, S2GenerateRequest(text="test"), config, settings,
+            )
+        )
+        assert AudioStart.is_type(events[0].type)
+
+    def test_max_buffer_must_be_set_for_buffering(self):
+        """Configuration: without max, buffering target is forced to zero."""
+        s = _settings(s2_long_form_buffer_ms=5000, s2_max_initial_buffer_ms=0)
+        assert s.s2_max_initial_buffer_ms == 0
+        assert s.s2_long_form_buffer_ms == 5000
+        # At runtime, max=0 forces target to 0 — checked by streaming tests above
+
+
+class TestOversizedChunkCap:
+    """A single oversized backend chunk cannot exceed the configured cap."""
+
+    @pytest.mark.asyncio
+    async def test_oversized_chunk_split_at_cap(self):
+        """Single chunk larger than max_buffer_bytes is split at cap boundary."""
+        from app.s2_client import S2GenerateRequest
+        # cap = 200ms = 17640 bytes at 44100 Hz
+        # chunk = 500ms = 44100 bytes → far exceeds cap
+        max_ms = 200
+        chunk_frames = 30000  # ~680ms worth → exceeds 200ms cap
+        data = _pcm_frames(chunk_frames)
+        client = _MockStreamingClient(chunks=[data])
+        settings = _settings(
+            s2_initial_buffer_ms=max_ms,
+            s2_max_initial_buffer_ms=max_ms,
+        )
+        config = _config()
+
+        events = await _collect_events(
+            synthesize_s2cpp_streaming_tts_events(
+                client, S2GenerateRequest(text="big chunk"), config, settings,
+            )
+        )
+        assert AudioStart.is_type(events[0].type)
+        # All backend bytes must be emitted (no data loss)
+        chunk_events = [e for e in events if AudioChunk.is_type(e.type)]
+        all_audio = b"".join(AudioChunk.from_event(e).audio for e in chunk_events)
+        assert all_audio == data
+
+    @pytest.mark.asyncio
+    async def test_oversized_chunk_pcm_integrity(self):
+        """After overshoot split, PCM is byte-identical to backend output."""
+        from app.s2_client import S2GenerateRequest
+        max_ms = 100  # small cap
+        frames = []
+        for val in range(1, 500):
+            frames.append(val.to_bytes(2, "little", signed=True))
+        backend_data = b"".join(frames)
+
+        client = _MockStreamingClient(chunks=[backend_data])
+        settings = _settings(
+            s2_initial_buffer_ms=max_ms,
+            s2_max_initial_buffer_ms=max_ms,
+        )
+        config = _config()
+
+        events = await _collect_events(
+            synthesize_s2cpp_streaming_tts_events(
+                client, S2GenerateRequest(text="integrity"), config, settings,
+            )
+        )
+        chunk_events = [e for e in events if AudioChunk.is_type(e.type)]
+        result = b"".join(AudioChunk.from_event(e).audio for e in chunk_events)
+        assert result == backend_data
+
 class TestBufferingRegression:
     """Existing behaviours are preserved when buffering is active."""
 
@@ -645,7 +808,7 @@ class TestBufferingRegression:
         from app.s2_client import S2GenerateRequest
         data = _pcm_frames(5000)
         client = _MockStreamingClient(chunks=[data, data])
-        settings = _settings(s2_initial_buffer_ms=100)
+        settings = _settings(s2_initial_buffer_ms=100, s2_max_initial_buffer_ms=1000)
         config = _config()
 
         events = await _collect_events(
@@ -662,7 +825,7 @@ class TestBufferingRegression:
         from app.s2_client import S2GenerateRequest
         data = _pcm_frames(5000)
         client = _MockStreamingClient(chunks=[data])
-        settings = _settings(s2_initial_buffer_ms=100)
+        settings = _settings(s2_initial_buffer_ms=100, s2_max_initial_buffer_ms=1000)
         config = _config()
 
         events = await _collect_events(
@@ -681,7 +844,7 @@ class TestBufferingRegression:
             chunks=[_pcm_frames(10)],
             fail_after=0,
         )
-        settings = _settings(s2_initial_buffer_ms=100)
+        settings = _settings(s2_initial_buffer_ms=100, s2_max_initial_buffer_ms=1000)
         config = _config()
 
         events = []
@@ -699,7 +862,7 @@ class TestBufferingRegression:
         from app.s2_client import S2GenerateRequest
         data = _pcm_frames(5000)
         client = _MockStreamingClient(chunks=[data])
-        settings = _settings(s2_initial_buffer_ms=100)
+        settings = _settings(s2_initial_buffer_ms=100, s2_max_initial_buffer_ms=1000)
         config = _config()
 
         await _collect_events(

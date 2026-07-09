@@ -494,16 +494,24 @@ async def synthesize_s2cpp_streaming_tts_events(
                 buffer_target_ms = settings.s2_initial_buffer_ms
 
             max_buffer_ms = settings.s2_max_initial_buffer_ms
-            if max_buffer_ms > 0 and buffer_target_ms > max_buffer_ms:
+            if max_buffer_ms <= 0:
+                # Zero/negative max: buffering disabled (safe default)
+                buffer_target_ms = 0
+                buffer_target_bytes = 0
+            elif buffer_target_ms > max_buffer_ms:
                 buffer_target_ms = max_buffer_ms
 
-            buffer_target_bytes = int(buffer_target_ms * bytes_per_ms)
-            if buffer_target_bytes % frame_size != 0:
-                buffer_target_bytes -= buffer_target_bytes % frame_size
+            if buffer_target_ms > 0:
+                buffer_target_bytes = int(buffer_target_ms * bytes_per_ms)
+                if buffer_target_bytes % frame_size != 0:
+                    buffer_target_bytes -= buffer_target_bytes % frame_size
+            else:
+                buffer_target_bytes = 0
 
             max_buffer_bytes = int(max_buffer_ms * bytes_per_ms) if max_buffer_ms > 0 else 0
-            if max_buffer_bytes > 0 and max_buffer_bytes % frame_size != 0:
-                max_buffer_bytes -= max_buffer_bytes % frame_size
+            if max_buffer_bytes > 0:
+                if max_buffer_bytes % frame_size != 0:
+                    max_buffer_bytes -= max_buffer_bytes % frame_size
 
             obs_log("buffer_policy",
                     connection_id=_ctx.connection_id,
@@ -520,8 +528,23 @@ async def synthesize_s2cpp_streaming_tts_events(
             backend_completed_before_buffer_target = False
             audio_start_emitted = False
 
+            buffering_elapsed_ms = 0  # set when AudioStart is emitted
+            carryover = b""          # excess bytes from oversized chunk (Fix 4)
+
             if buffer_target_bytes <= 0:
                 # Zero-buffer: emit AudioStart immediately (preserves current behavior)
+                buffering_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
+                obs_log("playback_emission_started",
+                        connection_id=_ctx.connection_id,
+                        synthesis_id=_ctx.synthesis_id,
+                        text_fp=fp,
+                        buffer_policy=buffer_policy,
+                        buffering_elapsed_ms=buffering_elapsed_ms,
+                        initial_buffer_target_ms=buffer_target_ms,
+                        initial_buffer_target_bytes=buffer_target_bytes,
+                        initial_buffered_audio_ms=0,
+                        backend_completed_before_buffer_target=False)
+
                 yield AudioStart(
                     rate=audio_config.sample_rate,
                     width=audio_config.width,
@@ -549,14 +572,25 @@ async def synthesize_s2cpp_streaming_tts_events(
                                 text_fp=fp,
                                 elapsed_ms=first_audio_elapsed_ms)
 
-                    buffered_pcm.extend(chunk)
+                    # ── Fix 4: bound oversized chunk at frame-aligned cap ──
+                    space_left = max_buffer_bytes - len(buffered_pcm)
+                    if len(chunk) > space_left:
+                        # Chunk would exceed cap — take only what fits (frame-aligned)
+                        take = space_left - (space_left % frame_size) if space_left % frame_size != 0 else space_left
+                        if take > 0:
+                            buffered_pcm.extend(chunk[:take])
+                        carryover = chunk[take:]
+                        break
+                    else:
+                        buffered_pcm.extend(chunk)
 
-                    if max_buffer_bytes > 0 and len(buffered_pcm) >= max_buffer_bytes:
+                    if len(buffered_pcm) >= max_buffer_bytes:
                         break
                     if len(buffered_pcm) >= buffer_target_bytes:
                         break
 
                 if len(buffered_pcm) > 0:
+                    buffering_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
                     buffered_audio_ms = int(len(buffered_pcm) * 1000 / (audio_config.sample_rate * frame_size))
                     obs_log("initial_buffer_ready",
                             connection_id=_ctx.connection_id,
@@ -565,7 +599,19 @@ async def synthesize_s2cpp_streaming_tts_events(
                             initial_buffered_pcm_bytes=len(buffered_pcm),
                             initial_buffered_audio_ms=buffered_audio_ms,
                             initial_buffer_target_ms=buffer_target_ms,
-                            max_buffer_reached=(max_buffer_bytes > 0 and len(buffered_pcm) >= max_buffer_bytes),
+                            initial_buffer_target_bytes=buffer_target_bytes,
+                            max_buffer_reached=(len(buffered_pcm) >= max_buffer_bytes),
+                            backend_completed_before_buffer_target=backend_completed_before_buffer_target)
+
+                    obs_log("playback_emission_started",
+                            connection_id=_ctx.connection_id,
+                            synthesis_id=_ctx.synthesis_id,
+                            text_fp=fp,
+                            buffer_policy=buffer_policy,
+                            buffering_elapsed_ms=buffering_elapsed_ms,
+                            initial_buffer_target_ms=buffer_target_ms,
+                            initial_buffer_target_bytes=buffer_target_bytes,
+                            initial_buffered_audio_ms=buffered_audio_ms,
                             backend_completed_before_buffer_target=backend_completed_before_buffer_target)
 
                     yield AudioStart(
@@ -599,6 +645,30 @@ async def synthesize_s2cpp_streaming_tts_events(
                     buffered_pcm = bytearray()
 
             # ── Progressive streaming phase ──────────────────────────────
+            if carryover and not backend_completed_before_buffer_target:
+                # Process excess from oversized buffered chunk
+                for audio_bytes, timestamp_ms in rechunker.feed(carryover):
+                    metrics.record_first_audio_chunk()
+                    if not first_audio_emitted:
+                        first_audio_emitted = True
+                        wyoming_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
+                        obs_log("first_wyoming_audio",
+                                connection_id=_ctx.connection_id,
+                                synthesis_id=_ctx.synthesis_id,
+                                text_fp=fp,
+                                elapsed_ms=wyoming_elapsed_ms,
+                                time_to_first_backend_audio_ms=first_audio_elapsed_ms if backend_data_observed else 0,
+                                wrapper_first_audio_forwarding_overhead_ms=wyoming_elapsed_ms - first_audio_elapsed_ms if backend_data_observed else 0)
+                    yield AudioChunk(
+                        rate=audio_config.sample_rate,
+                        width=audio_config.width,
+                        channels=audio_config.channels,
+                        audio=audio_bytes,
+                        timestamp=timestamp_ms,
+                    ).event()
+                    metrics.record_emitted_chunk(len(audio_bytes))
+                carryover = b""
+
             if not backend_completed_before_buffer_target:
                 while True:
                     try:
@@ -669,13 +739,6 @@ async def synthesize_s2cpp_streaming_tts_events(
                         rechunker.cumulative_frames * 1000 / audio_config.sample_rate
                     )
                 ).event()
-
-                obs_log("playback_emission_started",
-                        connection_id=_ctx.connection_id,
-                        synthesis_id=_ctx.synthesis_id,
-                        text_fp=fp,
-                        buffer_policy=buffer_policy,
-                        backend_completed_before_buffer_target=backend_completed_before_buffer_target)
 
             total_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
             obs_log("backend_stream_done",

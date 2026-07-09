@@ -16,6 +16,7 @@ from wyoming.audio import AudioChunk, AudioStart, AudioStop
 
 from app.audio import StreamingPCMRechunker
 from app.s2_client import S2ClientError
+from app.config import Settings
 from app.wyoming_server import (
     FakeTtsConfig,
     synthesize_s2cpp_streaming_tts_events,
@@ -285,7 +286,7 @@ class TestStreamingWyomingEvents:
         request = S2GenerateRequest(text="test")
 
         events = await _collect_events(
-            synthesize_s2cpp_streaming_tts_events(client, request, config)
+            synthesize_s2cpp_streaming_tts_events(client, request, config, Settings())
         )
 
         assert AudioStart.is_type(events[0].type)
@@ -308,7 +309,7 @@ class TestStreamingWyomingEvents:
 
         events = await _collect_events(
             synthesize_s2cpp_streaming_tts_events(
-                client, S2GenerateRequest(text="test"), config
+                client, S2GenerateRequest(text="test"), config, Settings()
             )
         )
 
@@ -332,7 +333,7 @@ class TestStreamingWyomingEvents:
 
         events = await _collect_events(
             synthesize_s2cpp_streaming_tts_events(
-                client, S2GenerateRequest(text="test"), config
+                client, S2GenerateRequest(text="test"), config, Settings()
             )
         )
 
@@ -363,7 +364,7 @@ class TestStreamingWyomingEvents:
 
         events = await _collect_events(
             synthesize_s2cpp_streaming_tts_events(
-                client, S2GenerateRequest(text="test"), config
+                client, S2GenerateRequest(text="test"), config, Settings()
             )
         )
 
@@ -389,7 +390,7 @@ class TestStreamingWyomingEvents:
 
         events = await _collect_events(
             synthesize_s2cpp_streaming_tts_events(
-                client, S2GenerateRequest(text="test"), config
+                client, S2GenerateRequest(text="test"), config, Settings()
             )
         )
 
@@ -416,7 +417,7 @@ class TestStreamingWyomingEvents:
 
         events = await _collect_events(
             synthesize_s2cpp_streaming_tts_events(
-                client, S2GenerateRequest(text="test"), config
+                client, S2GenerateRequest(text="test"), config, Settings()
             )
         )
 
@@ -441,7 +442,7 @@ class TestStreamingWyomingEvents:
 
         events = await _collect_events(
             synthesize_s2cpp_streaming_tts_events(
-                client, S2GenerateRequest(text="test"), config
+                client, S2GenerateRequest(text="test"), config, Settings()
             )
         )
 
@@ -463,7 +464,7 @@ class TestStreamingWyomingEvents:
 
         events = await _collect_events(
             synthesize_s2cpp_streaming_tts_events(
-                client, S2GenerateRequest(text="test"), config
+                client, S2GenerateRequest(text="test"), config, Settings()
             )
         )
 
@@ -489,7 +490,7 @@ class TestStreamingWyomingEvents:
 
         events = await _collect_events(
             synthesize_s2cpp_streaming_tts_events(
-                client, S2GenerateRequest(text="test"), config
+                client, S2GenerateRequest(text="test"), config, Settings()
             )
         )
 
@@ -521,7 +522,7 @@ class TestStreamingWyomingEvents:
 
         events = await _collect_events(
             synthesize_s2cpp_streaming_tts_events(
-                client, S2GenerateRequest(text="test"), config
+                client, S2GenerateRequest(text="test"), config, Settings()
             )
         )
 
@@ -548,7 +549,7 @@ class TestStreamingWyomingEvents:
         events = []
         with pytest.raises(ValueError, match="Final incomplete PCM frame"):
             async for event in synthesize_s2cpp_streaming_tts_events(
-                client, S2GenerateRequest(text="test"), config
+                client, S2GenerateRequest(text="test"), config, Settings()
             ):
                 events.append(event)
 
@@ -572,7 +573,7 @@ class TestStreamingWyomingEvents:
         events = []
         with pytest.raises(S2ClientError, match="simulated backend read failure"):
             async for event in synthesize_s2cpp_streaming_tts_events(
-                client, S2GenerateRequest(text="test"), config
+                client, S2GenerateRequest(text="test"), config, Settings()
             ):
                 events.append(event)
 
@@ -592,7 +593,7 @@ class TestStreamingWyomingEvents:
         with pytest.raises(S2ClientError):
             await _collect_events(
                 synthesize_s2cpp_streaming_tts_events(
-                    client, S2GenerateRequest(text="test"), config
+                    client, S2GenerateRequest(text="test"), config, Settings()
                 )
             )
 
@@ -605,7 +606,7 @@ class TestStreamingWyomingEvents:
 
         await _collect_events(
             synthesize_s2cpp_streaming_tts_events(
-                client, S2GenerateRequest(text="test"), config
+                client, S2GenerateRequest(text="test"), config, Settings()
             )
         )
 
@@ -621,7 +622,7 @@ class TestStreamingWyomingEvents:
         from app.s2_client import S2GenerateRequest
 
         gen = synthesize_s2cpp_streaming_tts_events(
-            client, S2GenerateRequest(text="test"), config
+            client, S2GenerateRequest(text="test"), config, Settings()
         )
         # Consume just a few events, then close
         async for event in gen:
@@ -647,7 +648,7 @@ class TestStreamingWyomingEvents:
 
         await _collect_events(
             synthesize_s2cpp_streaming_tts_events(
-                client, S2GenerateRequest(text="test"), config
+                client, S2GenerateRequest(text="test"), config, Settings()
             )
         )
 
@@ -675,7 +676,7 @@ class TestStreamingWyomingEvents:
         from app.s2_client import S2GenerateRequest
 
         gen = synthesize_s2cpp_streaming_tts_events(
-            client, S2GenerateRequest(text="test"), config
+            client, S2GenerateRequest(text="test"), config, Settings()
         )
         events = []
         event_count = 0
@@ -704,7 +705,7 @@ class TestStreamingWyomingEvents:
 
         events = await _collect_events(
             synthesize_s2cpp_streaming_tts_events(
-                client, S2GenerateRequest(text="test"), config
+                client, S2GenerateRequest(text="test"), config, Settings()
             )
         )
 
@@ -772,7 +773,7 @@ async def test_real_contract_streaming_pcm_sets_wyoming_metadata_and_preserves_p
     config = FakeTtsConfig(sample_rate=22050, chunk_ms=100)
 
     gen = synthesize_s2cpp_streaming_tts_events(
-        client, S2GenerateRequest(text="real stream"), config
+        client, S2GenerateRequest(text="real stream"), config, Settings()
     )
 
     start = await anext(gen)
@@ -808,7 +809,7 @@ async def test_streaming_pcm_missing_metadata_is_rejected_before_audio_start():
     with pytest.raises(ValueError, match="missing PCM metadata"):
         await _collect_events(
             synthesize_s2cpp_streaming_tts_events(
-                client, S2GenerateRequest(text="missing metadata"), FakeTtsConfig()
+                client, S2GenerateRequest(text="missing metadata"), FakeTtsConfig(), Settings()
             )
         )
 
@@ -822,6 +823,6 @@ async def test_streaming_pcm_unaligned_final_frame_error_is_clear():
     with pytest.raises(ValueError, match="Final incomplete PCM frame"):
         await _collect_events(
             synthesize_s2cpp_streaming_tts_events(
-                client, S2GenerateRequest(text="unaligned"), FakeTtsConfig()
+                client, S2GenerateRequest(text="unaligned"), FakeTtsConfig(), Settings()
             )
         )

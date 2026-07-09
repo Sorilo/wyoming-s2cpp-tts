@@ -401,6 +401,7 @@ async def synthesize_s2cpp_streaming_tts_events(
     client: S2Client,
     request: S2GenerateRequest,
     config: FakeTtsConfig,
+    settings: "Settings",
     metrics: MetricsCollector | None = None,
     ctx: LogContext | None = None,
 ):
@@ -478,102 +479,225 @@ async def synthesize_s2cpp_streaming_tts_events(
                 channels=audio_config.channels,
             )
 
-            yield AudioStart(
-                rate=audio_config.sample_rate,
-                width=audio_config.width,
-                channels=audio_config.channels,
-            ).event()
+            # ── Compute initial buffer target ───────────────────────────
+            frame_size = audio_config.width * audio_config.channels
+            bytes_per_ms = audio_config.sample_rate * frame_size / 1000.0
 
-            while True:
-                try:
-                    chunk = await asyncio.to_thread(_read_stream_chunk, stream)
-                except S2ClientError:
-                    raise
-                if chunk is _STREAM_EOF:
-                    break
+            estimated_long_form = False
+            buffer_policy = "zero"
 
-                # First non-empty backend chunk observed by this process.
-                if not backend_data_observed and chunk:
-                    metrics.record_first_backend_data()
-                    backend_data_observed = True
-                    first_audio_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
-                    obs_log("backend_stream_first_audio",
-                            connection_id=_ctx.connection_id,
-                            synthesis_id=_ctx.synthesis_id,
-                            text_fp=fp,
-                            elapsed_ms=first_audio_elapsed_ms)
+            if settings.s2_long_form_threshold_chars > 0 and len(request.text) >= settings.s2_long_form_threshold_chars:
+                estimated_long_form = True
+                buffer_target_ms = settings.s2_long_form_buffer_ms
+                buffer_policy = "long_form"
+            else:
+                buffer_target_ms = settings.s2_initial_buffer_ms
 
-                for audio_bytes, timestamp_ms in rechunker.feed(chunk):
-                    metrics.record_first_audio_chunk()
-                    if not first_audio_emitted:
-                        first_audio_emitted = True
-                        wyoming_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
-                        obs_log("first_wyoming_audio",
+            max_buffer_ms = settings.s2_max_initial_buffer_ms
+            if max_buffer_ms > 0 and buffer_target_ms > max_buffer_ms:
+                buffer_target_ms = max_buffer_ms
+
+            buffer_target_bytes = int(buffer_target_ms * bytes_per_ms)
+            if buffer_target_bytes % frame_size != 0:
+                buffer_target_bytes -= buffer_target_bytes % frame_size
+
+            max_buffer_bytes = int(max_buffer_ms * bytes_per_ms) if max_buffer_ms > 0 else 0
+            if max_buffer_bytes > 0 and max_buffer_bytes % frame_size != 0:
+                max_buffer_bytes -= max_buffer_bytes % frame_size
+
+            obs_log("buffer_policy",
+                    connection_id=_ctx.connection_id,
+                    synthesis_id=_ctx.synthesis_id,
+                    text_fp=fp,
+                    buffer_policy=buffer_policy,
+                    initial_buffer_target_ms=buffer_target_ms,
+                    initial_buffer_target_bytes=buffer_target_bytes,
+                    estimated_long_form=estimated_long_form,
+                    text_len=len(request.text))
+
+            # ── Buffering phase ──────────────────────────────────────────
+            buffered_pcm = bytearray()
+            backend_completed_before_buffer_target = False
+            audio_start_emitted = False
+
+            if buffer_target_bytes <= 0:
+                # Zero-buffer: emit AudioStart immediately (preserves current behavior)
+                yield AudioStart(
+                    rate=audio_config.sample_rate,
+                    width=audio_config.width,
+                    channels=audio_config.channels,
+                ).event()
+                audio_start_emitted = True
+            else:
+                # Accumulate PCM until target reached, stream ends, or cap hit
+                while True:
+                    try:
+                        chunk = await asyncio.to_thread(_read_stream_chunk, stream)
+                    except S2ClientError:
+                        raise
+                    if chunk is _STREAM_EOF:
+                        backend_completed_before_buffer_target = True
+                        break
+
+                    if not backend_data_observed and chunk:
+                        metrics.record_first_backend_data()
+                        backend_data_observed = True
+                        first_audio_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
+                        obs_log("backend_stream_first_audio",
                                 connection_id=_ctx.connection_id,
                                 synthesis_id=_ctx.synthesis_id,
                                 text_fp=fp,
-                                elapsed_ms=wyoming_elapsed_ms,
-                                time_to_first_backend_audio_ms=first_audio_elapsed_ms,
-                                wrapper_first_audio_forwarding_overhead_ms=wyoming_elapsed_ms - first_audio_elapsed_ms)
-                    yield AudioChunk(
+                                elapsed_ms=first_audio_elapsed_ms)
+
+                    buffered_pcm.extend(chunk)
+
+                    if max_buffer_bytes > 0 and len(buffered_pcm) >= max_buffer_bytes:
+                        break
+                    if len(buffered_pcm) >= buffer_target_bytes:
+                        break
+
+                if len(buffered_pcm) > 0:
+                    buffered_audio_ms = int(len(buffered_pcm) * 1000 / (audio_config.sample_rate * frame_size))
+                    obs_log("initial_buffer_ready",
+                            connection_id=_ctx.connection_id,
+                            synthesis_id=_ctx.synthesis_id,
+                            text_fp=fp,
+                            initial_buffered_pcm_bytes=len(buffered_pcm),
+                            initial_buffered_audio_ms=buffered_audio_ms,
+                            initial_buffer_target_ms=buffer_target_ms,
+                            max_buffer_reached=(max_buffer_bytes > 0 and len(buffered_pcm) >= max_buffer_bytes),
+                            backend_completed_before_buffer_target=backend_completed_before_buffer_target)
+
+                    yield AudioStart(
                         rate=audio_config.sample_rate,
                         width=audio_config.width,
                         channels=audio_config.channels,
-                        audio=audio_bytes,
-                        timestamp=timestamp_ms,
                     ).event()
-                    metrics.record_emitted_chunk(len(audio_bytes))
+                    audio_start_emitted = True
 
-        # Stream exhausted normally — flush any remaining complete frames.
-        flush_chunks = []
-        for audio_bytes, timestamp_ms in rechunker.flush():
-            metrics.record_first_audio_chunk()
-            if not first_audio_emitted:
-                first_audio_emitted = True
-                wyoming_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
-                obs_log("first_wyoming_audio",
+                    for audio_bytes, timestamp_ms in rechunker.feed(bytes(buffered_pcm)):
+                        metrics.record_first_audio_chunk()
+                        if not first_audio_emitted:
+                            first_audio_emitted = True
+                            wyoming_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
+                            obs_log("first_wyoming_audio",
+                                    connection_id=_ctx.connection_id,
+                                    synthesis_id=_ctx.synthesis_id,
+                                    text_fp=fp,
+                                    elapsed_ms=wyoming_elapsed_ms,
+                                    time_to_first_backend_audio_ms=first_audio_elapsed_ms if backend_data_observed else 0,
+                                    wrapper_first_audio_forwarding_overhead_ms=wyoming_elapsed_ms - first_audio_elapsed_ms if backend_data_observed else 0)
+                        yield AudioChunk(
+                            rate=audio_config.sample_rate,
+                            width=audio_config.width,
+                            channels=audio_config.channels,
+                            audio=audio_bytes,
+                            timestamp=timestamp_ms,
+                        ).event()
+                        metrics.record_emitted_chunk(len(audio_bytes))
+
+                    buffered_pcm = bytearray()
+
+            # ── Progressive streaming phase ──────────────────────────────
+            if not backend_completed_before_buffer_target:
+                while True:
+                    try:
+                        chunk = await asyncio.to_thread(_read_stream_chunk, stream)
+                    except S2ClientError:
+                        raise
+                    if chunk is _STREAM_EOF:
+                        break
+
+                    if not backend_data_observed and chunk:
+                        metrics.record_first_backend_data()
+                        backend_data_observed = True
+                        first_audio_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
+                        obs_log("backend_stream_first_audio",
+                                connection_id=_ctx.connection_id,
+                                synthesis_id=_ctx.synthesis_id,
+                                text_fp=fp,
+                                elapsed_ms=first_audio_elapsed_ms)
+
+                    for audio_bytes, timestamp_ms in rechunker.feed(chunk):
+                        metrics.record_first_audio_chunk()
+                        if not first_audio_emitted:
+                            first_audio_emitted = True
+                            wyoming_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
+                            obs_log("first_wyoming_audio",
+                                    connection_id=_ctx.connection_id,
+                                    synthesis_id=_ctx.synthesis_id,
+                                    text_fp=fp,
+                                    elapsed_ms=wyoming_elapsed_ms,
+                                    time_to_first_backend_audio_ms=first_audio_elapsed_ms,
+                                    wrapper_first_audio_forwarding_overhead_ms=wyoming_elapsed_ms - first_audio_elapsed_ms)
+                        yield AudioChunk(
+                            rate=audio_config.sample_rate,
+                            width=audio_config.width,
+                            channels=audio_config.channels,
+                            audio=audio_bytes,
+                            timestamp=timestamp_ms,
+                        ).event()
+                        metrics.record_emitted_chunk(len(audio_bytes))
+
+            # ── Flush remaining frames and emit AudioStop ────────────────
+            flush_chunks = []
+            for audio_bytes, timestamp_ms in rechunker.flush():
+                metrics.record_first_audio_chunk()
+                if not first_audio_emitted:
+                    first_audio_emitted = True
+                    wyoming_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
+                    obs_log("first_wyoming_audio",
+                            connection_id=_ctx.connection_id,
+                            synthesis_id=_ctx.synthesis_id,
+                            text_fp=fp,
+                            elapsed_ms=wyoming_elapsed_ms,
+                            time_to_first_backend_audio_ms=first_audio_elapsed_ms if backend_data_observed else 0,
+                            wrapper_first_audio_forwarding_overhead_ms=wyoming_elapsed_ms - first_audio_elapsed_ms if backend_data_observed else 0)
+                yield AudioChunk(
+                    rate=audio_config.sample_rate,
+                    width=audio_config.width,
+                    channels=audio_config.channels,
+                    audio=audio_bytes,
+                    timestamp=timestamp_ms,
+                ).event()
+                metrics.record_emitted_chunk(len(audio_bytes))
+                flush_chunks.append(len(audio_bytes))
+
+            if audio_start_emitted:
+                yield AudioStop(
+                    timestamp=int(
+                        rechunker.cumulative_frames * 1000 / audio_config.sample_rate
+                    )
+                ).event()
+
+                obs_log("playback_emission_started",
                         connection_id=_ctx.connection_id,
                         synthesis_id=_ctx.synthesis_id,
                         text_fp=fp,
-                        elapsed_ms=wyoming_elapsed_ms,
-                        time_to_first_backend_audio_ms=first_audio_elapsed_ms,
-                        wrapper_first_audio_forwarding_overhead_ms=wyoming_elapsed_ms - first_audio_elapsed_ms)
-            yield AudioChunk(
-                rate=audio_config.sample_rate,
-                width=audio_config.width,
-                channels=audio_config.channels,
-                audio=audio_bytes,
-                timestamp=timestamp_ms,
-            ).event()
-            metrics.record_emitted_chunk(len(audio_bytes))
-            flush_chunks.append(len(audio_bytes))
+                        buffer_policy=buffer_policy,
+                        backend_completed_before_buffer_target=backend_completed_before_buffer_target)
 
-        yield AudioStop(
-            timestamp=int(
-                rechunker.cumulative_frames * 1000 / audio_config.sample_rate
-            )
-        ).event()
+            total_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
+            obs_log("backend_stream_done",
+                    connection_id=_ctx.connection_id,
+                    synthesis_id=_ctx.synthesis_id,
+                    text_fp=fp,
+                    total_backend_stream_ms=total_elapsed_ms,
+                    total_pcm_bytes=metrics.total_emitted_bytes,
+                    chunk_count=metrics.emitted_chunk_count,
+                    status="ok")
 
-        total_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
-        obs_log("backend_stream_done",
-                connection_id=_ctx.connection_id,
-                synthesis_id=_ctx.synthesis_id,
-                text_fp=fp,
-                total_backend_stream_ms=total_elapsed_ms,
-                total_pcm_bytes=metrics.total_emitted_bytes,
-                chunk_count=metrics.emitted_chunk_count,
-                status="ok")
-
-        obs_log("audio_out",
-                connection_id=_ctx.connection_id,
-                synthesis_id=_ctx.synthesis_id,
-                text_fp=fp,
-                audio_start=True,
-                chunk_count=metrics.emitted_chunk_count,
-                pcm_bytes=metrics.total_emitted_bytes,
-                audio_stop=True,
-                mode="streaming",
-                status="ok")
+            obs_log("audio_out",
+                    connection_id=_ctx.connection_id,
+                    synthesis_id=_ctx.synthesis_id,
+                    text_fp=fp,
+                    audio_start=audio_start_emitted,
+                    chunk_count=metrics.emitted_chunk_count,
+                    pcm_bytes=metrics.total_emitted_bytes,
+                    audio_stop=audio_start_emitted,
+                    mode="streaming",
+                    buffer_policy=buffer_policy,
+                    status="ok")
 
         metrics.finalize("success")
 
@@ -1072,7 +1196,7 @@ class FakeTtsEventHandler(AsyncEventHandler):
                 text=text, settings=self.settings, voice=voice,
             )
             async for event in synthesize_s2cpp_streaming_tts_events(
-                s2_client, request, self.config, ctx=ctx,
+                s2_client, request, self.config, self.settings, ctx=ctx,
             ):
                 yield event
         else:

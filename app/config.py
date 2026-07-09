@@ -37,8 +37,10 @@ S2_CHUNKED = True
 S2_OUTPUT_FORMAT = "pcm_s16le"
 S2_SEGMENT_SENTENCES = False
 S2_CODEC_CONTEXT_FRAMES = 4
-S2_STREAM_START_BUFFER_MS = 1000
-S2_STREAM_START_BUFFER_MS_STABLE = 4000
+S2_INITIAL_BUFFER_MS = 0
+S2_LONG_FORM_THRESHOLD_CHARS = 200
+S2_LONG_FORM_BUFFER_MS = 3000
+S2_MAX_INITIAL_BUFFER_MS = 8000
 S2_MAX_NEW_TOKENS = 512
 S2_TEMPERATURE = 0.58
 S2_TOP_P = 0.88
@@ -73,8 +75,10 @@ class Settings:
     s2_output_format: str = S2_OUTPUT_FORMAT
     s2_segment_sentences: bool = S2_SEGMENT_SENTENCES
     s2_codec_decode_context_frames: int | None = S2_CODEC_CONTEXT_FRAMES
-    s2_stream_start_buffer_ms: int = S2_STREAM_START_BUFFER_MS
-    s2_stream_start_buffer_ms_stable: int = S2_STREAM_START_BUFFER_MS_STABLE
+    s2_initial_buffer_ms: int = S2_INITIAL_BUFFER_MS
+    s2_long_form_threshold_chars: int = S2_LONG_FORM_THRESHOLD_CHARS
+    s2_long_form_buffer_ms: int = S2_LONG_FORM_BUFFER_MS
+    s2_max_initial_buffer_ms: int = S2_MAX_INITIAL_BUFFER_MS
     s2_max_new_tokens: int = S2_MAX_NEW_TOKENS
     s2_temperature: float = S2_TEMPERATURE
     s2_top_p: float = S2_TOP_P
@@ -106,5 +110,9 @@ class Settings:
             s2_codec_decode_context_frames=_parse_optional_int(
                 os.getenv("S2_CODEC_CONTEXT_FRAMES", str(S2_CODEC_CONTEXT_FRAMES))
             ),
+            s2_initial_buffer_ms=int(os.getenv("S2_INITIAL_BUFFER_MS", str(S2_INITIAL_BUFFER_MS))),
+            s2_long_form_threshold_chars=int(os.getenv("S2_LONG_FORM_THRESHOLD_CHARS", str(S2_LONG_FORM_THRESHOLD_CHARS))),
+            s2_long_form_buffer_ms=int(os.getenv("S2_LONG_FORM_BUFFER_MS", str(S2_LONG_FORM_BUFFER_MS))),
+            s2_max_initial_buffer_ms=int(os.getenv("S2_MAX_INITIAL_BUFFER_MS", str(S2_MAX_INITIAL_BUFFER_MS))),
             log_level=os.getenv("LOG_LEVEL", LOG_LEVEL),
         )

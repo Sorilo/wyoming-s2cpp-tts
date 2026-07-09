@@ -12,6 +12,7 @@ import uuid
 
 import pytest
 
+from app.config import Settings
 from app.metrics import MetricsCollector, SynthesisMetrics
 
 
@@ -518,7 +519,7 @@ class TestStreamingS2CppMetrics:
         request = S2GenerateRequest(text="test")
 
         events = await self._collect(
-            synthesize_s2cpp_streaming_tts_events(client, request, config, metrics=metrics)
+            synthesize_s2cpp_streaming_tts_events(client, request, config, Settings(), metrics=metrics)
         )
 
         snapshot = _finalized(metrics)
@@ -549,7 +550,7 @@ class TestStreamingS2CppMetrics:
         request = S2GenerateRequest(text="test")
 
         await self._collect(
-            synthesize_s2cpp_streaming_tts_events(client, request, config, metrics=metrics)
+            synthesize_s2cpp_streaming_tts_events(client, request, config, Settings(), metrics=metrics)
         )
 
         snapshot = _finalized(metrics)
@@ -571,7 +572,7 @@ class TestStreamingS2CppMetrics:
         request = S2GenerateRequest(text="test")
 
         await self._collect(
-            synthesize_s2cpp_streaming_tts_events(client, request, config, metrics=metrics)
+            synthesize_s2cpp_streaming_tts_events(client, request, config, Settings(), metrics=metrics)
         )
 
         snapshot = _finalized(metrics)
@@ -599,7 +600,7 @@ class TestStreamingS2CppMetrics:
         request = S2GenerateRequest(text="test")
 
         events = await self._collect(
-            synthesize_s2cpp_streaming_tts_events(client, request, config, metrics=metrics)
+            synthesize_s2cpp_streaming_tts_events(client, request, config, Settings(), metrics=metrics)
         )
 
         chunks = [e for e in events if AudioChunk.is_type(e.type)]
@@ -626,7 +627,7 @@ class TestStreamingS2CppMetrics:
 
         with pytest.raises(S2ClientError):
             await self._collect(
-                synthesize_s2cpp_streaming_tts_events(client, request, config, metrics=metrics)
+                synthesize_s2cpp_streaming_tts_events(client, request, config, Settings(), metrics=metrics)
             )
 
         snapshot = _finalized(metrics)
@@ -658,7 +659,7 @@ class TestStreamingS2CppMetrics:
 
         with pytest.raises(S2ClientError):
             await self._collect(
-                synthesize_s2cpp_streaming_tts_events(client, request, config, metrics=metrics)
+                synthesize_s2cpp_streaming_tts_events(client, request, config, Settings(), metrics=metrics)
             )
 
         snapshot = _finalized(metrics)
@@ -684,7 +685,7 @@ class TestStreamingS2CppMetrics:
         metrics = MetricsCollector("s2cpp", "streaming")
         request = S2GenerateRequest(text="test")
 
-        gen = synthesize_s2cpp_streaming_tts_events(client, request, config, metrics=metrics)
+        gen = synthesize_s2cpp_streaming_tts_events(client, request, config, Settings(), metrics=metrics)
         # Consume a few events then explicitly close the generator.
         count = 0
         async for _ in gen:
@@ -731,7 +732,7 @@ class TestStreamingS2CppMetrics:
         metrics = MetricsCollector("s2cpp", "streaming")
         request = S2GenerateRequest(text="test")
 
-        gen = synthesize_s2cpp_streaming_tts_events(client, request, config, metrics=metrics)
+        gen = synthesize_s2cpp_streaming_tts_events(client, request, config, Settings(), metrics=metrics)
 
         # Start consuming
         async def consume_and_cancel():
@@ -761,7 +762,7 @@ class TestStreamingS2CppMetrics:
         request = S2GenerateRequest(text="test")
 
         await self._collect(
-            synthesize_s2cpp_streaming_tts_events(client, request, config, metrics=metrics)
+            synthesize_s2cpp_streaming_tts_events(client, request, config, Settings(), metrics=metrics)
         )
 
         snapshot = _finalized(metrics)
@@ -786,13 +787,13 @@ class TestStreamingS2CppMetrics:
         # Run twice: once with metrics, once without
         events_with = await self._collect(
             synthesize_s2cpp_streaming_tts_events(
-                client, request, config,
+                client, request, config, Settings(),
                 metrics=MetricsCollector("s2cpp", "streaming"),
             )
         )
         events_without = await self._collect(
             synthesize_s2cpp_streaming_tts_events(
-                client, request, config,
+                client, request, config, Settings(),
                 metrics=None,  # default
             )
         )
@@ -878,7 +879,7 @@ class TestStreamingPCMByteAccounting:
         request = S2GenerateRequest(text="test")
 
         events = await self._collect(
-            synthesize_s2cpp_streaming_tts_events(client, request, config, metrics=metrics)
+            synthesize_s2cpp_streaming_tts_events(client, request, config, Settings(), metrics=metrics)
         )
 
         snapshot = _finalized(metrics)
@@ -918,7 +919,7 @@ class TestStreamingPCMByteAccounting:
         request = S2GenerateRequest(text="test")
 
         events = await self._collect(
-            synthesize_s2cpp_streaming_tts_events(client, request, config, metrics=metrics)
+            synthesize_s2cpp_streaming_tts_events(client, request, config, Settings(), metrics=metrics)
         )
 
         snapshot = _finalized(metrics)
@@ -956,7 +957,7 @@ class TestStreamingPCMByteAccounting:
         request = S2GenerateRequest(text="test")
 
         await self._collect(
-            synthesize_s2cpp_streaming_tts_events(client, request, config, metrics=metrics)
+            synthesize_s2cpp_streaming_tts_events(client, request, config, Settings(), metrics=metrics)
         )
 
         snapshot = _finalized(metrics)
@@ -988,7 +989,7 @@ class TestStreamingPCMByteAccounting:
         request = S2GenerateRequest(text="test")
 
         events = await self._collect(
-            synthesize_s2cpp_streaming_tts_events(client, request, config, metrics=metrics)
+            synthesize_s2cpp_streaming_tts_events(client, request, config, Settings(), metrics=metrics)
         )
 
         snapshot = _finalized(metrics)
@@ -1053,7 +1054,7 @@ class TestStreamingPCMByteAccounting:
         request = S2GenerateRequest(text="test")
 
         events = await self._collect(
-            synthesize_s2cpp_streaming_tts_events(client, request, config, metrics=metrics)
+            synthesize_s2cpp_streaming_tts_events(client, request, config, Settings(), metrics=metrics)
         )
 
         snapshot = _finalized(metrics)

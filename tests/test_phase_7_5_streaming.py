@@ -442,7 +442,7 @@ class TestStreamCleanup:
         request = S2GenerateRequest(text="test")
         metrics = MetricsCollector("s2cpp", "streaming")
 
-        gen = synthesize_s2cpp_streaming_tts_events(client, request, config, metrics=metrics)
+        gen = synthesize_s2cpp_streaming_tts_events(client, request, config, Settings(), metrics=metrics)
         # Start the generator — it will yield AudioStart then block on stream read
         ev = await gen.__anext__()
         assert AudioStart.is_type(ev.type)
@@ -483,7 +483,7 @@ class TestStreamCleanup:
         request = S2GenerateRequest(text="test")
         metrics = MetricsCollector("s2cpp", "streaming")
 
-        gen = synthesize_s2cpp_streaming_tts_events(client, request, config, metrics=metrics)
+        gen = synthesize_s2cpp_streaming_tts_events(client, request, config, Settings(), metrics=metrics)
         await gen.__anext__()  # AudioStart
         await gen.aclose()
 
@@ -518,7 +518,7 @@ class TestStreamCleanup:
         config = FakeTtsConfig(sample_rate=44100, chunk_ms=100)
         request = S2GenerateRequest(text="test")
 
-        gen = synthesize_s2cpp_streaming_tts_events(client, request, config)
+        gen = synthesize_s2cpp_streaming_tts_events(client, request, config, Settings())
         await gen.__anext__()
         await gen.aclose()
 
@@ -770,7 +770,7 @@ class TestBlockedReadTimeout:
         config = FakeTtsConfig(sample_rate=44100, chunk_ms=100)
         request = S2GenerateRequest(text="blocked read test")
 
-        gen = synthesize_s2cpp_streaming_tts_events(client, request, config)
+        gen = synthesize_s2cpp_streaming_tts_events(client, request, config, Settings())
 
         # Consume the generator in a task — it will yield AudioStart,
         # then block on asyncio.to_thread calling __next__

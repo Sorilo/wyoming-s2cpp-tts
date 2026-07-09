@@ -49,6 +49,10 @@ RUN git clone --recurse-submodules "${S2CPP_REPO}" . \
     && git checkout "${S2CPP_REVISION}" \
     && git submodule update --init --recursive
 
+# Phase 8B0: apply cancellation observability instrumentation
+COPY docker/s2cpp/patches/cancellation-observability.patch /tmp/
+RUN cd /src && patch -p1 < /tmp/cancellation-observability.patch
+
 # ------------------------------------------------------------------
 # CUDA driver stub setup for GPU-less build runners.
 #
@@ -251,12 +255,13 @@ EXPOSE 3030/tcp
 LABEL org.opencontainers.image.title="s2cpp-backend" \
       org.opencontainers.image.description="Standalone CUDA-enabled rodrigomatta/s2.cpp HTTP backend" \
       org.opencontainers.image.source="https://github.com/rodrigomatta/s2.cpp" \
-      org.opencontainers.image.version="0.1.0-alpha" \
+      org.opencontainers.image.version="0.1.0-alpha-diagnostic-8b0" \
       org.opencontainers.image.vendor="wyoming-s2cpp-tts" \
       com.nvidia.volumes.needed="nvidia_driver" \
       com.nvidia.cuda.version="12.4.1" \
       wyoming-s2cpp-tts.s2cpp-revision="2c33261938da1a41d713768b1b391b4d368d7d2c" \
-      wyoming-s2cpp-tts.role="backend-only"
+      wyoming-s2cpp-tts.role="backend-only-diagnostic"
+      wyoming-s2cpp-tts.phase="8B0-cancellation-observability"
 
 USER s2cpp
 

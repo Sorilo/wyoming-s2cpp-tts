@@ -1,4 +1,4 @@
-"""Tests for Phase 11 realtime stride tuning configuration, request
+"""Tests for Phase 8C realtime stride tuning configuration, request
 construction, and benchmark math.
 
 All tests are deterministic — no real backend, GPU, or network calls.

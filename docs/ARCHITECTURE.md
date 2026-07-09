@@ -74,7 +74,7 @@ Progressive backend-audio streaming is now wired (Phase 7.5A). When `S2_STREAM=t
 Time-to-first-audio with the real backend was previously observed at ~3.8 seconds (both first-audio and total request). Phase 7.5A does not guarantee a major latency reduction; measure live latency after deployment (Phase 7.5B).
 
 
-## Streaming decode stride tuning (Phase 11)
+## Streaming decode stride tuning (Phase 8C)
 
 The s2.cpp backend interprets ``low_latency=true`` as approximately
 ``stream_decode_stride_frames=1`` and ``stream_holdback_frames=0``.
@@ -117,11 +117,25 @@ codec context and is not yet fully stateful/incremental.
 
 ### Benchmarking
 
+The benchmark harness contacts the s2.cpp backend **directly** — no wrapper
+rebuild is required.  The running backend container is all you need.
+
 ```bash
 # On Unraid host (safe, no container changes):
 bash scripts/run_realtime_tuning_unraid.sh --benchmark
+```
 
-# Apply a winning stride (after listening to candidate audio):
+### Deploying to Home Assistant / Wyoming
+
+**A new wrapper image must be built and deployed** before Home Assistant can
+use the stride tuning settings.  The current production wrapper
+(``ghcr.io/sorilo/wyoming-s2cpp-tts:sha-9c134cc``) does not understand
+``S2_STREAM_DECODE_STRIDE_FRAMES`` or the other new environment variables.
+
+After a new wrapper image is published:
+
+```bash
+# See what settings to apply (informational only):
 bash scripts/run_realtime_tuning_unraid.sh --apply 4 --yes
 ```
 

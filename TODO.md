@@ -165,7 +165,7 @@
 - Wrapper remains `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-9c134cc`; BrokenPipe task-exception noise on deliberate disconnect is a separate logging issue and did not block cleanup.
 
 
-## Phase 11 results: realtime stride tuning infrastructure
+## Phase 8C results: realtime stride tuning infrastructure
 
 - Four new wrapper env vars with strict validation: S2_STREAM_DECODE_STRIDE_FRAMES (1-64),
   S2_STREAM_HOLDBACK_FRAMES (non-negative), S2_STREAM_START_BUFFER_MS (non-negative),
@@ -181,7 +181,7 @@
 - scripts/benchmark_realtime_tuning.py: dry-run-safe Python stride-sweep harness
   (--run-real to contact backend; measures RTF, first-PCM, total synthesis).
 - scripts/run_realtime_tuning_unraid.sh: one-command Unraid host orchestration.
-- Unraid wrapper template updated with Phase 11 config vars.
+- Unraid wrapper template updated with Phase 8C config vars.
 - 80 new tests. Full suite: 540/540 passing.
 - No backend image change. No live RTX 3080 performance measured.
 - Stride 4 is a candidate only; real benchmarking pending on Unraid host.

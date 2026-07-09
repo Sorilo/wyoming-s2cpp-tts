@@ -37,9 +37,14 @@ The verified first model target is:
 This `q6_k` target is the current RTX 3080 baseline. Future model choices may include `s2-pro-q8_0.gguf` for quality if VRAM allows, or `s2-pro-q4_k_m.gguf` as a lower-VRAM fallback. Hardware-upgrade benchmarking is post-v0.1 work.
 
 
-## Real-time stride tuning (Phase 11)
+## Real-time stride tuning (Phase 8C)
 
-The wrapper now supports configurable streaming decode stride for RTX 3080 performance optimisation. The s2.cpp backend with ``low_latency=true`` defaults to stride 1 (one frame per CUDA kernel launch), which may cause excessive overhead with ``codec_decode_context_frames=4``.
+The wrapper code now supports configurable streaming decode stride for
+RTX 3080 performance optimisation. The benchmark harness contacts the s2.cpp
+backend directly — no wrapper rebuild is required to run the stride sweep.
+**To use these settings through Home Assistant / Wyoming, a new wrapper image
+must be built and deployed** (the current production image sha-9c134cc does
+not include these changes). The s2.cpp backend with ``low_latency=true`` defaults to stride 1 (one frame per CUDA kernel launch), which may cause excessive overhead with ``codec_decode_context_frames=4``.
 
 ### Quick benchmark (on Unraid host)
 

@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Phase 11: real-time stride tuning infrastructure for RTX 3080 performance
+- Phase 8C: real-time stride tuning infrastructure for RTX 3080 performance
   optimisation.  Added four new environment-backed wrapper settings:
   ``S2_STREAM_DECODE_STRIDE_FRAMES`` (1--64, default 4),
   ``S2_STREAM_HOLDBACK_FRAMES`` (non-negative, default 0),
@@ -33,8 +33,14 @@
   Updated Unraid wrapper template with all new tuning variables and
   clear descriptions.  80 new tests (config validation, request contract,
   benchmark math, dry-run safety, env audit, shell syntax).  Full suite:
-  **540/540 passing**.  No backend image change; no live RTX 3080
-  performance measurement was performed — stride 4 is a candidate only.
+  **540/540 passing**.  No backend image change required.  The benchmark harness contacts
+  the s2.cpp backend directly and works immediately against the running
+  backend container — no wrapper rebuild is needed for benchmarking.
+  However, for Home Assistant / Wyoming to use the new stride tuning
+  environment variables, a NEW WRAPPER IMAGE must be built and deployed;
+  the current production wrapper (sha-9c134cc) does not support them.
+  No live RTX 3080 performance measurement was performed — stride 4 is
+  a candidate only.
 
 
 - Phase 8B2 production backend promotion: promoted the Phase 8B1.1-proven

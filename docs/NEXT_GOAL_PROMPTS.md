@@ -3,11 +3,14 @@
 Run phases one at a time. This file is regenerated from the actual repository
 state after every `/goal` run. Do not copy stale assumptions forward.
 
-## Current state after Phase 11 realtime stride tuning
+## Current state after Phase 8C realtime stride tuning
 
 - Repository branch: ``perf/realtime-stride-tuning``.
 - Backend image unchanged: ``ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-edf89bd``.
-- Wrapper image unchanged; rollback remains ``ghcr.io/sorilo/wyoming-s2cpp-tts:sha-9c134cc``.
+- Wrapper image unchanged: ``ghcr.io/sorilo/wyoming-s2cpp-tts:sha-9c134cc``.
+  **A new wrapper image must be built and deployed** before Home Assistant
+  can use the new stride tuning env vars.  The benchmark harness contacts the
+  backend directly and does NOT require a wrapper rebuild.
 - New wrapper env vars: ``S2_STREAM_DECODE_STRIDE_FRAMES`` (1-64, default 4),
   ``S2_STREAM_HOLDBACK_FRAMES`` (non-negative, default 0),
   ``S2_STREAM_START_BUFFER_MS`` (non-negative, default 0),

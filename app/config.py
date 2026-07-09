@@ -4,7 +4,7 @@ This module intentionally keeps configuration simple for Phase 0. Future phases
 should add environment parsing, validation, and profile support without hiding
 which defaults are intended for the first RTX 3080 target.
 
-Phase 11 (realtime stride tuning) adds strict validation for all
+Phase 8C (realtime stride tuning) adds strict validation for all
 environment-backed generation settings and new streaming tuning parameters.
 """
 
@@ -122,7 +122,7 @@ FAKE_TTS_SAMPLE_RATE = 22050
 FAKE_TTS_DURATION_MS = 600
 FAKE_TTS_CHUNK_MS = 100
 LOG_LEVEL = "info"
-# ── Phase 11: streaming decode stride tuning ─────────────────────────
+# ── Phase 8C: streaming decode stride tuning ─────────────────────────
 S2_STREAM_DECODE_STRIDE_FRAMES = 4
 S2_STREAM_HOLDBACK_FRAMES = 0
 S2_STREAM_START_BUFFER_MS = 0
@@ -165,7 +165,7 @@ class Settings:
     fake_tts_duration_ms: int = FAKE_TTS_DURATION_MS
     fake_tts_chunk_ms: int = FAKE_TTS_CHUNK_MS
     log_level: str = LOG_LEVEL
-    # ── Phase 11: streaming decode stride tuning ─────────────────────
+    # ── Phase 8C: streaming decode stride tuning ─────────────────────
     s2_stream_decode_stride_frames: int = S2_STREAM_DECODE_STRIDE_FRAMES
     s2_stream_holdback_frames: int = S2_STREAM_HOLDBACK_FRAMES
     s2_stream_start_buffer_ms: int = S2_STREAM_START_BUFFER_MS
@@ -338,7 +338,7 @@ class Settings:
             fake_tts_duration_ms=int(os.getenv("FAKE_TTS_DURATION_MS", str(FAKE_TTS_DURATION_MS))),
             fake_tts_chunk_ms=int(os.getenv("FAKE_TTS_CHUNK_MS", str(FAKE_TTS_CHUNK_MS))),
             log_level=os.getenv("LOG_LEVEL", LOG_LEVEL),
-            # ── Phase 11 ─────────────────────────────────────────────
+            # ── Phase 8C ─────────────────────────────────────────────
             s2_stream_decode_stride_frames=decode_stride,
             s2_stream_holdback_frames=holdback,
             s2_stream_start_buffer_ms=start_buffer,

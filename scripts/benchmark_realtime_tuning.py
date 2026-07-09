@@ -1,11 +1,19 @@
 #!/usr/bin/env python3
-"""Real-time stride tuning benchmark harness for s2.cpp backend.
+"""Real-time stride tuning benchmark harness for s2.cpp backend (Phase 8C).
 
 Sends streaming multipart requests to an s2.cpp backend with varying
 stream_decode_stride_frames and measures real-time factor (RTF),
 time-to-first-audio, and other performance metrics.
 
-SAFETY: Defaults to dry-run mode.  Requires `--run-real` to contact
+SAFETY: Defaults to dry-run mode.  Requires ``--run-real`` to contact
+a real backend.  This harness contacts the s2.cpp backend DIRECTLY (bypassing
+the Wyoming wrapper).  **No wrapper rebuild is required** to run this benchmark.
+However, for Home Assistant / Wyoming to use new stride tuning settings, a
+new wrapper image containing these code changes must be built and deployed.
+
+IMPORTANT: This script uses only Python standard library modules.  No virtual
+environment or pip packages are required.  Run with ``python3`` from the
+repository root.  Requires `--run-real` to contact
 a real backend.  Without it, the harness prints what it would do and exits.
 
 Usage:
@@ -41,7 +49,9 @@ from typing import Any
 # ── Project-local imports ────────────────────────────────────────────────
 _SCRIPT_DIR = Path(__file__).resolve().parent
 _PROJECT_ROOT = _SCRIPT_DIR.parent
-sys.path.insert(0, str(_PROJECT_ROOT))
+# Support both PYTHONPATH env var and direct path insertion
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
 from app.s2_client import (
     S2Client,

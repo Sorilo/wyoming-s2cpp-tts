@@ -86,7 +86,7 @@ Production backend image: `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-edf89bd`
 Rollback backend image: `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b`.
 Wrapper unchanged: `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-9c134cc`.
 
-### Phase 11: realtime stride tuning infrastructure ✅
+### Phase 8C: realtime stride tuning infrastructure ✅
 Implemented configurable streaming decode stride, holdback, start-buffer,
 and low-latency settings with strict validation, explicit multipart
 request parameters, enhanced observability, an opt-in Python benchmark

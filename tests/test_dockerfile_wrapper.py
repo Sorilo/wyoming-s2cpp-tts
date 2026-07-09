@@ -326,7 +326,11 @@ def test_config_from_env_reads_wyoming_uri() -> None:
 def test_config_from_env_reads_s2_stream() -> None:
     """from_env() supports S2_STREAM override with boolean coercion."""
     content = _read(APP_CONFIG)
-    assert 'os.getenv("S2_STREAM"' in content, (
+    s2_stream_read = (
+        'os.getenv("S2_STREAM"' in content
+        or '_bool_or_error("S2_STREAM"' in content
+    )
+    assert s2_stream_read, (
         "from_env() must read S2_STREAM from environment"
     )
 

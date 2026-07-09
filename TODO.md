@@ -137,6 +137,26 @@
 - Expected disconnect-to-stop latency: ~145ms (100ms cv wait + 45ms frame).
 - Wrapper tests: 407/407 passing. Backend unchanged except instrumentation patch.
 
+
+## Phase 8B1 tooling status
+
+- Corrected the live verification harness classification for the exact recovery
+  request type used by the harness: standalone legacy `Synthesize` terminates at
+  `AudioStop` and does not require `synthesize-stopped`.
+- First Phase 8B1 client artifact now reclassifies as 5/5 audio/protocol/PCM
+  recovery success: each cycle received `AudioStart`, one or more `AudioChunk`s,
+  `AudioStop`, non-empty frame-aligned PCM, and no timeout/server-busy/exception.
+- The first run's log capture was invalid because the old capture script blocked
+  on stdin when backgrounded; backend cancellation events were not captured.
+- `capture_phase_8b1_logs.sh` now supports unattended `--duration` capture and
+  writes metadata, image identities, status/health, wrapper/backend logs, GPU
+  samples, and timestamps.
+- Added `scripts/live_compare_long_form_contexts.py` plus a runbook for long-form
+  context 4 vs 64 vs auto/160 comparison.
+- Phase 8B1 remains incomplete until diagnostic backend cancellation logs and
+  corrected successful recovery evidence are captured in a rerun.
+- Runtime code changed: no. New image required: no.
+
 ## Approved remaining v0.1 phases
 
 21. ~~Phase 7.5: wire true progressive backend HTTP audio streaming into the production Wyoming event handler when `S2_STREAM=true`~~ ✅ Phase 7.5A complete

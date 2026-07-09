@@ -3,6 +3,65 @@
 Run phases one at a time. This file is regenerated from the actual repository
 state after every `/goal` run. Do not copy stale assumptions forward.
 
+## Current state after Phase 8B1 tooling correction
+
+- Repository branch: `main`.
+- Backend production image remains `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b`.
+- Wrapper production image remains `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-9c134cc`.
+- Diagnostic backend image remains `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-29a5a2c` and is not currently deployed by this repo change.
+- `scripts/live_verify_phase_8b1.py` now classifies standalone legacy recovery correctly: `AudioStop` is the terminal event; `synthesize-stopped` is not required unless the request is a Wyoming streaming-text session.
+- `scripts/capture_phase_8b1_logs.sh` now supports unattended `--duration` capture and records metadata, image identities, status/health, wrapper/backend logs, GPU samples, and timestamps.
+- The first Phase 8B1 client artifact reclassifies as 5/5 audio/protocol/PCM recovery success, but Phase 8B1 remains incomplete because backend diagnostic cancellation logs were not captured.
+- Objective analysis of the five saved short recovery WAVs found valid 44100 Hz mono PCM, no clipping, no large discontinuities, no exact repeated 100ms windows, and no objective proof of the newly reported long-form beeping/stuttering.
+- Long-form context comparison tooling exists in `scripts/live_compare_long_form_contexts.py` and `docs/PHASE_8B1_LONG_FORM_COMPARISON.md`.
+- Runtime code changed: no. New image required: no.
+
+## Next prompt: rerun Phase 8B1 diagnostic-backend live verification
+
+```text
+/goal
+
+Continue Phase 8B1 only. Do not begin Phase 9. Do not modify production defaults
+except for the controlled diagnostic backend setup needed for this verification,
+and do not publish images.
+
+Project:
+/workspace/wyoming-s2cpp-tts
+
+Use the corrected tooling now in the repository:
+- scripts/live_verify_phase_8b1.py
+- scripts/capture_phase_8b1_logs.sh
+- docs/PHASE_8B1_LIVE_RUNBOOK.md
+
+Required work:
+1. Confirm git status and inspect the corrected runbook.
+2. Deploy or select the diagnostic backend image only as described by the runbook:
+   ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-29a5a2c
+3. Run unattended log capture with --duration while running the corrected five-cycle harness.
+4. Verify every cancellation cycle records backend diagnostic events:
+   backend_cancel_detected, generation_cancel_observed, backend_request_cancelled.
+5. Verify every immediate recovery has audio_recovery_success=true,
+   protocol_terminal_success=true, pcm_valid=true, non-empty audio, no timeout,
+   no server_busy response, and no exception.
+6. Preserve the wrapper/backend split, progressive streaming, voice selection,
+   duplicate-synthesis fix, and disconnect cleanup behavior.
+7. Save all artifacts under verification_artifacts/phase_8b1/.
+8. Do not mark Phase 8B1 complete unless both backend cancellation logs and
+   corrected recovery evidence are captured.
+9. If cancellation verification passes, run the long-form context comparison
+   preparation from docs/PHASE_8B1_LONG_FORM_COMPARISON.md, but do not change
+   production defaults without evidence.
+10. Update TODO.md, CHANGELOG.md, docs/ROADMAP.md, and docs/NEXT_GOAL_PROMPTS.md
+    with the actual live results.
+11. Run the full test suite and make one focused commit.
+
+Acceptance criteria:
+- Corrected harness reports 5/5 successful recoveries with precise fields.
+- Backend diagnostic logs prove cancellation is observed and exits promptly.
+- Log capture files are non-empty where events occurred and metadata is present.
+- No runtime code or image publication unless a real runtime defect is proven.
+```
+
 ## Current state after Phase 7.5C
 
 - Repository branch: `main`.

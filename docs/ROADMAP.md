@@ -67,6 +67,16 @@ When `S2_STREAM=true`, the production handler uses `synthesize_s2cpp_streaming_t
 ### Phase 8: disconnect cleanup and backend cancellation limitations
 Detect client disconnect/write failure, cancel active async synthesis, close any open backend stream/HTTP response, stop forwarding chunks, and document that closing the HTTP client connection may not stop all GPU work if upstream lacks an active cancellation API.
 
+
+### Phase 8B1: diagnostic cancellation live verification tooling ⚠️ in progress
+The Phase 8B1 client harness and log-capture tooling have been corrected.  The
+first client artifact reclassifies as 5/5 legacy recovery success, but the phase
+is not complete because diagnostic backend cancellation logs were not captured in
+the first attempt.  Next required work is a live rerun with the diagnostic backend
+and unattended capture proving backend cancellation events plus successful
+recovery evidence.  No runtime code changed and no image publication is required
+for the tooling correction.
+
 ### Phase 9: queue, busy handling, and timeout policy
 Define queue capacity behavior, busy responses, backend HTTP 503 handling, queue wait timeout, synthesis timeout, and controlled Wyoming failure behavior.
 

@@ -83,19 +83,40 @@ curl http://<diagnostic-ip>:3030/ 2>&1 | head -1
 
 ## Run Live Verification
 
-```bash
-# Terminal 1: Start log capture
-cd /workspace/wyoming-s2cpp-tts
-./scripts/capture_phase_8b1_logs.sh wyoming-s2cpp-tts s2cpp-backend-diag
+The log capture helper is safe for unattended/background use.  Use
+`--duration` so the capture exits on its own instead of waiting for keyboard
+input.
 
-# Terminal 2: Run verification harness
+```bash
 cd /workspace/wyoming-s2cpp-tts
+
+# Start unattended log capture. 180 seconds is intentionally longer than the
+# five-cycle verification run so backend cancellation logs are not truncated.
+./scripts/capture_phase_8b1_logs.sh \
+  --duration 180 \
+  wyoming-s2cpp-tts s2cpp-backend-diag &
+CAPTURE_PID=$!
+
+# Run the corrected client harness.
 PYTHONPATH=. .venv/bin/python scripts/live_verify_phase_8b1.py \
   --host 192.168.1.45 --port 10200 --runs 5 \
   --chunks-before-disconnect 3 --timeout 30 --recovery-delay 1.0
 
-# When harness completes, press Enter in Terminal 1 to stop log capture
+# Wait for capture metadata/logs to flush.
+wait "$CAPTURE_PID"
 ```
+
+Expected corrected console shape:
+
+```text
+Disconnect: 650 ms | Audio: PASS | Protocol: PASS | First audio: 4 ms | Complete: 3400 ms | PCM: 229376 bytes
+```
+
+For the exact recovery request type used by the harness (`Synthesize`, not a
+streaming `SynthesizeStart`/`SynthesizeStop` session), the correct terminal
+sequence is `AudioStart` → `AudioChunk`* → `AudioStop`.  `synthesize-stopped` is
+not required for standalone legacy `Synthesize`; it remains required for a
+Wyoming streaming-text session.
 
 ## Analyze Results
 
@@ -165,3 +186,31 @@ Check ALL before promoting:
 - [ ] Every recovery request succeeded (HTTP 200, valid PCM, correct voice)
 - [ ] No crashes, deadlocks, or GPU memory leaks
 - [ ] No regression in normal synthesis latency or quality
+
+
+## Current Phase 8B1 Status Note
+
+The first live attempt produced five non-empty, frame-aligned recovery WAVs, but
+old harness logic marked all five failed because it incorrectly waited for
+`synthesize-stopped` after standalone legacy `Synthesize` recovery requests.
+The corrected harness separates:
+
+- `audio_recovery_success`
+- `protocol_terminal_success`
+- `pcm_valid`
+- `first_audio_ms`
+- `completion_ms`
+- `pcm_bytes`
+- `exact_failure_reason`
+
+Phase 8B1 is **not complete** until a rerun captures diagnostic-backend
+cancellation logs (`backend_cancel_detected`, `generation_cancel_observed`, and
+`backend_request_cancelled`) plus successful corrected recovery evidence.
+
+## Long-Form Quality Follow-Up
+
+After the corrected cancellation rerun, use
+[`docs/PHASE_8B1_LONG_FORM_COMPARISON.md`](PHASE_8B1_LONG_FORM_COMPARISON.md)
+for the controlled context 4 vs 64 vs auto/160 long-form listening and timing
+comparison. Do not change production defaults based on a single subjective report
+without that comparison.

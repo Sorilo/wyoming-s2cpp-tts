@@ -56,6 +56,106 @@ def pcm_to_wav(pcm: bytes, sample_rate: int, channels: int, width: int) -> bytes
     return buf.getvalue()
 
 
+
+def classify_recovery_result(
+    *,
+    recovery_events: list[dict[str, Any]],
+    pcm_bytes: int,
+    sample_rate: int,
+    channels: int,
+    width: int,
+    timeout: bool,
+    exception: str | None,
+    request_mode: str = "legacy",
+) -> dict[str, Any]:
+    """Classify one recovery response without weakening protocol validation.
+
+    The Phase 8B1 harness sends a standalone legacy ``Synthesize`` event for
+    recovery. For that exact request type, the correct Wyoming terminal audio
+    sequence is ``AudioStart`` → one or more ``AudioChunk`` → ``AudioStop``.
+    ``SynthesizeStopped`` is reserved for a streaming-text
+    ``SynthesizeStart``/``SynthesizeChunk``/``SynthesizeStop`` session, so it is
+    not required for a standalone legacy recovery request.
+    """
+    event_types = [str(e.get("type", "")) for e in recovery_events]
+    audio_start_received = "audio-start" in event_types
+    audio_chunk_count = event_types.count("audio-chunk")
+    audio_stop_received = "audio-stop" in event_types
+    synthesize_stopped_received = "synthesize-stopped" in event_types
+
+    def _first_elapsed(*types: str) -> int | None:
+        wanted = set(types)
+        for event in recovery_events:
+            if event.get("type") in wanted:
+                value = event.get("elapsed_ms")
+                return int(value) if isinstance(value, int | float) else None
+        return None
+
+    audio_start_ms = _first_elapsed("audio-start")
+    first_audio_ms = _first_elapsed("audio-chunk")
+    if request_mode == "streaming":
+        protocol_terminal_success = synthesize_stopped_received
+        completion_ms = _first_elapsed("synthesize-stopped")
+        terminal_failure = "missing synthesize-stopped terminal event"
+    elif request_mode == "legacy":
+        protocol_terminal_success = audio_stop_received
+        completion_ms = _first_elapsed("audio-stop")
+        terminal_failure = "missing audio-stop terminal event"
+    else:
+        raise ValueError("request_mode must be 'legacy' or 'streaming'")
+
+    frame_size = width * channels if width > 0 and channels > 0 else 0
+    frame_aligned = bool(frame_size and pcm_bytes % frame_size == 0)
+    pcm_valid = bool(pcm_bytes > 0 and sample_rate > 0 and frame_aligned)
+
+    exact_failure_reason = ""
+    if exception:
+        exact_failure_reason = exception
+    elif timeout:
+        exact_failure_reason = "timeout waiting for recovery events"
+    elif not audio_start_received:
+        exact_failure_reason = "missing audio-start event"
+    elif audio_chunk_count == 0:
+        exact_failure_reason = "missing audio-chunk event"
+    elif pcm_bytes <= 0:
+        exact_failure_reason = "empty PCM"
+    elif sample_rate <= 0 or channels <= 0 or width <= 0:
+        exact_failure_reason = "invalid audio metadata"
+    elif not frame_aligned:
+        exact_failure_reason = "PCM not frame-aligned"
+    elif not protocol_terminal_success:
+        exact_failure_reason = terminal_failure
+
+    audio_recovery_success = (
+        not timeout
+        and not exception
+        and audio_start_received
+        and audio_chunk_count > 0
+        and pcm_valid
+        and protocol_terminal_success
+    )
+
+    return {
+        "request_mode": request_mode,
+        "audio_start_received": audio_start_received,
+        "audio_chunk_count": audio_chunk_count,
+        "audio_stop_received": audio_stop_received,
+        "synthesize_stopped_received": synthesize_stopped_received,
+        "audio_start_ms": audio_start_ms,
+        "non_empty_audio": pcm_bytes > 0,
+        "frame_aligned": frame_aligned,
+        "pcm_valid": pcm_valid,
+        "timeout": timeout,
+        "exception": exception,
+        "server_busy_response": "server-busy" in event_types,
+        "audio_recovery_success": audio_recovery_success,
+        "protocol_terminal_success": protocol_terminal_success,
+        "first_audio_ms": first_audio_ms,
+        "completion_ms": completion_ms,
+        "pcm_bytes": pcm_bytes,
+        "exact_failure_reason": exact_failure_reason,
+    }
+
 async def run_cancel_cycle(
     host: str,
     port: int,
@@ -156,10 +256,11 @@ async def run_cancel_cycle(
     recovery_sample_rate = 0
     recovery_channels = 1
     recovery_width = 2
-    recovery_success = False
-    recovery_error: str | None = None
+    recovery_timeout = False
+    recovery_exception: str | None = None
     recovery_first_audio_ms: int | None = None
     recovery_complete_ms: int | None = None
+    recovery_request_mode = "legacy"
 
     try:
         async with AsyncTcpClient(host, port) as tcp2:
@@ -169,7 +270,7 @@ async def run_cancel_cycle(
                 try:
                     ev = await asyncio.wait_for(tcp2.read_event(), timeout=timeout)
                 except asyncio.TimeoutError:
-                    recovery_error = "timeout"
+                    recovery_timeout = True
                     break
                 if ev is None:
                     break
@@ -190,13 +291,14 @@ async def run_cancel_cycle(
                     if recovery_first_audio_ms is None:
                         recovery_first_audio_ms = now_ms
                 elif AudioStop.is_type(ev.type):
-                    pass  # terminal, continue for synthesize-stopped
+                    if recovery_request_mode == "legacy":
+                        recovery_complete_ms = now_ms
+                        break
                 elif SynthesizeStopped.is_type(ev.type):
-                    recovery_complete_ms = now_ms
-                    recovery_success = True
-                    break
+                    if recovery_request_mode == "streaming":
+                        recovery_complete_ms = now_ms
+                        break
 
-        result["recovery_success"] = recovery_success
         result["recovery_first_audio_ms"] = recovery_first_audio_ms
         result["recovery_complete_ms"] = recovery_complete_ms
         result["recovery_pcm_bytes"] = len(recovery_pcm)
@@ -211,7 +313,6 @@ async def run_cancel_cycle(
             frame_size = recovery_width * recovery_channels
             if len(recovery_pcm) % frame_size != 0:
                 result["recovery_frame_aligned"] = False
-                result["recovery_error"] = "PCM not frame-aligned"
             else:
                 result["recovery_frame_aligned"] = True
 
@@ -226,13 +327,28 @@ async def run_cancel_cycle(
             wav_path.write_bytes(wav_data)
             result["recovery_wav_path"] = str(wav_path)
         else:
-            result["recovery_error"] = "empty PCM"
+            result["recovery_frame_aligned"] = False
     except Exception as exc:
-        recovery_error = f"{type(exc).__name__}: {exc}"
-        result["recovery_error"] = recovery_error
+        recovery_exception = f"{type(exc).__name__}: {exc}"
+        result["recovery_error"] = recovery_exception
 
-    if recovery_error:
-        result["recovery_success"] = False
+    classification = classify_recovery_result(
+        recovery_events=recovery_events,
+        pcm_bytes=len(recovery_pcm),
+        sample_rate=recovery_sample_rate,
+        channels=recovery_channels,
+        width=recovery_width,
+        timeout=recovery_timeout,
+        exception=recovery_exception,
+        request_mode=recovery_request_mode,
+    )
+    result.update(classification)
+    result["recovery_success"] = classification["audio_recovery_success"]
+    result["recovery_error"] = classification["exact_failure_reason"]
+    result["recovery_first_audio_ms"] = classification["first_audio_ms"]
+    result["recovery_complete_ms"] = classification["completion_ms"]
+    result["recovery_pcm_bytes"] = classification["pcm_bytes"]
+    result["recovery_frame_aligned"] = classification["frame_aligned"]
 
     return result
 
@@ -277,13 +393,25 @@ async def main() -> None:
         )
         results.append(result)
 
-        # Print summary
+        # Print precise summary
         dc_ms = result.get("cancel_disconnect_ms", "?")
-        rec_ok = "✓" if result.get("recovery_success") else "✗"
-        rec_ms = result.get("recovery_complete_ms", "?")
-        pcm = result.get("recovery_pcm_bytes", 0)
-        err = result.get("recovery_error") or result.get("cancel_error") or ""
-        print(f"  Disconnect: {dc_ms}ms  Recovery: {rec_ok} {rec_ms}ms {pcm}B  {err}")
+        audio_status = "PASS" if result.get("audio_recovery_success") else "FAIL"
+        protocol_status = "PASS" if result.get("protocol_terminal_success") else "FAIL"
+        first_audio = result.get("first_audio_ms")
+        complete = result.get("completion_ms")
+        pcm = result.get("pcm_bytes", 0)
+        err = result.get("exact_failure_reason") or result.get("cancel_error") or ""
+        if err:
+            print(
+                f"  Disconnect: {dc_ms} ms | Audio: {audio_status} | "
+                f"Protocol: {protocol_status} | Failure: {err} | PCM: {pcm} bytes"
+            )
+        else:
+            print(
+                f"  Disconnect: {dc_ms} ms | Audio: {audio_status} | "
+                f"Protocol: {protocol_status} | First audio: {first_audio} ms | "
+                f"Complete: {complete} ms | PCM: {pcm} bytes"
+            )
         print()
 
     # Save results
@@ -292,7 +420,7 @@ async def main() -> None:
     print(f"Results saved to {results_path}")
 
     # Summary
-    successes = sum(1 for r in results if r.get("recovery_success"))
+    successes = sum(1 for r in results if r.get("audio_recovery_success"))
     print(f"\n=== Summary: {successes}/{len(results)} recoveries successful ===")
     if successes == len(results):
         print("All cycles passed.")

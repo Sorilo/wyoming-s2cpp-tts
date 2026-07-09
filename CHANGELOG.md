@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Phase 8B1 tooling correction: fixed the live verification harness recovery
+  classifier for standalone legacy `Synthesize` requests.  The correct terminal
+  sequence for the harness recovery request is `AudioStart` → `AudioChunk`* →
+  `AudioStop`; `synthesize-stopped` is required only for Wyoming streaming-text
+  sessions.  The harness now reports `audio_recovery_success`,
+  `protocol_terminal_success`, `pcm_valid`, `first_audio_ms`, `completion_ms`,
+  `pcm_bytes`, and `exact_failure_reason` separately.  Reclassified the first
+  Phase 8B1 client artifact as 5/5 audio/protocol/PCM recovery success, while
+  keeping Phase 8B1 incomplete because diagnostic backend cancellation logs were
+  not captured.  Reworked `capture_phase_8b1_logs.sh` for unattended
+  `--duration` capture with metadata, image IDs, status/health, wrapper/backend
+  logs, GPU samples, and timestamps.  Added a long-form context comparison probe
+  and runbook for contexts 4, 64, and auto/160.  No runtime wrapper/backend code
+  changed and no image publication is required.
+
 - Phase 8A: implemented Wyoming client disconnect and backend-stream cleanup.
   Added ``cancel()`` method to ``S2StreamResult`` that closes the underlying
   HTTP response, unblocking any ``asyncio.to_thread(read)`` worker threads.

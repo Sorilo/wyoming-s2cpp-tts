@@ -1,12 +1,12 @@
 # Historical Phase 4 CUDA/s2.cpp and Unraid GPU runtime plan
 
-This is a historical Phase 4 planning document. Later phases built, published, deployed, and verified the CUDA backend image; the current verified backend image is `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b`. Preserve this file as implementation history, not as the current deployment baseline.
+This is a historical Phase 4 planning document. Later phases built, published, deployed, and verified the CUDA backend image; the current verified backend image is `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-edf89bd`. Preserve this file as implementation history, not as the current deployment baseline.
 
 ## Current verified repo state
 
 - The live deployment uses a separate CUDA backend container plus CPU-only Wyoming wrapper.
-- The verified backend image is `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b`.
-- The verified wrapper image is `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-89ed2dc`.
+- The verified backend image is `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-edf89bd`. Rollback remains `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b`.
+- The verified wrapper image is `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-9c134cc`.
 - The backend accepts multipart/form-data at `POST /generate` and returns `audio/L16; rate=44100; channels=1`.
 - See `ARCHITECTURE.md` and `ROADMAP.md` for the current baseline.
 

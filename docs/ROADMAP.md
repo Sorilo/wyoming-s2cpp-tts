@@ -68,14 +68,23 @@ When `S2_STREAM=true`, the production handler uses `synthesize_s2cpp_streaming_t
 Detect client disconnect/write failure, cancel active async synthesis, close any open backend stream/HTTP response, stop forwarding chunks, and document that closing the HTTP client connection may not stop all GPU work if upstream lacks an active cancellation API.
 
 
-### Phase 8B1: diagnostic cancellation live verification tooling ⚠️ in progress
-The Phase 8B1 client harness and log-capture tooling have been corrected.  The
-first client artifact reclassifies as 5/5 legacy recovery success, but the phase
-is not complete because diagnostic backend cancellation logs were not captured in
-the first attempt.  Next required work is a live rerun with the diagnostic backend
-and unattended capture proving backend cancellation events plus successful
-recovery evidence.  No runtime code changed and no image publication is required
-for the tooling correction.
+### Phase 8B1/8B2: backend cancellation verification and production promotion ✅
+Phase 8B1.1 final retry artifacts under `verification_artifacts/phase_8b1_1_retry/`
+proved 5/5 deliberate disconnect/recovery cycles.  Each cancelled backend request
+recorded `backend_cancel_detected`, `generation_cancel_observed`,
+`final_decode_skipped`, `backend_request_cancelled`, and
+`backend_request_cleanup_done` exactly once, in order, with
+`reason=client_disconnect`, `point=content_provider_complete`, valid monotonic
+timings, accurate frame/decode/PCM counters, `queued_pcm_bytes=0`, and
+`server_busy=false`.  All five immediate recovery syntheses passed audio,
+protocol terminal, and PCM validity checks.  GPU utilization returned to idle,
+containers stayed running, and no restart was required.  Wrapper BrokenPipe
+task-exception noise remains a separate narrow logging issue and did not block
+backend cleanup or recovery.
+
+Production backend image: `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-edf89bd` (`sha256:c29e41e59b470d58bf4b88c11c9ec753e00fa74a3bffbb003bc257fb9c6e46d9`).
+Rollback backend image: `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b`.
+Wrapper unchanged: `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-9c134cc`.
 
 ### Phase 9: queue, busy handling, and timeout policy
 Define queue capacity behavior, busy responses, backend HTTP 503 handling, queue wait timeout, synthesis timeout, and controlled Wyoming failure behavior.

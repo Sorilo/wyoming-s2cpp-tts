@@ -6,7 +6,7 @@ Phase 5.5B0: minimal reproducible CUDA `rodrigomatta/s2.cpp` HTTP backend image 
 
 A standalone Docker image that builds and runs the `rodrigomatta/s2.cpp` inference engine with NVIDIA CUDA GPU acceleration. It exposes the `POST /generate` HTTP endpoint but does **not** include the Python Wyoming wrapper, GGUF models, tokenizer assets, reference audio, voices, secrets, or generated audio.
 
-This backend image has been deployed and verified for the current Home Assistant TTS baseline when pinned to `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b`. It is still pre-v0.1 and not fully release-hardened; see `../../docs/PHASE_5_5B_REAL_BACKEND_VERIFICATION.md` and `../../docs/ARCHITECTURE.md`.
+This backend image has been deployed and verified for the current Home Assistant TTS baseline when pinned to `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-edf89bd`. The Phase 8B2 production image digest is `sha256:c29e41e59b470d58bf4b88c11c9ec753e00fa74a3bffbb003bc257fb9c6e46d9` and rollback remains `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b`. It is still pre-v0.1 and not fully release-hardened; see `../../docs/PHASE_5_5B_REAL_BACKEND_VERIFICATION.md` and `../../docs/ARCHITECTURE.md`.
 
 ## Image details
 
@@ -162,17 +162,17 @@ Use an immutable SHA tag to pin to a specific build:
 
 ## What remains unverified
 
-Phase 5.5B real backend smoke verification has passed on Unraid with CUDA using
+Phase 5.5B real backend smoke verification passed on Unraid with CUDA using
 `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b`, RTX 3080,
-`/models/s2-pro-q6_k.gguf`, and `/models/tokenizer.json`. Phase 6D also verified
-Home Assistant discovery and audible real-speech playback through the wrapper.
+`/models/s2-pro-q6_k.gguf`, and `/models/tokenizer.json`. Later phases verified
+Home Assistant discovery, audible real-speech playback, voice selection,
+progressive backend streaming, and Phase 8B2 backend cancellation. The current
+production backend pin is `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-edf89bd`.
 
 Still unverified:
 
-- Custom `.s2voice` profile creation and Home Assistant voice selection.
-- Subjective synthesis quality, VRAM headroom, realtime factor, cancellation,
-  true progressive backend-audio streaming in the production wrapper path, and
-  end-to-end barge-in behavior.
+- Subjective synthesis quality, broader VRAM headroom/realtime-factor envelopes,
+  queue timeout/busy policy, and end-to-end barge-in behavior.
 
 ## Files in this phase
 

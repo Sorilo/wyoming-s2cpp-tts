@@ -28,7 +28,7 @@ The architecture uses **two separate containers** on the `sorilonet` Docker netw
 
 ### s2cpp-backend (CUDA)
 
-- **Image:** `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b`
+- **Image:** `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-edf89bd`
 - Requires NVIDIA runtime, CUDA, and GPU access
 - Runs `s2.cpp` in HTTP server mode on port 3030
 - Mounts `/models` for GGUF/tokenizer assets and `/voices` for saved `.s2voice` profiles
@@ -38,7 +38,7 @@ The architecture uses **two separate containers** on the `sorilonet` Docker netw
 
 ### wyoming-s2cpp-tts (CPU-only wrapper)
 
-- **Image:** `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-974e220`
+- **Image:** `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-9c134cc`
 - Does **not** require NVIDIA runtime, CUDA, or GPU
 - Runs the Python Wyoming TCP server on port 10200
 - Translates Wyoming TTS requests into HTTP multipart calls to the backend
@@ -99,10 +99,10 @@ Unknown or unsafe voice IDs are rejected with a clear error.
 The current implementation uses single-active-synthesis with a bounded queue (default max 3). Only one synthesis runs at a time to keep RTX 3080 VRAM predictable.
 
 - `BARGE_IN_FRIENDLY=true`
-- `CANCEL_ON_CLIENT_DISCONNECT=true` (configured placeholder; not runtime-verified)
+- `CANCEL_ON_CLIENT_DISCONNECT=true` (runtime-verified through Phase 8B2 backend cancellation)
 - `CANCEL_ON_NEW_REQUEST=false`
 
-Client-disconnect cancellation, backend request cancellation, queue-busy/timeout policies, and controlled Wyoming failure behavior are **not yet runtime-verified** against the real backend. These are Phase 8 and Phase 9 responsibilities.
+Client-disconnect and backend request cancellation are runtime-verified through Phase 8B2: abandoned requests are recorded once, generation exits promptly, final decode is skipped, and `server_busy` is released. Queue-busy/timeout policies and controlled Wyoming failure behavior remain Phase 9 responsibilities.
 
 ## Latency measurement ownership
 

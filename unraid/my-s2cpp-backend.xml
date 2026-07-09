@@ -11,7 +11,7 @@
 -->
 <Container version="2">
   <Name>s2cpp-backend</Name>
-  <Repository>ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b</Repository>
+  <Repository>ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-edf89bd</Repository>
   <Registry>https://ghcr.io</Registry>
   <Network>custom</Network>
   <Privileged>false</Privileged>
@@ -22,7 +22,10 @@ Standalone CUDA-enabled rodrigomatta/s2.cpp HTTP backend for Fish Speech S2 Pro 
 
 This container runs the s2.cpp inference engine with CUDA GPU acceleration and exposes an HTTP /generate endpoint on port 3030. It does NOT include the Python Wyoming wrapper, GGUF models, or tokenizer assets — those must be mounted from host paths.
 
-Verified live backend image for the current Home Assistant deployment. Pin immutable sha-* tags for rollback safety.
+Verified production backend image for Phase 8B2. Pin immutable sha-* tags for rollback safety.
+
+Rollback backend image: ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b
+Production image digest: sha256:c29e41e59b470d58bf4b88c11c9ec753e00fa74a3bffbb003bc257fb9c6e46d9
 
 Upstream s2.cpp revision: 2c33261
 CUDA base: nvidia/cuda:12.4.1-runtime-ubuntu22.04

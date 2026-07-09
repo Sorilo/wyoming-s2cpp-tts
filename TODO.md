@@ -45,8 +45,8 @@
 
 ## Current verified deployment
 
-- Backend: `s2cpp-backend` (`ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b`)
-- Wrapper: `wyoming-s2cpp-tts` (`ghcr.io/sorilo/wyoming-s2cpp-tts:sha-974e220`)
+- Backend: `s2cpp-backend` (`ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-edf89bd`)
+- Wrapper: `wyoming-s2cpp-tts` (`ghcr.io/sorilo/wyoming-s2cpp-tts:sha-9c134cc`)
 - Network: `sorilonet`
 - HA: `192.168.1.233` → `192.168.1.45:10200`
 - Audio: 44100 Hz mono s16le real speech via Wyoming protocol streaming lifecycle
@@ -143,19 +143,26 @@
 - Corrected the live verification harness classification for the exact recovery
   request type used by the harness: standalone legacy `Synthesize` terminates at
   `AudioStop` and does not require `synthesize-stopped`.
-- First Phase 8B1 client artifact now reclassifies as 5/5 audio/protocol/PCM
-  recovery success: each cycle received `AudioStart`, one or more `AudioChunk`s,
-  `AudioStop`, non-empty frame-aligned PCM, and no timeout/server-busy/exception.
-- The first run's log capture was invalid because the old capture script blocked
-  on stdin when backgrounded; backend cancellation events were not captured.
-- `capture_phase_8b1_logs.sh` now supports unattended `--duration` capture and
-  writes metadata, image identities, status/health, wrapper/backend logs, GPU
-  samples, and timestamps.
+- Fixed `capture_phase_8b1_logs.sh` for unattended `--duration` capture plus
+  post-run bounded wrapper/backend log snapshots.
 - Added `scripts/live_compare_long_form_contexts.py` plus a runbook for long-form
-  context 4 vs 64 vs auto/160 comparison.
-- Phase 8B1 remains incomplete until diagnostic backend cancellation logs and
-  corrected successful recovery evidence are captured in a rerun.
-- Runtime code changed: no. New image required: no.
+  context 4 vs 64 vs auto/160 comparison, but long-form audio-quality work has
+  not begun.
+- Phase 8B1.1 retry artifacts captured complete backend cancellation logs and
+  successful corrected recovery evidence. Phase 8B1/8B2 is complete.
+
+
+
+## Phase 8B1/8B2 results
+
+- Final live retry artifacts: `verification_artifacts/phase_8b1_1_retry/`.
+- Tested diagnostic backend `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-b8e54f9` passed 5/5 cancellation/recovery cycles.
+- Backend cancellation events appeared exactly once per cancelled request and in order: `backend_cancel_detected`, `generation_cancel_observed`, `final_decode_skipped`, `backend_request_cancelled`, `backend_request_cleanup_done`.
+- Cancellation fields were consistent: `reason=client_disconnect`, `point=content_provider_complete`, valid 41-45 ms monotonic timings, accurate generated/decode/PCM counters, `queued_pcm_bytes=0`, `server_busy=false`.
+- Immediate recovery passed 5/5 for audio, protocol terminal event, and valid non-empty PCM; no server-busy response, timeout, exception, crash, deadlock, restart, or GPU accumulation.
+- Production backend image published: `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-edf89bd` (`sha256:c29e41e59b470d58bf4b88c11c9ec753e00fa74a3bffbb003bc257fb9c6e46d9`).
+- Rollback backend remains `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b`.
+- Wrapper remains `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-9c134cc`; BrokenPipe task-exception noise on deliberate disconnect is a separate logging issue and did not block cleanup.
 
 ## Approved remaining v0.1 phases
 

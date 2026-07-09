@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Phase 8B2 production backend promotion: promoted the Phase 8B1.1-proven
+  backend cancellation patch from diagnostic image `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-b8e54f9`
+  into the production backend build.  Final live retry artifacts under
+  `verification_artifacts/phase_8b1_1_retry/` show 5/5 cancellation/recovery
+  cycles passing: `backend_cancel_detected`, `generation_cancel_observed`,
+  `final_decode_skipped`, `backend_request_cancelled`, and
+  `backend_request_cleanup_done` each appeared exactly once per cancelled
+  request, in order, with `reason=client_disconnect`,
+  `point=content_provider_complete`, valid monotonic timings, accurate
+  frame/decode/PCM counters, `queued_pcm_bytes=0`, and `server_busy=false`.
+  Recovery synthesis passed 5/5 for audio, protocol terminal event, and valid
+  non-empty PCM.  GPU utilization returned to idle and the backend/wrapper
+  containers remained running.  Wrapper BrokenPipe task-exception noise remains
+  a narrow disconnect logging issue but did not block cleanup or recovery.
+  Published production backend image `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-edf89bd` from commit `edf89bd7c5554769bb36cbd049b6fbb98bcb9d41` with digest
+  `sha256:c29e41e59b470d58bf4b88c11c9ec753e00fa74a3bffbb003bc257fb9c6e46d9`.  Rollback backend remains `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b`.  Wrapper image unchanged: `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-9c134cc`.
+
 - Phase 8B1 tooling correction: fixed the live verification harness recovery
   classifier for standalone legacy `Synthesize` requests.  The correct terminal
   sequence for the harness recovery request is `AudioStart` → `AudioChunk`* →

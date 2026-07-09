@@ -3,63 +3,56 @@
 Run phases one at a time. This file is regenerated from the actual repository
 state after every `/goal` run. Do not copy stale assumptions forward.
 
-## Current state after Phase 8B1 tooling correction
+## Current state after Phase 8B2 production backend promotion
 
 - Repository branch: `main`.
-- Backend production image remains `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b`.
+- Production backend image: `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-edf89bd`.
+- Production backend digest: `sha256:c29e41e59b470d58bf4b88c11c9ec753e00fa74a3bffbb003bc257fb9c6e46d9`.
+- Backend image build commit: `edf89bd7c5554769bb36cbd049b6fbb98bcb9d41`.
+- Rollback backend image: `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b`.
 - Wrapper production image remains `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-9c134cc`.
-- Diagnostic backend image remains `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-29a5a2c` and is not currently deployed by this repo change.
-- `scripts/live_verify_phase_8b1.py` now classifies standalone legacy recovery correctly: `AudioStop` is the terminal event; `synthesize-stopped` is not required unless the request is a Wyoming streaming-text session.
-- `scripts/capture_phase_8b1_logs.sh` now supports unattended `--duration` capture and records metadata, image identities, status/health, wrapper/backend logs, GPU samples, and timestamps.
-- The first Phase 8B1 client artifact reclassifies as 5/5 audio/protocol/PCM recovery success, but Phase 8B1 remains incomplete because backend diagnostic cancellation logs were not captured.
-- Objective analysis of the five saved short recovery WAVs found valid 44100 Hz mono PCM, no clipping, no large discontinuities, no exact repeated 100ms windows, and no objective proof of the newly reported long-form beeping/stuttering.
-- Long-form context comparison tooling exists in `scripts/live_compare_long_form_contexts.py` and `docs/PHASE_8B1_LONG_FORM_COMPARISON.md`.
-- Runtime code changed: no. New image required: no.
+- Final Phase 8B1.1 retry artifacts: `verification_artifacts/phase_8b1_1_retry/`.
+- Live evidence: 5/5 cancellation/recovery cycles passed.  Backend cancellation events appeared exactly once per cancelled request and in order: `backend_cancel_detected`, `generation_cancel_observed`, `final_decode_skipped`, `backend_request_cancelled`, and `backend_request_cleanup_done`.
+- Cancellation fields were consistent: `reason=client_disconnect`, `point=content_provider_complete`, valid 41-45 ms monotonic timings, accurate frame/decode/PCM counters, `queued_pcm_bytes=0`, and `server_busy=false`.
+- Recovery synthesis passed 5/5 for audio, protocol terminal event, and valid non-empty PCM.
+- GPU utilization returned to idle; backend/wrapper containers remained running; no restart was required.
+- Wrapper deliberate-disconnect BrokenPipe task-exception noise remains a narrow logging issue, but it did not block cleanup or recovery.
+- Do not begin long-form audio-quality comparison unless the current goal explicitly asks for it.
 
-## Next prompt: rerun Phase 8B1 diagnostic-backend live verification
+## Next prompt: Phase 9 queue, busy handling, and timeout policy
 
 ```text
 /goal
 
-Continue Phase 8B1 only. Do not begin Phase 9. Do not modify production defaults
-except for the controlled diagnostic backend setup needed for this verification,
-and do not publish images.
+Proceed with Phase 9 only: queue capacity, busy handling, backend HTTP 503
+handling, queue wait timeout, synthesis timeout, and controlled Wyoming failure
+behavior. Do not begin Phase 10 or long-form audio-quality work.
 
 Project:
 /workspace/wyoming-s2cpp-tts
 
-Use the corrected tooling now in the repository:
-- scripts/live_verify_phase_8b1.py
-- scripts/capture_phase_8b1_logs.sh
-- docs/PHASE_8B1_LIVE_RUNBOOK.md
+Current verified backend/wrapper baseline:
+- Backend: ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-edf89bd
+- Backend digest: sha256:c29e41e59b470d58bf4b88c11c9ec753e00fa74a3bffbb003bc257fb9c6e46d9
+- Backend rollback: ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b
+- Wrapper: ghcr.io/sorilo/wyoming-s2cpp-tts:sha-9c134cc
+- Defaults to preserve: S2_SEGMENT_SENTENCES=false, S2_CODEC_CONTEXT_FRAMES=4
 
 Required work:
-1. Confirm git status and inspect the corrected runbook.
-2. Deploy or select the diagnostic backend image only as described by the runbook:
-   ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-29a5a2c
-3. Run unattended log capture with --duration while running the corrected five-cycle harness.
-4. Verify every cancellation cycle records backend diagnostic events:
-   backend_cancel_detected, generation_cancel_observed, backend_request_cancelled.
-5. Verify every immediate recovery has audio_recovery_success=true,
-   protocol_terminal_success=true, pcm_valid=true, non-empty audio, no timeout,
-   no server_busy response, and no exception.
-6. Preserve the wrapper/backend split, progressive streaming, voice selection,
-   duplicate-synthesis fix, and disconnect cleanup behavior.
-7. Save all artifacts under verification_artifacts/phase_8b1/.
-8. Do not mark Phase 8B1 complete unless both backend cancellation logs and
-   corrected recovery evidence are captured.
-9. If cancellation verification passes, run the long-form context comparison
-   preparation from docs/PHASE_8B1_LONG_FORM_COMPARISON.md, but do not change
-   production defaults without evidence.
-10. Update TODO.md, CHANGELOG.md, docs/ROADMAP.md, and docs/NEXT_GOAL_PROMPTS.md
-    with the actual live results.
-11. Run the full test suite and make one focused commit.
+1. Inspect git status and current queue/synthesis handling in app code and tests.
+2. Define deterministic behavior for max queue depth, already-busy backend, backend HTTP 503, queue wait timeout, synthesis timeout, and client-visible Wyoming error/termination behavior.
+3. Add tests first for each behavior.
+4. Implement the smallest production changes needed to pass those tests.
+5. Preserve Phase 8B2 cancellation behavior and observability.
+6. Do not modify backend model, quantization, voice profiles, or Home Assistant settings.
+7. Run focused tests and the full suite with zero failures.
+8. Update CHANGELOG.md, TODO.md, docs/ROADMAP.md, docs/NEXT_GOAL_PROMPTS.md, and relevant setup/troubleshooting docs.
+9. Publish new image(s) only if runtime code/template changes require them; report exact provenance.
 
 Acceptance criteria:
-- Corrected harness reports 5/5 successful recoveries with precise fields.
-- Backend diagnostic logs prove cancellation is observed and exits promptly.
-- Log capture files are non-empty where events occurred and metadata is present.
-- No runtime code or image publication unless a real runtime defect is proven.
+- Queue and busy/timeout behavior is deterministic, tested, and documented.
+- Controlled failures cleanly terminate Wyoming requests without hanging Home Assistant.
+- Existing synthesis, streaming, voice selection, and cancellation tests remain green.
 ```
 
 ## Current state after Phase 7.5C

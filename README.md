@@ -41,14 +41,14 @@ This `q6_k` target is the current RTX 3080 baseline. Future model choices may in
 | Component | Value |
 | --- | --- |
 | Backend container | `s2cpp-backend` |
-| Backend image | `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b` |
+| Backend image | `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-edf89bd` |
 | Backend endpoint | `http://s2cpp-backend:3030/generate` |
 | Backend contract | `multipart/form-data` only; raw `audio/L16; rate=44100; channels=1` |
 | Wrapper container | `wyoming-s2cpp-tts` |
-| Wrapper image | `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-89ed2dc` |
+| Wrapper image | `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-9c134cc` |
 | Wyoming endpoint | `tcp://0.0.0.0:10200` inside container; `192.168.1.45:10200` from Home Assistant |
 | Home Assistant result | Discovery succeeds; `s2-pro` is visible; real speech is audible |
-| Test baseline | 367 tests passing (368 total, 1 pre-existing Unraid template SHA test) after Phase 7.5A |
+| Test baseline | 418 tests passing after Phase 8B2 production backend promotion |
 
 ## Current architecture
 
@@ -66,7 +66,7 @@ Wyoming protocol streaming is implemented and verified: the wrapper handles `syn
 
 Progressive backend-audio streaming is now wired (Phase 7.5A). When `S2_STREAM=true`, the production handler uses `synthesize_s2cpp_streaming_tts_events()` / `generate_stream()` to yield Wyoming audio events progressively as backend transport chunks arrive. When `S2_STREAM=false`, the existing buffered `generate_multipart()` path is preserved unchanged.
 
-Previous real-backend measurements showed time-to-first-audio at ~3.8 seconds. Phase 7.5A does not guarantee a major latency reduction; live latency measurement is Phase 7.5B.
+Live Phase 8B2 verification proved five deliberate disconnect/recovery cycles: backend cancellation is recorded once, generation exits promptly, final decode is skipped, and immediate recovery synthesis succeeds. Wrapper BrokenPipe task-exception noise on deliberate disconnect remains a narrow logging issue.
 
 ## Running locally for development
 
@@ -100,7 +100,7 @@ export S2_DEFAULT_VOICE=cmu_bdl_male_us
 python -m app.main
 ```
 
-In the verified deployment, the production wrapper container sets `TTS_BACKEND=s2cpp` and sends buffered multipart requests to `/generate`.
+In the verified deployment, the production wrapper container sets `TTS_BACKEND=s2cpp`; with `S2_STREAM=true` it streams backend PCM progressively and sends Wyoming audio events as chunks arrive.
 
 ## Direct backend smoke testing
 

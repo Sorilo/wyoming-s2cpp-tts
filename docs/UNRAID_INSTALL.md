@@ -2,8 +2,8 @@
 
 The verified deployment uses two Docker containers on the Unraid `sorilonet` network:
 
-- `s2cpp-backend` — CUDA s2.cpp HTTP backend, image `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b`
-- `wyoming-s2cpp-tts` — CPU-only Wyoming wrapper, image `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-89ed2dc`
+- `s2cpp-backend` — CUDA s2.cpp HTTP backend, image `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-edf89bd`
+- `wyoming-s2cpp-tts` — CPU-only Wyoming wrapper, image `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-9c134cc`
 
 Home Assistant connects to the wrapper at `192.168.1.45:10200`. The wrapper reaches the backend at `http://s2cpp-backend:3030/generate` over `sorilonet`.
 
@@ -15,7 +15,7 @@ Important settings:
 
 | Setting | Verified value |
 | --- | --- |
-| Repository | `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b` |
+| Repository | `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-edf89bd` |
 | Container name | `s2cpp-backend` |
 | Network | custom Docker network (`sorilonet`) |
 | Internal HTTP port | `3030` |
@@ -36,7 +36,7 @@ Important settings:
 
 | Setting | Verified value |
 | --- | --- |
-| Repository | `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-89ed2dc` |
+| Repository | `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-9c134cc` |
 | Container name | `wyoming-s2cpp-tts` |
 | Network | same custom Docker network as backend (`sorilonet`) |
 | Host Wyoming port | `10200` |
@@ -47,11 +47,13 @@ Important settings:
 
 The wrapper does not need NVIDIA runtime, CUDA, GGUF model files, or GPU access.
 
-## Streaming caveat
+## Streaming and cancellation status
 
 Wyoming protocol streaming is implemented and verified: the wrapper handles `synthesize-start`, `synthesize-chunk`, and `synthesize-stop`, then emits `AudioStart`, `AudioChunk`, `AudioStop`, and `synthesize-stopped` for Home Assistant.
 
-Progressive backend-audio streaming is not currently used by the production handler: although `S2_STREAM` is parsed and `synthesize_s2cpp_streaming_tts_events()` / `generate_stream()` exist, the live handler still calls buffered `synthesize_s2cpp_tts_events()` via `generate_multipart()`, then sends Wyoming audio events.
+Progressive backend-audio streaming is enabled by the wrapper when `S2_STREAM=true`; the verified live defaults are `S2_SEGMENT_SENTENCES=false` and `S2_CODEC_CONTEXT_FRAMES=4`.
+
+Phase 8B2 backend cancellation is production-promoted in `sha-edf89bd`: deliberate client disconnects are recorded once, generation exits promptly at a frame boundary, final decode is skipped, `server_busy` is released, and immediate recovery synthesis succeeds. Roll back the backend to `sha-741d06b` if cancellation promotion causes an unexpected production regression.
 
 ## Home Assistant setup
 
@@ -61,7 +63,7 @@ Progressive backend-audio streaming is not currently used by the production hand
 4. Select `wyoming-s2cpp-tts` / `s2-pro` as the TTS engine.
 5. Test with "Try text-to-speech".
 
-Verified behavior as of 2026-07-08: Home Assistant discovers the service, `s2-pro` is visible, and preview TTS audibly plays real speech.
+Verified behavior as of 2026-07-09: Home Assistant discovers the service, `s2-pro` is visible, preview TTS audibly plays real speech, and Phase 8B2 backend cancellation passed five live disconnect/recovery cycles.
 
 ## Voice profiles
 

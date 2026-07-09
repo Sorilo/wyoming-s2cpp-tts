@@ -4,8 +4,8 @@
 
 The Wyoming TTS service is deployed as two Docker containers on the Unraid `sorilonet` network:
 
-- **Wrapper:** `wyoming-s2cpp-tts` (CPU-only), image `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-974e220`, Wyoming port 10200
-- **Backend:** `s2cpp-backend` (CUDA), image `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b`, HTTP port 3030
+- **Wrapper:** `wyoming-s2cpp-tts` (CPU-only), image `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-9c134cc`, Wyoming port 10200
+- **Backend:** `s2cpp-backend` (CUDA), image `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-edf89bd`, HTTP port 3030
 
 The wrapper is exposed to LAN at `192.168.1.45:10200`. Home Assistant runs at `192.168.1.233`.
 
@@ -65,14 +65,14 @@ perceived quality may be influenced by the older CMU ARCTIC recordings, the
 short reference clip, and the model quantization. A personal clean recording is
 planned for later as a better quality test.
 
-## Verified behavior (2026-07-08)
+## Verified behavior (2026-07-09)
 
 - HA discovers the Wyoming service at `192.168.1.45:10200`
 - `s2-pro` voice appears in TTS settings
 - "Try text-to-speech" generates and audibly plays real speech
 - Wyoming streaming TTS lifecycle completes (`synthesize-stopped` emitted)
 - Full STT \u2192 conversation \u2192 TTS satellite workflow not yet verified
-- Cancellation and barge-in not yet tested
+- Client-disconnect/backend cancellation passed Phase 8B2 five-cycle live verification; queue timeout/busy policy and full barge-in remain future phases
 
 ## Streaming caveat
 
@@ -80,19 +80,19 @@ Wyoming protocol streaming is implemented and verified (see above).
 
 Progressive backend-audio streaming is now wired (Phase 7.5A). When `S2_STREAM=true` (already configured in Unraid), the handler yields Wyoming audio events progressively as backend transport chunks arrive instead of buffering the complete response. When `S2_STREAM=false`, the buffered path is preserved.
 
-Note: previous real-backend measurements showed time-to-first-audio at ~3.8 s. Phase 7.5A does not guarantee a major latency reduction; measure live latency after deploying the new wrapper image (Phase 7.5B).
+Phase 8B2 backend cancellation is production-promoted in `sha-edf89bd`: deliberate disconnects stop abandoned synthesis promptly and release backend busy state. Wrapper BrokenPipe task-exception noise during deliberate disconnect remains a narrow logging issue that did not block cleanup or recovery.
 
 ## Troubleshooting
 
 ### Spinner hangs on preview
 
-Fixed in wrapper image `sha-89ed2dc`. The handler supports the full Wyoming streaming TTS lifecycle. Older images only handled the legacy `synthesize` event and ignored streaming events.
+Fixed in wrapper image `sha-89ed2dc` and preserved through current wrapper `sha-9c134cc`. The handler supports the full Wyoming streaming TTS lifecycle. Older images only handled the legacy `synthesize` event and ignored streaming events.
 
 ### No audio / connection errors
 
 - Verify both containers are running on the `sorilonet` network.
-- Verify the wrapper image is pinned to `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-974e220` or a newer intentionally tested immutable tag.
-- Verify the backend image is pinned to `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b` or a newer intentionally tested immutable tag.
+- Verify the wrapper image is pinned to `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-9c134cc` or a newer intentionally tested immutable tag.
+- Verify the backend image is pinned to `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-edf89bd` or a newer intentionally tested immutable tag; rollback is `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b`.
 - Check that the backend is reachable from the wrapper at `http://s2cpp-backend:3030/generate`.
 - Check wrapper logs for `S2ClientError`; JSON 400 errors indicate an old wrapper path that is not using multipart/form-data.
 

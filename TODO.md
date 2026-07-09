@@ -116,6 +116,15 @@
 - No backend image change required.
 - Wrapper image: ghcr.io/sorilo/wyoming-s2cpp-tts:sha-4c23aa8
 
+## Phase 8A results
+
+- Client disconnect and task cancellation now promptly close the backend HTTP stream.
+- ``S2StreamResult.cancel()`` unblocks blocked ``read()`` calls in worker threads.
+- Write failures (``BrokenPipeError``, ``ConnectionResetError``, ``TypeError`` from closed transports) are caught and trigger graceful cleanup.
+- 4 new tests. Full suite: 401/401 passing.
+- Diagnostic test: backend GPU inference continues after HTTP close (no s2.cpp cancellation API).
+- Wrapper image to be published.
+
 ## Approved remaining v0.1 phases
 
 21. ~~Phase 7.5: wire true progressive backend HTTP audio streaming into the production Wyoming event handler when `S2_STREAM=true`~~ ✅ Phase 7.5A complete

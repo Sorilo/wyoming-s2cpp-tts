@@ -257,9 +257,12 @@ class S2StreamResult:
 
     Phase 5B adds this resource-safe context manager / iterator that yields
     raw audio bytes from the backend response one chunk at a time *without*
-    buffering the entire response first. The HTTP connection remains open while
-    chunks are consumed and is closed on normal completion, backend error, or
-    early consumer exit.
+    buffering the entire response first.  The HTTP connection remains open
+    while chunks are consumed and is closed on normal completion, backend
+    error, or early consumer exit.
+
+    Phase 8A adds explicit ``cancel()`` support so a blocked ``read()`` in
+    ``asyncio.to_thread`` can be unblocked from the event-loop thread.
 
     Typical usage::
 
@@ -273,6 +276,7 @@ class S2StreamResult:
         self._timeout_seconds = timeout_seconds
         self._response = None
         self._closed = False
+        self._cancelled = False
 
     def __enter__(self):
         """Open the HTTP connection and return self as the iterator."""
@@ -290,9 +294,10 @@ class S2StreamResult:
         """Close the HTTP response on context exit.
 
         Resources are released after normal completion, backend error, or
-        early consumer exit. Exceptions are NOT suppressed.
+        early consumer exit.  Exceptions are NOT suppressed.
         """
         self._closed = True
+        self._cancelled = True
         if self._response is not None:
             try:
                 self._response.close()
@@ -300,11 +305,26 @@ class S2StreamResult:
                 pass
         return False
 
+    def cancel(self) -> None:
+        """Signal cancellation and close the underlying HTTP response.
+
+        Thread-safe — may be called from any thread.  A blocked
+        ``response.read()`` in ``__next__`` will be unblocked when the
+        response is closed, causing ``__next__`` to return an empty
+        chunk (which becomes ``StopIteration`` via ``_read_stream_chunk``).
+        """
+        self._cancelled = True
+        if self._response is not None:
+            try:
+                self._response.close()
+            except Exception:
+                pass
+
     def __iter__(self):
         return self
 
     def __next__(self):
-        if self._closed or self._response is None:
+        if self._closed or self._cancelled or self._response is None:
             raise StopIteration
         try:
             chunk = self._response.read(4096)

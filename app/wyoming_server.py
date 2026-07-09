@@ -579,15 +579,22 @@ async def synthesize_s2cpp_streaming_tts_events(
 
     except (GeneratorExit, asyncio.CancelledError) as exc:
         total_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
-        obs_log("backend_stream_done",
+        # Explicitly close the backend stream so any blocked
+        # asyncio.to_thread(read) is unblocked promptly.
+        try:
+            stream.cancel()  # type: ignore[possibly-unbound]
+        except Exception:
+            pass
+        obs_log("synthesis_cancelled",
                 connection_id=_ctx.connection_id,
                 synthesis_id=_ctx.synthesis_id,
                 text_fp=fp,
-                total_elapsed_ms=total_elapsed_ms,
-                status="cancelled")
-        # Consumer closed the async generator early or the task was
-        # cancelled.  The ``with`` block's ``__exit__`` already cleaned
-        # up the stream; finalize then re-raise.
+                reason=type(exc).__name__,
+                elapsed_ms=total_elapsed_ms,
+                pcm_bytes_received=metrics.total_emitted_bytes,
+                chunk_count=metrics.emitted_chunk_count,
+                audio_start_emitted=first_audio_emitted)
+        # The ``with`` block's ``__exit__`` also cleans up the stream.
         metrics.finalize("cancelled")
         raise
     except S2ClientError:
@@ -806,20 +813,44 @@ class FakeTtsEventHandler(AsyncEventHandler):
             self._requested_voice = resolved
 
             async def send_audio() -> None:
-                if (
-                    self.settings.tts_backend == "s2cpp"
-                    and self.settings.s2_stream
-                ):
-                    async for audio_event in self._synthesize_text_streaming(
-                        synthesize.text, voice=self._requested_voice,
+                client_connected = True
+                try:
+                    if (
+                        self.settings.tts_backend == "s2cpp"
+                        and self.settings.s2_stream
                     ):
-                        await self.write_event(audio_event)
-                else:
-                    audio_events = await self._synthesize_text(
-                        synthesize.text, voice=self._requested_voice
-                    )
-                    for audio_event in audio_events:
-                        await self.write_event(audio_event)
+                        async for audio_event in self._synthesize_text_streaming(
+                            synthesize.text, voice=self._requested_voice,
+                        ):
+                            try:
+                                await self.write_event(audio_event)
+                            except Exception:
+                                client_connected = False
+                                obs_log("client_disconnected",
+                                        connection_id=self._conn_id,
+                                        synthesis_id="legacy",
+                                        reason="write_failed")
+                                break
+                    else:
+                        audio_events = await self._synthesize_text(
+                            synthesize.text, voice=self._requested_voice
+                        )
+                        for audio_event in audio_events:
+                            try:
+                                await self.write_event(audio_event)
+                            except Exception:
+                                client_connected = False
+                                obs_log("client_disconnected",
+                                        connection_id=self._conn_id,
+                                        synthesis_id="legacy",
+                                        reason="write_failed")
+                                break
+                except asyncio.CancelledError:
+                    obs_log("synthesis_cancel_requested",
+                            connection_id=self._conn_id,
+                            synthesis_id="legacy",
+                            reason="task_cancelled")
+                    raise
 
             await self.queue.run(send_audio)
             return True
@@ -876,30 +907,68 @@ class FakeTtsEventHandler(AsyncEventHandler):
                 syn_id = new_synthesis_id()
                 async def send_streaming_audio() -> None:
                     syn_start = time.monotonic()
-                    if (
-                        self.settings.tts_backend == "s2cpp"
-                        and self.settings.s2_stream
-                    ):
-                        async for audio_event in self._synthesize_text_streaming(
-                            accumulated, voice=self._requested_voice,
-                            trigger="streaming", synthesis_id=syn_id,
+                    client_connected = True
+                    try:
+                        if (
+                            self.settings.tts_backend == "s2cpp"
+                            and self.settings.s2_stream
                         ):
-                            await self.write_event(audio_event)
-                    else:
-                        audio_events = await self._synthesize_text(
-                            accumulated, voice=self._requested_voice,
-                            trigger="streaming", synthesis_id=syn_id,
-                        )
-                        for audio_event in audio_events:
-                            await self.write_event(audio_event)
-                    # Signal end of streaming response
-                    total_synthesis_ms = int((time.monotonic() - syn_start) * 1000)
-                    await self.write_event(SynthesizeStopped().event())
-                    obs_log("syn_stopped",
-                            connection_id=self._conn_id,
-                            synthesis_id=syn_id,
-                            trigger="streaming",
-                            total_synthesis_ms=total_synthesis_ms)
+                            async for audio_event in self._synthesize_text_streaming(
+                                accumulated, voice=self._requested_voice,
+                                trigger="streaming", synthesis_id=syn_id,
+                            ):
+                                try:
+                                    await self.write_event(audio_event)
+                                except Exception:
+                                    client_connected = False
+                                    obs_log("client_disconnected",
+                                            connection_id=self._conn_id,
+                                            synthesis_id=syn_id,
+                                            reason="write_failed")
+                                    # Stop consuming the async generator —
+                                    # the async for will trigger GeneratorExit
+                                    # which cleans up the backend stream.
+                                    break
+                        else:
+                            audio_events = await self._synthesize_text(
+                                accumulated, voice=self._requested_voice,
+                                trigger="streaming", synthesis_id=syn_id,
+                            )
+                            for audio_event in audio_events:
+                                try:
+                                    await self.write_event(audio_event)
+                                except Exception:
+                                    client_connected = False
+                                    obs_log("client_disconnected",
+                                            connection_id=self._conn_id,
+                                            synthesis_id=syn_id,
+                                            reason="write_failed")
+                                    break
+                        # Signal end of streaming response
+                        if client_connected:
+                            total_synthesis_ms = int((time.monotonic() - syn_start) * 1000)
+                            try:
+                                await self.write_event(SynthesizeStopped().event())
+                            except Exception:
+                                client_connected = False
+                            if client_connected:
+                                obs_log("syn_stopped",
+                                        connection_id=self._conn_id,
+                                        synthesis_id=syn_id,
+                                        trigger="streaming",
+                                        total_synthesis_ms=total_synthesis_ms)
+                        else:
+                            obs_log("syn_stopped",
+                                    connection_id=self._conn_id,
+                                    synthesis_id=syn_id,
+                                    trigger="streaming",
+                                    status="client_disconnected")
+                    except asyncio.CancelledError:
+                        obs_log("synthesis_cancel_requested",
+                                connection_id=self._conn_id,
+                                synthesis_id=syn_id,
+                                reason="task_cancelled")
+                        raise
 
                 await self.queue.run(send_streaming_audio)
             else:

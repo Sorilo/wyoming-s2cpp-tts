@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Phase 8A: implemented Wyoming client disconnect and backend-stream cleanup.
+  Added ``cancel()`` method to ``S2StreamResult`` that closes the underlying
+  HTTP response, unblocking any ``asyncio.to_thread(read)`` worker threads.
+  Wrapped all ``write_event()`` calls in ``send_streaming_audio`` and
+  ``send_audio`` with ``try/except Exception`` to catch client disconnects
+  (including ``TypeError`` from already-closed asyncio transports).  On
+  disconnect, the ``async for`` loop breaks, triggering ``GeneratorExit`` in
+  the async generator, which calls ``stream.cancel()`` and ``__exit__`` to
+  close the backend HTTP stream.  Added ``client_disconnected``,
+  ``synthesis_cancelled``, and ``synthesis_cancel_requested`` observability
+  events with connection/synthesis IDs, reason, elapsed ms, PCM bytes/chunks,
+  and AudioStart-emitted flag.  4 new tests (3 unit + 1 TCP integration).
+  Full suite: 401/401 passing.  Diagnostic test confirms backend GPU inference
+  continues after HTTP close — Phase 8B required for backend cancellation.
+
 - Phase 7.5D2: enabled genuine progressive backend streaming in the production
   wrapper.  Changed ``segment_sentences`` default from ``True`` to ``False`` in
   ``S2GenerateRequest`` (``app/s2_client.py``).  When ``S2_STREAM=true``, the

@@ -7,7 +7,7 @@ from wyoming.client import AsyncTcpClient
 from wyoming.tts import Synthesize, SynthesizeChunk, SynthesizeStart, SynthesizeStop, SynthesizeStopped
 from app.config import Settings
 from app.s2_client import S2ClientError, S2GenerateResult
-from app.wyoming_server import start_fake_tts_server
+from app.wyoming_server import FakeTtsConfig, start_fake_tts_server
 
 _REAL_PCM_HEADERS = {"x-audio-encoding": "pcm_s16le", "x-audio-channels": "1", "x-audio-sample-rate": "44100"}
 _REAL_PCM_CONTENT_TYPE = "audio/L16; rate=44100; channels=1"
@@ -401,3 +401,153 @@ class TestStreamingCompatibility:
             assert sum(1 for e in events if AudioStart.is_type(e.type)) == 1
             assert sum(1 for e in events if AudioStop.is_type(e.type)) == 1
         finally: await server.stop()
+
+
+# ---------------------------------------------------------------------------
+# Phase 8A: client disconnect and backend stream cleanup
+# ---------------------------------------------------------------------------
+
+
+class TestStreamCleanup:
+    """Unit tests for backend stream cleanup on generator close/cancel."""
+
+    @pytest.mark.asyncio
+    async def test_generator_aclose_closes_stream(self):
+        """aclose() on the async generator triggers stream __exit__."""
+        import threading
+
+        stream_closed = threading.Event()
+
+        class _CloseStream:
+            def __init__(self):
+                self.content_type = _REAL_PCM_CONTENT_TYPE
+                self.response_headers = dict(_REAL_PCM_HEADERS)
+            def __enter__(self): return self
+            def __exit__(self, *a): stream_closed.set(); return False
+            def __iter__(self): return self
+            def __next__(self):
+                import time; time.sleep(10)
+                raise StopIteration
+            def cancel(self): pass
+
+        class _Client:
+            def generate_stream(self, r, files=None, boundary=None): return _CloseStream()
+
+        from app.s2_client import S2GenerateRequest
+        from app.wyoming_server import synthesize_s2cpp_streaming_tts_events
+        from app.metrics import MetricsCollector
+
+        client = _Client()
+        config = FakeTtsConfig(sample_rate=44100, chunk_ms=100)
+        request = S2GenerateRequest(text="test")
+        metrics = MetricsCollector("s2cpp", "streaming")
+
+        gen = synthesize_s2cpp_streaming_tts_events(client, request, config, metrics=metrics)
+        # Start the generator — it will yield AudioStart then block on stream read
+        ev = await gen.__anext__()
+        assert AudioStart.is_type(ev.type)
+
+        # Close the generator (simulates consumer disconnect)
+        await gen.aclose()
+
+        # Stream must be closed
+        assert stream_closed.wait(timeout=5), "Stream __exit__ was not called"
+
+        # Metrics finalized as cancelled
+        assert metrics._terminal_status == "cancelled"
+
+    @pytest.mark.asyncio
+    async def test_cancel_error_metrics_finalized(self):
+        """GeneratorExit/cancellation finalizes metrics as cancelled."""
+        class _Stream:
+            def __init__(self):
+                self.content_type = _REAL_PCM_CONTENT_TYPE
+                self.response_headers = dict(_REAL_PCM_HEADERS)
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def __iter__(self): return self
+            def __next__(self):
+                import time; time.sleep(10)
+                raise StopIteration
+            def cancel(self): pass
+
+        class _Client:
+            def generate_stream(self, r, files=None, boundary=None): return _Stream()
+
+        from app.s2_client import S2GenerateRequest
+        from app.wyoming_server import synthesize_s2cpp_streaming_tts_events
+        from app.metrics import MetricsCollector
+
+        client = _Client()
+        config = FakeTtsConfig(sample_rate=44100, chunk_ms=100)
+        request = S2GenerateRequest(text="test")
+        metrics = MetricsCollector("s2cpp", "streaming")
+
+        gen = synthesize_s2cpp_streaming_tts_events(client, request, config, metrics=metrics)
+        await gen.__anext__()  # AudioStart
+        await gen.aclose()
+
+        assert metrics._terminal_status == "cancelled"
+
+    @pytest.mark.asyncio
+    async def test_stream_cancel_method_called(self):
+        """cancel() on S2StreamResult is called during cleanup."""
+        import threading
+
+        cancel_called = threading.Event()
+
+        class _CancelStream:
+            def __init__(self):
+                self.content_type = _REAL_PCM_CONTENT_TYPE
+                self.response_headers = dict(_REAL_PCM_HEADERS)
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def __iter__(self): return self
+            def __next__(self):
+                import time; time.sleep(10)
+                raise StopIteration
+            def cancel(self): cancel_called.set()
+
+        class _Client:
+            def generate_stream(self, r, files=None, boundary=None): return _CancelStream()
+
+        from app.s2_client import S2GenerateRequest
+        from app.wyoming_server import synthesize_s2cpp_streaming_tts_events
+
+        client = _Client()
+        config = FakeTtsConfig(sample_rate=44100, chunk_ms=100)
+        request = S2GenerateRequest(text="test")
+
+        gen = synthesize_s2cpp_streaming_tts_events(client, request, config)
+        await gen.__anext__()
+        await gen.aclose()
+
+        assert cancel_called.wait(timeout=5), "stream.cancel() was not called"
+
+
+class TestClientDisconnectTCP:
+    """Real TCP integration tests for client disconnect behavior."""
+
+    @pytest.mark.asyncio
+    async def test_disconnect_during_streaming_no_server_crash(self):
+        """Server does not crash when client disconnects during streaming."""
+        pcm = _pcm_frames(200)
+        client = RecordingStreamingClient(audio=pcm, stream_chunks=[pcm[:400], pcm[400:]])
+        settings = Settings(tts_backend="s2cpp", s2_stream=True)
+        server = await start_fake_tts_server(host="127.0.0.1", port=0, settings=settings, s2_client_factory=_make_cf(client))
+        try:
+            async with AsyncTcpClient("127.0.0.1", server.port) as tcp:
+                await tcp.write_event(Synthesize(text="dc test").event())
+                # Read AudioStart
+                ev = await asyncio.wait_for(tcp.read_event(), timeout=5)
+                assert AudioStart.is_type(ev.type)
+                # Disconnect immediately
+                tcp._writer.close()
+                await tcp._writer.wait_closed()
+            # Server must not crash — reaching here is success
+        finally:
+            await server.stop()
+
+
+
+

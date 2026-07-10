@@ -24,6 +24,10 @@ All values validated at startup with strict range checks.
 ```
 ghcr.io/sorilo/wyoming-s2cpp-tts:sha-12f3bf8
 
+**Canonical RepoDigest:** ghcr.io/sorilo/wyoming-s2cpp-tts@sha256:1954a448a52cf6ebbbd4c09c231fb416b045d8d421d25b1c3e11acf82be28d9b
+**Local ImageID:** sha256:97bc8bf14202b8c0c4ce4e1c7a0857a3b5ff40c37232fae8636d22f529635fbd
+**Verified:** Independently pulled and inspected on target Unraid server
+
 **Workflow Run:** 29129753396
 **Job:** 86482658019
 **Source SHA:** 12f3bf8a489e76b13c62bd62c52fd443d1b07d82

@@ -169,3 +169,28 @@ Finalize templates after real restart/update/persistence/backup validation.
 3. Never claim real behavior unless actually tested.
 4. One focused commit per phase.
 5. Update `ROADMAP.md`, `TODO.md`, `NEXT_GOAL_PROMPTS.md`, and `CHANGELOG.md` when status changes.
+
+
+## Phase 9B: SpeechRequest Domain Model (next)
+- SpeechRequest domain model, scheduler-owned lifecycle state machine
+- SpeechScheduler behavior-preserving refactor, SynthesisSession foundation
+- inactive reserved semantic metadata, scheduler admission latency metric
+
+## Phase 9C: Graceful Shutdown & Admin
+- graceful shutdown, optional admin HTTP port, liveness/readiness/status/metrics
+
+## Phase 9.5: Progressive Phrase Synthesis
+- per-request phrase accumulator, boundary detection, progressive synthesis
+- continuous Wyoming audio stream, active/queued phrase cancellation
+
+## Phase 10: Barge-In
+- service cancellation contract, physical playback interruption, wake word detection
+
+## Phase 11: Home Assistant Pipeline
+- complete Assist pipeline, correlated STT/LLM/TTS/playback latency tracing
+
+## Future: Hermes Orchestrator (separate repo)
+- Job Manager, workflow engine, tools, progress, retries, confirmations
+- notifications, memory, LLM routing, Home Assistant orchestration
+- This TTS repo owns: speech admission, scheduling, synthesis, audio, cancellation, metrics
+- The orchestrator owns: why speech is generated, jobs, tools, assistant logic

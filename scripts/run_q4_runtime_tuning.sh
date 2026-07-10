@@ -46,7 +46,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-case "$PHASE" in all|threads|affinity|blipping|context-screen) ;; *) err "Invalid phase: $PHASE"; exit 1 ;; esac
+case "$PHASE" in all|threads|affinity|blipping|context-screen|ctx32-stride) ;; *) err "Invalid phase: $PHASE"; exit 1 ;; esac
 
 float_lt() { python3 -c "import sys; sys.exit(0 if float('$1') < float('$2') else 1)"; }
 ensure_dir() { mkdir -p "$1"; }
@@ -595,6 +595,85 @@ print(len(measured))
   python3 "$REPO_ROOT/scripts/_generate_context_comparison.py" "$ARTIFACT_DIR" 2>/dev/null || warn "Context report failed"
 }
 
+# ── Context-32 stride sweep (1 warmup + 1 measured, preflighted, resumable) ─
+run_ctx32_stride_sweep() {
+  local strides=(4 8 12 16 24 32)
+  info "Context-32 stride sweep: ${strides[*]} (ctx=32, threads=8, hb=0, ll=true, 1+1 runs)"
+
+  # Preflight
+  info "Preflight: validating strides..."
+  for stride in "${strides[@]}"; do
+    python3 -c "
+from app.s2_client import S2GenerateRequest
+try:
+    r = S2GenerateRequest(text='test', stream_decode_stride_frames=$stride, codec_decode_context_frames=32)
+    params = r.to_multipart_fields(streaming=True)
+    print(f'OK: stride=$stride, context=32 serialized')
+except Exception as e:
+    print(f'FAIL: stride=$stride — {e}')
+    exit(1)
+" 2>/dev/null || { err "Preflight failed for stride=$stride"; return 1; }
+  done
+  ok "Preflight passed"
+
+  for stride in "${strides[@]}"; do
+    local label="ctx32_stride_${stride}"
+    local rj="$ARTIFACT_DIR/$label/results.json"
+
+    # Resume
+    if [[ -n "${RESUME_ARTIFACT:-}" ]] && [[ -f "$rj" ]]; then
+      local ok_count=$(python3 -c "
+import json; d=json.load(open('$rj'))
+measured=[r for s in d['summaries'] for r in s['runs'] if r.get('run_type')=='measured' and r.get('status')=='success']
+print(len(measured))
+" 2>/dev/null || echo 0)
+      local has_pcm=$(find "$ARTIFACT_DIR/$label" -name '*.pcm' -size +0c 2>/dev/null | wc -l)
+      if [[ "$ok_count" -ge 1 ]] && [[ "$has_pcm" -ge 1 ]]; then
+        ok "Resume: $label already complete — skipping"
+        continue
+      fi
+    fi
+
+    ensure_dir "$ARTIFACT_DIR/$label"
+    ATTEMPTED=$((ATTEMPTED + 1))
+    info "Stride=$stride (context=32)..."
+    local config_failed=false
+
+    start_gpu_telemetry "$ARTIFACT_DIR/$label/gpu_telemetry.csv"
+    start_cpu_telemetry "$ARTIFACT_DIR/$label/cpu_telemetry.csv"
+    if ! start_backend_q4 "8" "" "$label"; then
+      stop_gpu_telemetry; stop_cpu_telemetry; FAILED=$((FAILED+1)); continue
+    fi
+
+    PYTHONPATH="$REPO_ROOT" python3 "$REPO_ROOT/scripts/benchmark_quantization.py"       --run-real --endpoint "127.0.0.1:$BENCH_PORT" --models "$HOST_MODELS/$MODEL_FILE"       --stride "$stride" --codec-context 32 --holdback 0 --start-buffer-ms 0       --warmup-runs 1 --measured-runs 1       --output-dir "$ARTIFACT_DIR" --candidate-dir "$label"       --text "$BENCHMARK_TEXT" --timeout "$TIMEOUT"       ${EFFECTIVE_VOICE:+--voice "$EFFECTIVE_VOICE"}       ${CONTAINER_VOICE_DIR:+--voice-dir "$CONTAINER_VOICE_DIR"}       || { warn "Benchmark failed for $label"; config_failed=true; }
+
+    capture_metrics_q4 "$label" "$ARTIFACT_DIR/$label"
+    docker logs "$BENCH_CONTAINER" 2>/dev/null > "$ARTIFACT_DIR/$label/startup.log" || true
+    stop_gpu_telemetry; stop_cpu_telemetry; stop_backend
+
+    if [[ "$config_failed" == true ]]; then FAILED=$((FAILED+1)); continue; fi
+
+    local wok=true
+    while IFS= read -r -d '' pcm; do create_host_wav "$pcm" "${pcm%.pcm}.wav" || wok=false; done < <(find "$ARTIFACT_DIR/$label" -name '*.pcm' -print0 2>/dev/null || true)
+    [[ "$wok" != true ]] && WAV_FAILURES=$((WAV_FAILURES+1))
+
+    if [[ -f "$rj" ]]; then
+      local rtf=$(python3 -c "import json; d=json.load(open('$rj')); s=d['summaries'][0]; print(s['avg_rtf'])" 2>/dev/null || echo "999")
+      local ok_count=$(python3 -c "import json; d=json.load(open('$rj')); measured=[r for s in d['summaries'] for r in s['runs'] if r.get('run_type')=='measured' and r.get('status')=='success']; print(len(measured))" 2>/dev/null || echo 0)
+      if [[ "$ok_count" -ge 1 ]]; then
+        info "  stride=$stride: RTF=$rtf, measured=$ok_count"
+        SUCCESSFUL=$((SUCCESSFUL+1))
+      else
+        warn "  stride=$stride: 0 measured runs"; FAILED=$((FAILED+1))
+      fi
+    else
+      MISSING_RESULTS=$((MISSING_RESULTS+1)); FAILED=$((FAILED+1))
+    fi
+  done
+
+  python3 "$REPO_ROOT/scripts/_generate_ctx32_stride_report.py" "$ARTIFACT_DIR" 2>/dev/null || warn "Stride report failed"
+}
+
 generate_combined_report() { python3 "$REPO_ROOT/scripts/_generate_q4_combined_report.py" "$ARTIFACT_DIR" 2>/dev/null || warn "Report failed"; }
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -624,6 +703,7 @@ if [[ "$RUN_REAL" != true ]]; then
   echo "Model: $MODEL_FILE | Stride: $STRIDE | Phase: $PHASE"; [[ -n "$USER_THREADS" ]] && echo "Threads: $USER_THREADS"
   echo ""; [[ "$PHASE" == "all" || "$PHASE" == "threads" ]] && echo "Thread sweep: 0,8,16,24,32"
   [[ "$PHASE" == "all" || "$PHASE" == "affinity" ]] && echo "Affinity: unrestricted, p_physical, p_all_threads, p_plus_e"
+  [[ "$PHASE" == "all" || "$PHASE" == "ctx32-stride" ]] && echo "Context-32 stride sweep: 4,8,12,16,24,32 (ctx=32, threads=8, hb=0, ll=true)"
   [[ "$PHASE" == "all" || "$PHASE" == "context-screen" ]] && echo "Context screen: 4,8,12,16,24,32,48,64 (threads=8, stride=4, hb=0)"
   [[ "$PHASE" == "all" || "$PHASE" == "blipping" ]] && echo "Blipping: ctx4/hb0, ctx64/hb0, ctx64/hb1"
   echo ""; echo "--validate-only  : inspect env, no Docker"; echo "--smoke-test     : one short synthesis"; echo "--run-real       : full sweep"
@@ -695,6 +775,7 @@ BEST_THREADS="${USER_THREADS:-8}"
 [[ "$PHASE" == "all" || "$PHASE" == "threads" ]] && run_thread_sweep
 [[ -f "$ARTIFACT_DIR/best_threads.txt" ]] && BEST_THREADS=$(cat "$ARTIFACT_DIR/best_threads.txt")
 [[ "$PHASE" == "all" || "$PHASE" == "affinity" ]] && run_affinity_sweep "$BEST_THREADS"
+[[ "$PHASE" == "all" || "$PHASE" == "ctx32-stride" ]] && run_ctx32_stride_sweep
 [[ "$PHASE" == "all" || "$PHASE" == "context-screen" ]] && run_context_screen
 [[ "$PHASE" == "all" || "$PHASE" == "blipping" ]] && run_blipping_diagnostic "$BEST_THREADS"
 generate_combined_report

@@ -14,7 +14,7 @@
 -->
 <Container version="2">
   <Name>wyoming-s2cpp-tts</Name>
-  <Repository>ghcr.io/sorilo/wyoming-s2cpp-tts:sha-4b49a70</Repository>
+  <Repository>ghcr.io/sorilo/wyoming-s2cpp-tts:sha-22db725</Repository>
   <Registry>https://ghcr.io</Registry>
   <Network>custom</Network>
   <Privileged>false</Privileged>
@@ -60,7 +60,7 @@ The s2cpp-backend container must be running before this wrapper. Wyoming protoco
 
   <!-- Progressive streaming settings -->
   <Config Name="Segment Sentences" Target="S2_SEGMENT_SENTENCES" Default="false" Mode="" Description="When true, splits text into sentences and synthesizes each separately (buffered per-sentence). When false, uses raw frame-level progressive synthesis for lower first-audio latency. Set to true only if progressive synthesis causes quality issues." Type="Variable" Display="always" Required="false" Mask="false">false</Config>
-  <Config Name="Codec Context Frames" Target="S2_CODEC_CONTEXT_FRAMES" Default="4" Mode="" Description="Codec streaming decode context window in frames. Lower values reduce total synthesis time but may affect audio quality. Accepted values: 4 (fast, low-latency), 64, 160 (quality fallback), or auto/empty to use backend model default. Values outside 4/64/160 are rejected." Type="Variable" Display="always" Required="false" Mask="false">4</Config>
+  <Config Name="Codec Context Frames" Target="S2_CODEC_CONTEXT_FRAMES" Default="4" Mode="" Description="Codec streaming decode context window in frames. Lower values reduce total synthesis time but may affect audio quality. Any non-negative integer accepted (upstream API minimum 0, no enum). Context 32 is the provisional quality baseline. Higher = better quality, slower." Type="Variable" Display="always" Required="false" Mask="false">4</Config>
 
   <!-- Voice profiles -->
   <Config Name="Voice Directory" Target="S2_VOICE_DIR" Default="/voices" Mode="" Description="Directory inside the container where .s2voice profile files are mounted. Must match the backend voice directory and the host mount path." Type="Variable" Display="always" Required="false" Mask="false">/voices</Config>

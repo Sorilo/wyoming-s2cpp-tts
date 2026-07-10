@@ -206,7 +206,7 @@
 - Deployment handoff: docs/PHASE_8E1_DEPLOYMENT_HANDOFF.md
 - Tuning paused for end-to-end HA validation
 
-## Approved remaining v0.1 phases## Approved remaining v0.1 phases
+## Approved remaining v0.1 phases
 
 21. ~~Phase 7.5: wire true progressive backend HTTP audio streaming into the production Wyoming event handler when `S2_STREAM=true`~~ ✅ Phase 7.5A complete
 23. Phase 8: client disconnect cleanup, open HTTP stream closure, cancellation behavior, and documented backend cancellation limitations

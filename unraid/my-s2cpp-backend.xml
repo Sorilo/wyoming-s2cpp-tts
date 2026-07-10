@@ -34,7 +34,7 @@ CUDA base: nvidia/cuda:12.4.1-runtime-ubuntu22.04
   <WebUI>http://[IP]:[PORT:3031]/</WebUI>
   <TemplateURL>https://raw.githubusercontent.com/sorilo/wyoming-s2cpp-tts/main/unraid/my-s2cpp-backend.xml</TemplateURL>
   <Icon>https://raw.githubusercontent.com/sorilo/wyoming-s2cpp-tts/main/unraid/s2cpp-icon.png</Icon>
-  <ExtraParams>--runtime=nvidia</ExtraParams>
+  <ExtraParams>--cpuset-cpus=0-15 <!-- i9-13900K P-cores: remove on different hardware --> --runtime=nvidia</ExtraParams>
 
   <!-- GPU configuration -->
   <Config Name="NVIDIA_VISIBLE_DEVICES" Target="NVIDIA_VISIBLE_DEVICES" Default="" Mode="" Description="GPU UUID or index. Leave empty for all GPUs, or set a specific UUID from nvidia-smi. Example: GPU-abc123-def456. Use nvidia-smi on the host to list available GPUs." Type="Variable" Display="always" Required="false" Mask="false"></Config>
@@ -46,12 +46,12 @@ CUDA base: nvidia/cuda:12.4.1-runtime-ubuntu22.04
   <Config Name="Host Port (debug)" Target="3030" Default="3031" Mode="tcp" Description="Host port mapped to container port 3030 for debugging. Port 3030 is already occupied on this server, so this template defaults to 3031. Do NOT use the container IP — reach the backend from the Wyoming container at http://s2cpp-backend:3030." Type="Port" Display="always" Required="false" Mask="false">3031</Config>
 
   <!-- Model and asset paths -->
-  <Config Name="GGUF Model Directory" Target="/models" Default="/mnt/user/appdata/s2cpp/models" Mode="ro" Description="Host directory containing the GGUF model file and tokenizer.json. Mounted read-only. Expected layout: /models/s2-pro-q6_k.gguf and /models/tokenizer.json" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/s2cpp/models</Config>
+  <Config Name="GGUF Model Directory" Target="/models" Default="/mnt/user/appdata/s2cpp/models" Mode="ro" Description="Host directory containing the GGUF model file and tokenizer.json. Mounted read-only. Expected layout: /models/s2-pro-q4_k_m.gguf and /models/tokenizer.json" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/s2cpp/models</Config>
   <Config Name="Voice Profiles Directory" Target="/voices" Default="/mnt/user/appdata/s2cpp/voices" Mode="rw" Description="Host directory for saved .s2voice profiles. Mounted read-write so voices can be saved." Type="Path" Display="always" Required="false" Mask="false">/mnt/user/appdata/s2cpp/voices</Config>
   <Config Name="Config Directory" Target="/config" Default="/mnt/user/appdata/s2cpp/config" Mode="rw" Description="Host directory for service configuration (currently unused, reserved for future use)." Type="Path" Display="advanced" Required="false" Mask="false">/mnt/user/appdata/s2cpp/config</Config>
 
   <!-- Model configuration -->
-  <Config Name="Model Path" Target="S2_MODEL" Default="/models/s2-pro-q6_k.gguf" Mode="" Description="Path to the GGUF model file inside the container. For RTX 3080 10 GB, s2-pro-q6_k.gguf is recommended." Type="Variable" Display="always" Required="true" Mask="false">/models/s2-pro-q6_k.gguf</Config>
+  <Config Name="Model Path" Target="S2_MODEL" Default="/models/s2-pro-q4_k_m.gguf" Mode="" Description="Path to the GGUF model file inside the container. For RTX 3080 10 GB, s2-pro-q4_k_m.gguf is recommended." Type="Variable" Display="always" Required="true" Mask="false">/models/s2-pro-q4_k_m.gguf</Config>
   <Config Name="Tokenizer Path" Target="S2_TOKENIZER" Default="/models/tokenizer.json" Mode="" Description="Path to tokenizer.json inside the container. If left empty, the entrypoint auto-detects next to the model file or in /models/." Type="Variable" Display="always" Required="false" Mask="false">/models/tokenizer.json</Config>
 
   <!-- Performance tuning -->

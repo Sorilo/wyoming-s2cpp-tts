@@ -26,7 +26,7 @@
 | Image | Tag | Digest |
 |---|---|---|
 | Backend | `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-edf89bd` | `sha256:c29e41e59b470d58bf4b88c11c9ec753e00fa74a3bffbb003bc257fb9c6e46d9` |
-| Wrapper (new) | `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-<commit>` | (published by this phase) |
+| Wrapper (new) | `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-22db725` | Built from commit 22db725. Pull and verify with `docker inspect`. |
 | Wrapper (rollback) | `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-9c134cc` | |
 
 ## Backend Changes (Unraid → Docker → s2cpp-backend → Edit)
@@ -39,10 +39,10 @@
 
 ## Wrapper Changes (Unraid → Docker → wyoming-s2cpp-tts → Edit)
 
-1. Update Repository to `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-<commit>`
+1. Update Repository to `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-22db725`
 2. Set environment variables per baseline table above
 3. Verify `/voices` mount: `/mnt/user/appdata/s2cpp/voices:/voices:ro`
-4. Verify `/models` mount: `/mnt/user/appdata/s2cpp/models:/models:ro`
+
 
 ## Restart Order
 
@@ -55,6 +55,15 @@
 ## Verification
 
 ```bash
+# Verify running images
+docker inspect s2cpp-backend --format "{{.Config.Image}} {{.Image}}"
+docker inspect wyoming-s2cpp-tts --format "{{.Config.Image}} {{.Image}}"
+
+# Verify environment
+docker inspect wyoming-s2cpp-tts --format "{{range .Config.Env}}{{println .}}{{end}}" | grep -E "S2_CODEC|S2_STRIDE|S2_LOW|S2_VOICE"
+```
+
+```bash
 # Backend model loaded
 docker logs s2cpp-backend 2>&1 | grep "Launching:"
 
@@ -62,7 +71,8 @@ docker logs s2cpp-backend 2>&1 | grep "Launching:"
 docker logs wyoming-s2cpp-tts 2>&1 | grep "backend_start"
 
 # Wyoming discovery
-curl -s http://192.168.1.45:10200/info | python3 -m json.tool | head -20
+# TCP connectivity check (Wyoming is not HTTP — use docker inspect instead)
+docker inspect wyoming-s2cpp-tts --format "{{.Config.Image}} {{.Image}}"
 ```
 
 ## Listening Test

@@ -18,9 +18,9 @@ Q6_K at stride 1 had RTF ~1.34 — 34% slower than real-time playback, causing u
 | CPU | Intel i9-13900K (8P+16E, 32 logical) |
 | Backend image | `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-edf89bd` |
 | Backend digest | `sha256:c29e41e59b470d58bf4b88c11c9ec753e00fa74a3bffbb003bc257fb9c6e46d9` |
-| s2.cpp revision | `edf89bd7` |
+| s2.cpp revision | `2c33261938da1a41d713768b1b391b4d368d7d2c` (upstream s2.cpp) |
 | Wrapper (production) | `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-9c134cc` |
-| Wrapper (closure) | `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-<commit>` (published by this phase) |
+| Wrapper (closure) | `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-22db725` (published by this phase) |
 | Audio | 44100 Hz mono s16le PCM |
 | Benchmark text | 361 chars (standard neighborhood passage) |
 | Voice | `cmu_bdl_male_us` (.s2voice profile) |

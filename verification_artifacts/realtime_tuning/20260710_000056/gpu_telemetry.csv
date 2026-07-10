@@ -1,0 +1,2 @@
+timestamp,gpu_index,gpu_uuid,utilization_pct,memory_used_mib,memory_total_mib,temperature_c,power_w,sm_clock_mhz,mem_clock_mhz,pstate
+2026-07-10T00:00:57,0,AAA,0,0,0,0,0,0,0,P0

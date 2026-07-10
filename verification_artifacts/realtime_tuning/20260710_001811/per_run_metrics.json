@@ -1,0 +1,113 @@
+[
+  {
+    "stride": 1,
+    "run": 1,
+    "run_type": "measured",
+    "run_label": "stride1_run1",
+    "raw": ,
+    "generate_ms": 100,
+    "stream_decode_ms": null,
+    "stream_batches": null,
+    "ar_only_ms": null,
+    "total_ms": 500,
+    "total_rtf": 0.5
+  }
+,
+  {
+    "stride": 1,
+    "run": 2,
+    "run_type": "measured",
+    "run_label": "stride1_run2",
+    "raw": ,
+    "generate_ms": 100,
+    "stream_decode_ms": null,
+    "stream_batches": null,
+    "ar_only_ms": null,
+    "total_ms": 500,
+    "total_rtf": 0.5
+  }
+,
+  {
+    "stride": 2,
+    "run": 1,
+    "run_type": "measured",
+    "run_label": "stride2_run1",
+    "raw": ,
+    "generate_ms": 100,
+    "stream_decode_ms": null,
+    "stream_batches": null,
+    "ar_only_ms": null,
+    "total_ms": 500,
+    "total_rtf": 0.5
+  }
+,
+  {
+    "stride": 2,
+    "run": 2,
+    "run_type": "measured",
+    "run_label": "stride2_run2",
+    "raw": ,
+    "generate_ms": 100,
+    "stream_decode_ms": null,
+    "stream_batches": null,
+    "ar_only_ms": null,
+    "total_ms": 500,
+    "total_rtf": 0.5
+  }
+,
+  {
+    "stride": 4,
+    "run": 1,
+    "run_type": "measured",
+    "run_label": "stride4_run1",
+    "raw": ,
+    "generate_ms": 100,
+    "stream_decode_ms": null,
+    "stream_batches": null,
+    "ar_only_ms": null,
+    "total_ms": 500,
+    "total_rtf": 0.5
+  }
+,
+  {
+    "stride": 4,
+    "run": 2,
+    "run_type": "measured",
+    "run_label": "stride4_run2",
+    "raw": ,
+    "generate_ms": 100,
+    "stream_decode_ms": null,
+    "stream_batches": null,
+    "ar_only_ms": null,
+    "total_ms": 500,
+    "total_rtf": 0.5
+  }
+,
+  {
+    "stride": 8,
+    "run": 1,
+    "run_type": "measured",
+    "run_label": "stride8_run1",
+    "raw": ,
+    "generate_ms": 100,
+    "stream_decode_ms": null,
+    "stream_batches": null,
+    "ar_only_ms": null,
+    "total_ms": 500,
+    "total_rtf": 0.5
+  }
+,
+  {
+    "stride": 8,
+    "run": 2,
+    "run_type": "measured",
+    "run_label": "stride8_run2",
+    "raw": ,
+    "generate_ms": 100,
+    "stream_decode_ms": null,
+    "stream_batches": null,
+    "ar_only_ms": null,
+    "total_ms": 500,
+    "total_rtf": 0.5
+  }
+]

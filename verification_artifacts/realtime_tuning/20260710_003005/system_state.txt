@@ -1,0 +1,16 @@
+=== Container Status ===
+{}
+
+=== Backend Status ===
+{}
+
+=== Git ===
+commit=abc
+branch=abc
+
+=== Endpoint ===
+endpoint=10.0.0.1:9999
+discovery_method=environment variable
+
+=== Timestamp ===
+2026-07-10T00:30:05Z

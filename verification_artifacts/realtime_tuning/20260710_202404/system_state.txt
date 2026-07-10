@@ -1,0 +1,16 @@
+=== Container Status ===
+{}
+
+=== Backend Status ===
+{}
+
+=== Git ===
+commit=abc
+branch=abc
+
+=== Endpoint ===
+endpoint=s2cpp-backend:3030
+discovery_method=container DNS (s2cpp-backend:3030)
+
+=== Timestamp ===
+2026-07-10T20:24:04Z

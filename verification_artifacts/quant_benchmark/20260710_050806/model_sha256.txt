@@ -1,0 +1,3 @@
+84ac904172a2cadb84e8f7f14ea3f1acef0584987635e85f7207fd254eafa235  /mnt/user/appdata/s2cpp/models/s2-pro-q6_k.gguf
+e445b0c8f32ed0ff584b906098f0fe53a67c0691249bfcccde569544f7d72cb9  /mnt/user/appdata/s2cpp/models/s2-pro-q5_k_m.gguf
+83963e1b7cec980b41eb2163d617e2b6241bfd1564dd880e5b43fc4834807bd9  /mnt/user/appdata/s2cpp/models/s2-pro-q4_k_m.gguf

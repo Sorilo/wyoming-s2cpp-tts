@@ -1,0 +1,6 @@
+wrapper_image=ghcr.io/sorilo/wyoming-s2cpp-tts:sha-9c134cc
+wrapper_status=running
+wrapper_health=healthy
+backend_image=ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-b8e54f9
+backend_status=running
+backend_health=none

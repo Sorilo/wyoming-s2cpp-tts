@@ -1,0 +1,1 @@
+ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-edf89bd

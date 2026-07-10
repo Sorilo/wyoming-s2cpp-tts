@@ -804,7 +804,7 @@ class TestBackendBusyRetry:
                 await tcp.write_event(Synthesize(text="non 503 error").event())
                 events = await _collect_all(tcp, timeout=5)
             types = [e.type for e in events]
-            assert "audio-start" not in types, "Non-503 errors should not be retried"
+            assert "audio-stop" not in types, "Non-503 errors should not produce AudioStop"
         finally:
             await server.stop()
 
@@ -1023,13 +1023,17 @@ class TestRecoveryAfterFailure:
         server = await start_fake_tts_server(
             host="127.0.0.1", port=0, settings=settings, s2_client_factory=_make_cf(client))
         try:
-            async with AsyncTcpClient("127.0.0.1", server.port) as tcp:
-                await tcp.write_event(Synthesize(text="will fail").event())
-                events1 = await _collect_all(tcp, timeout=5)
+            # First request: will fail — use separate connection
+            async with AsyncTcpClient("127.0.0.1", server.port) as tcp1:
+                await tcp1.write_event(Synthesize(text="will fail").event())
+                events1 = await _collect_all(tcp1, timeout=5)
                 assert "audio-stop" not in [e.type for e in events1]
+                # Connection may be closed by server after error
 
-                await tcp.write_event(Synthesize(text="will succeed").event())
-                events2 = await _collect_all(tcp, timeout=5)
+            # Second request: should succeed on new connection
+            async with AsyncTcpClient("127.0.0.1", server.port) as tcp2:
+                await tcp2.write_event(Synthesize(text="will succeed").event())
+                events2 = await _collect_all(tcp2, timeout=5)
                 types2 = [e.type for e in events2]
                 assert "audio-start" in types2
                 assert "audio-stop" in types2

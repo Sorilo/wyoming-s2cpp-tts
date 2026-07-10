@@ -1,0 +1,9 @@
+phase=8E.1b
+timestamp=20260710_081345
+model=s2-pro-q4_k_m.gguf
+stride=4
+voice=cmu_bdl_male_us
+voice_dir=/voices
+gpu_uuid=GPU-fcd97b9d-0c2b-3db7-6002-81a1e2c785ea
+production_gpu=GPU-65b9a886-d157-27fa-09d1-8894bc5cc135
+git_commit=5e59f8428fa69effa82d55db0ec9d500696cc091

@@ -1,0 +1,12 @@
+{
+  "threads": 8,
+  "cpuset": "",
+  "stride": 4,
+  "codec_context": 24,
+  "holdback": 0,
+  "start_buffer_ms": 0,
+  "low_latency": true,
+  "voice": "cmu_bdl_male_us",
+  "voice_dir": "/voices",
+  "model": "s2-pro-q4_k_m.gguf"
+}

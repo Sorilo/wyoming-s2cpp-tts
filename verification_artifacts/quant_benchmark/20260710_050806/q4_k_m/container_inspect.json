@@ -1,0 +1,312 @@
+[
+    {
+        "Id": "85fd1d2997c286fbf8e39f9a88d186eff5c075a4694d512be23e5ee82c0c6129",
+        "Created": "2026-07-10T05:13:38.448926681Z",
+        "Path": "/entrypoint.sh",
+        "Args": [],
+        "State": {
+            "Status": "running",
+            "Running": true,
+            "Paused": false,
+            "Restarting": false,
+            "OOMKilled": false,
+            "Dead": false,
+            "Pid": 4155769,
+            "ExitCode": 0,
+            "Error": "",
+            "StartedAt": "2026-07-10T05:13:39.259628156Z",
+            "FinishedAt": "0001-01-01T00:00:00Z"
+        },
+        "Image": "sha256:adee88123e4c1b9a6c76ff42d9686924dd462055301c6f0179d9d906d2719a88",
+        "ResolvConfPath": "/var/lib/docker/containers/85fd1d2997c286fbf8e39f9a88d186eff5c075a4694d512be23e5ee82c0c6129/resolv.conf",
+        "HostnamePath": "/var/lib/docker/containers/85fd1d2997c286fbf8e39f9a88d186eff5c075a4694d512be23e5ee82c0c6129/hostname",
+        "HostsPath": "/var/lib/docker/containers/85fd1d2997c286fbf8e39f9a88d186eff5c075a4694d512be23e5ee82c0c6129/hosts",
+        "LogPath": "/var/lib/docker/containers/85fd1d2997c286fbf8e39f9a88d186eff5c075a4694d512be23e5ee82c0c6129/85fd1d2997c286fbf8e39f9a88d186eff5c075a4694d512be23e5ee82c0c6129-json.log",
+        "Name": "/s2cpp-backend-bench",
+        "RestartCount": 0,
+        "Driver": "btrfs",
+        "Platform": "linux",
+        "MountLabel": "",
+        "ProcessLabel": "",
+        "AppArmorProfile": "",
+        "ExecIDs": null,
+        "HostConfig": {
+            "Binds": [
+                "/mnt/user/appdata/s2cpp/models:/models:ro"
+            ],
+            "ContainerIDFile": "",
+            "LogConfig": {
+                "Type": "json-file",
+                "Config": {
+                    "max-file": "2",
+                    "max-size": "100m"
+                }
+            },
+            "NetworkMode": "sorilonet",
+            "PortBindings": {
+                "3030/tcp": [
+                    {
+                        "HostIp": "",
+                        "HostPort": "3033"
+                    }
+                ]
+            },
+            "RestartPolicy": {
+                "Name": "no",
+                "MaximumRetryCount": 0
+            },
+            "AutoRemove": false,
+            "VolumeDriver": "",
+            "VolumesFrom": null,
+            "ConsoleSize": [
+                0,
+                0
+            ],
+            "CapAdd": null,
+            "CapDrop": null,
+            "CgroupnsMode": "private",
+            "Dns": [],
+            "DnsOptions": [],
+            "DnsSearch": [],
+            "ExtraHosts": null,
+            "GroupAdd": null,
+            "IpcMode": "private",
+            "Cgroup": "",
+            "Links": null,
+            "OomScoreAdj": 0,
+            "PidMode": "",
+            "Privileged": false,
+            "PublishAllPorts": false,
+            "ReadonlyRootfs": false,
+            "SecurityOpt": null,
+            "UTSMode": "",
+            "UsernsMode": "",
+            "ShmSize": 67108864,
+            "Runtime": "runc",
+            "Isolation": "",
+            "CpuShares": 0,
+            "Memory": 0,
+            "NanoCpus": 0,
+            "CgroupParent": "",
+            "BlkioWeight": 0,
+            "BlkioWeightDevice": [],
+            "BlkioDeviceReadBps": [],
+            "BlkioDeviceWriteBps": [],
+            "BlkioDeviceReadIOps": [],
+            "BlkioDeviceWriteIOps": [],
+            "CpuPeriod": 0,
+            "CpuQuota": 0,
+            "CpuRealtimePeriod": 0,
+            "CpuRealtimeRuntime": 0,
+            "CpusetCpus": "",
+            "CpusetMems": "",
+            "Devices": [],
+            "DeviceCgroupRules": null,
+            "DeviceRequests": [
+                {
+                    "Driver": "",
+                    "Count": 0,
+                    "DeviceIDs": [
+                        "GPU-fcd97b9d-0c2b-3db7-6002-81a1e2c785ea"
+                    ],
+                    "Capabilities": [
+                        [
+                            "gpu"
+                        ]
+                    ],
+                    "Options": {}
+                }
+            ],
+            "MemoryReservation": 0,
+            "MemorySwap": 0,
+            "MemorySwappiness": null,
+            "OomKillDisable": null,
+            "PidsLimit": null,
+            "Ulimits": [],
+            "CpuCount": 0,
+            "CpuPercent": 0,
+            "IOMaximumIOps": 0,
+            "IOMaximumBandwidth": 0,
+            "MaskedPaths": [
+                "/proc/asound",
+                "/proc/acpi",
+                "/proc/kcore",
+                "/proc/keys",
+                "/proc/latency_stats",
+                "/proc/timer_list",
+                "/proc/timer_stats",
+                "/proc/sched_debug",
+                "/proc/scsi",
+                "/sys/firmware",
+                "/sys/devices/virtual/powercap"
+            ],
+            "ReadonlyPaths": [
+                "/proc/bus",
+                "/proc/fs",
+                "/proc/irq",
+                "/proc/sys",
+                "/proc/sysrq-trigger"
+            ]
+        },
+        "GraphDriver": {
+            "Data": null,
+            "Name": "btrfs"
+        },
+        "Mounts": [
+            {
+                "Type": "bind",
+                "Source": "/mnt/user/appdata/s2cpp/models",
+                "Destination": "/models",
+                "Mode": "ro",
+                "RW": false,
+                "Propagation": "rprivate"
+            },
+            {
+                "Type": "volume",
+                "Name": "751cba60c0d903c8482c03081214e63e8d27363080ee12f94d7690c7f54eaffd",
+                "Source": "/var/lib/docker/volumes/751cba60c0d903c8482c03081214e63e8d27363080ee12f94d7690c7f54eaffd/_data",
+                "Destination": "/voices",
+                "Driver": "local",
+                "Mode": "",
+                "RW": true,
+                "Propagation": ""
+            },
+            {
+                "Type": "volume",
+                "Name": "5ff02c0db9a0942bf4dc3e58bb0bbbb2a8b096119b0970dfe16a4a6c3ca38e2c",
+                "Source": "/var/lib/docker/volumes/5ff02c0db9a0942bf4dc3e58bb0bbbb2a8b096119b0970dfe16a4a6c3ca38e2c/_data",
+                "Destination": "/config",
+                "Driver": "local",
+                "Mode": "",
+                "RW": true,
+                "Propagation": ""
+            }
+        ],
+        "Config": {
+            "Hostname": "85fd1d2997c2",
+            "Domainname": "",
+            "User": "s2cpp",
+            "AttachStdin": false,
+            "AttachStdout": false,
+            "AttachStderr": false,
+            "ExposedPorts": {
+                "3030/tcp": {}
+            },
+            "Tty": false,
+            "OpenStdin": false,
+            "StdinOnce": false,
+            "Env": [
+                "S2_CODEC_CPU=false",
+                "S2_THREADS=0",
+                "S2_MODEL=/models/s2-pro-q4_k_m.gguf",
+                "S2_GPU_LAYERS=-1",
+                "PATH=/usr/local/nvidia/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                "NVARCH=x86_64",
+                "NVIDIA_REQUIRE_CUDA=cuda>=12.4 brand=tesla,driver>=470,driver<471 brand=unknown,driver>=470,driver<471 brand=nvidia,driver>=470,driver<471 brand=nvidiartx,driver>=470,driver<471 brand=geforce,driver>=470,driver<471 brand=geforcertx,driver>=470,driver<471 brand=quadro,driver>=470,driver<471 brand=quadrortx,driver>=470,driver<471 brand=titan,driver>=470,driver<471 brand=titanrtx,driver>=470,driver<471 brand=tesla,driver>=525,driver<526 brand=unknown,driver>=525,driver<526 brand=nvidia,driver>=525,driver<526 brand=nvidiartx,driver>=525,driver<526 brand=geforce,driver>=525,driver<526 brand=geforcertx,driver>=525,driver<526 brand=quadro,driver>=525,driver<526 brand=quadrortx,driver>=525,driver<526 brand=titan,driver>=525,driver<526 brand=titanrtx,driver>=525,driver<526 brand=tesla,driver>=535,driver<536 brand=unknown,driver>=535,driver<536 brand=nvidia,driver>=535,driver<536 brand=nvidiartx,driver>=535,driver<536 brand=geforce,driver>=535,driver<536 brand=geforcertx,driver>=535,driver<536 brand=quadro,driver>=535,driver<536 brand=quadrortx,driver>=535,driver<536 brand=titan,driver>=535,driver<536 brand=titanrtx,driver>=535,driver<536",
+                "NV_CUDA_CUDART_VERSION=12.4.127-1",
+                "NV_CUDA_COMPAT_PACKAGE=cuda-compat-12-4",
+                "CUDA_VERSION=12.4.1",
+                "LD_LIBRARY_PATH=/usr/local/nvidia/lib:/usr/local/nvidia/lib64",
+                "NVIDIA_VISIBLE_DEVICES=all",
+                "NVIDIA_DRIVER_CAPABILITIES=compute,utility",
+                "NV_CUDA_LIB_VERSION=12.4.1-1",
+                "NV_NVTX_VERSION=12.4.127-1",
+                "NV_LIBNPP_VERSION=12.2.5.30-1",
+                "NV_LIBNPP_PACKAGE=libnpp-12-4=12.2.5.30-1",
+                "NV_LIBCUSPARSE_VERSION=12.3.1.170-1",
+                "NV_LIBCUBLAS_PACKAGE_NAME=libcublas-12-4",
+                "NV_LIBCUBLAS_VERSION=12.4.5.8-1",
+                "NV_LIBCUBLAS_PACKAGE=libcublas-12-4=12.4.5.8-1",
+                "NV_LIBNCCL_PACKAGE_NAME=libnccl2",
+                "NV_LIBNCCL_PACKAGE_VERSION=2.21.5-1",
+                "NCCL_VERSION=2.21.5-1",
+                "NV_LIBNCCL_PACKAGE=libnccl2=2.21.5-1+cuda12.4",
+                "NVIDIA_PRODUCT_NAME=CUDA",
+                "S2_HOST=0.0.0.0",
+                "S2_PORT=3030",
+                "S2_LOG_LEVEL=info"
+            ],
+            "Cmd": null,
+            "Image": "ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-edf89bd",
+            "Volumes": {
+                "/config": {},
+                "/models": {},
+                "/voices": {}
+            },
+            "WorkingDir": "",
+            "Entrypoint": [
+                "/entrypoint.sh"
+            ],
+            "OnBuild": null,
+            "Labels": {
+                "com.nvidia.cuda.version": "12.4.1",
+                "com.nvidia.volumes.needed": "nvidia_driver",
+                "maintainer": "NVIDIA CORPORATION <cudatools@nvidia.com>",
+                "org.opencontainers.image.created": "2026-07-09T18:14:23.910Z",
+                "org.opencontainers.image.description": "",
+                "org.opencontainers.image.licenses": "",
+                "org.opencontainers.image.ref.name": "ubuntu",
+                "org.opencontainers.image.revision": "edf89bd7c5554769bb36cbd049b6fbb98bcb9d41",
+                "org.opencontainers.image.source": "https://github.com/Sorilo/wyoming-s2cpp-tts",
+                "org.opencontainers.image.title": "wyoming-s2cpp-tts",
+                "org.opencontainers.image.url": "https://github.com/Sorilo/wyoming-s2cpp-tts",
+                "org.opencontainers.image.vendor": "wyoming-s2cpp-tts",
+                "org.opencontainers.image.version": "edge",
+                "wyoming-s2cpp-tts.phase": "8B2-production-cancellation",
+                "wyoming-s2cpp-tts.role": "backend-only",
+                "wyoming-s2cpp-tts.s2cpp-revision": "2c33261938da1a41d713768b1b391b4d368d7d2c"
+            }
+        },
+        "NetworkSettings": {
+            "Bridge": "",
+            "SandboxID": "63b0484af7b62475f58bd764c5acee8cc478917c16989382309a39ab05eb5798",
+            "SandboxKey": "/var/run/docker/netns/63b0484af7b6",
+            "Ports": {
+                "3030/tcp": [
+                    {
+                        "HostIp": "0.0.0.0",
+                        "HostPort": "3033"
+                    },
+                    {
+                        "HostIp": "::",
+                        "HostPort": "3033"
+                    }
+                ]
+            },
+            "HairpinMode": false,
+            "LinkLocalIPv6Address": "",
+            "LinkLocalIPv6PrefixLen": 0,
+            "SecondaryIPAddresses": null,
+            "SecondaryIPv6Addresses": null,
+            "EndpointID": "",
+            "Gateway": "",
+            "GlobalIPv6Address": "",
+            "GlobalIPv6PrefixLen": 0,
+            "IPAddress": "",
+            "IPPrefixLen": 0,
+            "IPv6Gateway": "",
+            "MacAddress": "",
+            "Networks": {
+                "sorilonet": {
+                    "IPAMConfig": null,
+                    "Links": null,
+                    "Aliases": null,
+                    "MacAddress": "02:42:ac:14:00:37",
+                    "DriverOpts": null,
+                    "NetworkID": "740c7d655a9c38c9a3df60c272783040d3e74701676f2df12fc516a351952088",
+                    "EndpointID": "a1a7ad9537505cf21d7757b7407261b65ba56ecfc200486df3802b56ec5ca04b",
+                    "Gateway": "172.20.0.1",
+                    "IPAddress": "172.20.0.55",
+                    "IPPrefixLen": 16,
+                    "IPv6Gateway": "",
+                    "GlobalIPv6Address": "",
+                    "GlobalIPv6PrefixLen": 0,
+                    "DNSNames": [
+                        "s2cpp-backend-bench",
+                        "85fd1d2997c2"
+                    ]
+                }
+            }
+        }
+    }
+]

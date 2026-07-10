@@ -1,0 +1,16 @@
+=== Container Status ===
+
+
+=== Backend Status ===
+
+
+=== Git ===
+commit=abc
+branch=abc
+
+=== Endpoint ===
+endpoint=127.0.0.1:3031
+discovery_method=fallback debug port (3031)
+
+=== Timestamp ===
+2026-07-10T00:00:58Z

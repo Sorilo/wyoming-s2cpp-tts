@@ -1,0 +1,85 @@
+{
+  "contexts": {
+    "4": {
+      "label": "context_4",
+      "success": 3,
+      "rtf_mean": 1.007762787294041,
+      "rtf_median": 1.0061910632493913,
+      "rtf_min": 1.00361214705667,
+      "rtf_max": 1.0134851515760614,
+      "first_pcm_mean": 247.14973199297674,
+      "total_wall_mean": 22435.884058329975
+    },
+    "8": {
+      "label": "context_8",
+      "success": 1,
+      "rtf_mean": 1.0624421045520556,
+      "rtf_median": 1.0624421045520556,
+      "rtf_min": 1.0624421045520556,
+      "rtf_max": 1.0624421045520556,
+      "first_pcm_mean": 238.54594898875803,
+      "total_wall_mean": 25261.93406400853
+    },
+    "12": {
+      "label": "context_12",
+      "success": 1,
+      "rtf_mean": 1.1077203177274042,
+      "rtf_median": 1.1077203177274042,
+      "rtf_min": 1.1077203177274042,
+      "rtf_max": 1.1077203177274042,
+      "first_pcm_mean": 246.287793997908,
+      "total_wall_mean": 24538.039626000682
+    },
+    "16": {
+      "label": "context_16",
+      "success": 1,
+      "rtf_mean": 1.1660153458500384,
+      "rtf_median": 1.1660153458500384,
+      "rtf_min": 1.1660153458500384,
+      "rtf_max": 1.1660153458500384,
+      "first_pcm_mean": 251.66219999664463,
+      "total_wall_mean": 26045.980159018654
+    },
+    "24": {
+      "label": "context_24",
+      "success": 1,
+      "rtf_mean": 1.2656947109285044,
+      "rtf_median": 1.2656947109285044,
+      "rtf_min": 1.2656947109285044,
+      "rtf_max": 1.2656947109285044,
+      "first_pcm_mean": 253.10289999470115,
+      "total_wall_mean": 27684.790107014123
+    },
+    "32": {
+      "label": "context_32",
+      "success": 1,
+      "rtf_mean": 1.3744216107988567,
+      "rtf_median": 1.3744216107988567,
+      "rtf_min": 1.3744216107988567,
+      "rtf_max": 1.3744216107988567,
+      "first_pcm_mean": 256.5563830139581,
+      "total_wall_mean": 32679.943650000496
+    },
+    "48": {
+      "label": "context_48",
+      "success": 1,
+      "rtf_mean": 1.5726742640036848,
+      "rtf_median": 1.5726742640036848,
+      "rtf_min": 1.5726742640036848,
+      "rtf_max": 1.5726742640036848,
+      "first_pcm_mean": 238.75734099419788,
+      "total_wall_mean": 35641.006884980015
+    },
+    "64": {
+      "label": "context_64",
+      "success": 3,
+      "rtf_mean": 1.759848872671703,
+      "rtf_median": 1.7609785530636006,
+      "rtf_min": 1.757233069805597,
+      "rtf_max": 1.761334995145912,
+      "first_pcm_mean": 244.81098466397574,
+      "total_wall_mean": 38221.71498899115
+    }
+  },
+  "goal": "smallest context without audible tapping"
+}

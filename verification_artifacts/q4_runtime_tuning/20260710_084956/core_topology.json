@@ -1,0 +1,303 @@
+{
+  "classification_method": "thread_siblings",
+  "core_topology": {
+    "0": {
+      "cpu_id": 0,
+      "core_id": 0,
+      "raw_type": null,
+      "normalized_type": "P-core",
+      "siblings": "0-1",
+      "classification_method": "thread_siblings"
+    },
+    "1": {
+      "cpu_id": 1,
+      "core_id": 0,
+      "raw_type": null,
+      "normalized_type": "P-core",
+      "siblings": "0-1",
+      "classification_method": "thread_siblings"
+    },
+    "10": {
+      "cpu_id": 10,
+      "core_id": 20,
+      "raw_type": null,
+      "normalized_type": "P-core",
+      "siblings": "10-11",
+      "classification_method": "thread_siblings"
+    },
+    "11": {
+      "cpu_id": 11,
+      "core_id": 20,
+      "raw_type": null,
+      "normalized_type": "P-core",
+      "siblings": "10-11",
+      "classification_method": "thread_siblings"
+    },
+    "12": {
+      "cpu_id": 12,
+      "core_id": 24,
+      "raw_type": null,
+      "normalized_type": "P-core",
+      "siblings": "12-13",
+      "classification_method": "thread_siblings"
+    },
+    "13": {
+      "cpu_id": 13,
+      "core_id": 24,
+      "raw_type": null,
+      "normalized_type": "P-core",
+      "siblings": "12-13",
+      "classification_method": "thread_siblings"
+    },
+    "14": {
+      "cpu_id": 14,
+      "core_id": 28,
+      "raw_type": null,
+      "normalized_type": "P-core",
+      "siblings": "14-15",
+      "classification_method": "thread_siblings"
+    },
+    "15": {
+      "cpu_id": 15,
+      "core_id": 28,
+      "raw_type": null,
+      "normalized_type": "P-core",
+      "siblings": "14-15",
+      "classification_method": "thread_siblings"
+    },
+    "16": {
+      "cpu_id": 16,
+      "core_id": 32,
+      "raw_type": null,
+      "normalized_type": "E-core",
+      "siblings": "16",
+      "classification_method": "thread_siblings"
+    },
+    "17": {
+      "cpu_id": 17,
+      "core_id": 33,
+      "raw_type": null,
+      "normalized_type": "E-core",
+      "siblings": "17",
+      "classification_method": "thread_siblings"
+    },
+    "18": {
+      "cpu_id": 18,
+      "core_id": 34,
+      "raw_type": null,
+      "normalized_type": "E-core",
+      "siblings": "18",
+      "classification_method": "thread_siblings"
+    },
+    "19": {
+      "cpu_id": 19,
+      "core_id": 35,
+      "raw_type": null,
+      "normalized_type": "E-core",
+      "siblings": "19",
+      "classification_method": "thread_siblings"
+    },
+    "2": {
+      "cpu_id": 2,
+      "core_id": 4,
+      "raw_type": null,
+      "normalized_type": "P-core",
+      "siblings": "2-3",
+      "classification_method": "thread_siblings"
+    },
+    "20": {
+      "cpu_id": 20,
+      "core_id": 36,
+      "raw_type": null,
+      "normalized_type": "E-core",
+      "siblings": "20",
+      "classification_method": "thread_siblings"
+    },
+    "21": {
+      "cpu_id": 21,
+      "core_id": 37,
+      "raw_type": null,
+      "normalized_type": "E-core",
+      "siblings": "21",
+      "classification_method": "thread_siblings"
+    },
+    "22": {
+      "cpu_id": 22,
+      "core_id": 38,
+      "raw_type": null,
+      "normalized_type": "E-core",
+      "siblings": "22",
+      "classification_method": "thread_siblings"
+    },
+    "23": {
+      "cpu_id": 23,
+      "core_id": 39,
+      "raw_type": null,
+      "normalized_type": "E-core",
+      "siblings": "23",
+      "classification_method": "thread_siblings"
+    },
+    "24": {
+      "cpu_id": 24,
+      "core_id": 40,
+      "raw_type": null,
+      "normalized_type": "E-core",
+      "siblings": "24",
+      "classification_method": "thread_siblings"
+    },
+    "25": {
+      "cpu_id": 25,
+      "core_id": 41,
+      "raw_type": null,
+      "normalized_type": "E-core",
+      "siblings": "25",
+      "classification_method": "thread_siblings"
+    },
+    "26": {
+      "cpu_id": 26,
+      "core_id": 42,
+      "raw_type": null,
+      "normalized_type": "E-core",
+      "siblings": "26",
+      "classification_method": "thread_siblings"
+    },
+    "27": {
+      "cpu_id": 27,
+      "core_id": 43,
+      "raw_type": null,
+      "normalized_type": "E-core",
+      "siblings": "27",
+      "classification_method": "thread_siblings"
+    },
+    "28": {
+      "cpu_id": 28,
+      "core_id": 44,
+      "raw_type": null,
+      "normalized_type": "E-core",
+      "siblings": "28",
+      "classification_method": "thread_siblings"
+    },
+    "29": {
+      "cpu_id": 29,
+      "core_id": 45,
+      "raw_type": null,
+      "normalized_type": "E-core",
+      "siblings": "29",
+      "classification_method": "thread_siblings"
+    },
+    "3": {
+      "cpu_id": 3,
+      "core_id": 4,
+      "raw_type": null,
+      "normalized_type": "P-core",
+      "siblings": "2-3",
+      "classification_method": "thread_siblings"
+    },
+    "30": {
+      "cpu_id": 30,
+      "core_id": 46,
+      "raw_type": null,
+      "normalized_type": "E-core",
+      "siblings": "30",
+      "classification_method": "thread_siblings"
+    },
+    "31": {
+      "cpu_id": 31,
+      "core_id": 47,
+      "raw_type": null,
+      "normalized_type": "E-core",
+      "siblings": "31",
+      "classification_method": "thread_siblings"
+    },
+    "4": {
+      "cpu_id": 4,
+      "core_id": 8,
+      "raw_type": null,
+      "normalized_type": "P-core",
+      "siblings": "4-5",
+      "classification_method": "thread_siblings"
+    },
+    "5": {
+      "cpu_id": 5,
+      "core_id": 8,
+      "raw_type": null,
+      "normalized_type": "P-core",
+      "siblings": "4-5",
+      "classification_method": "thread_siblings"
+    },
+    "6": {
+      "cpu_id": 6,
+      "core_id": 12,
+      "raw_type": null,
+      "normalized_type": "P-core",
+      "siblings": "6-7",
+      "classification_method": "thread_siblings"
+    },
+    "7": {
+      "cpu_id": 7,
+      "core_id": 12,
+      "raw_type": null,
+      "normalized_type": "P-core",
+      "siblings": "6-7",
+      "classification_method": "thread_siblings"
+    },
+    "8": {
+      "cpu_id": 8,
+      "core_id": 16,
+      "raw_type": null,
+      "normalized_type": "P-core",
+      "siblings": "8-9",
+      "classification_method": "thread_siblings"
+    },
+    "9": {
+      "cpu_id": 9,
+      "core_id": 16,
+      "raw_type": null,
+      "normalized_type": "P-core",
+      "siblings": "8-9",
+      "classification_method": "thread_siblings"
+    }
+  },
+  "p_cores": [
+    "0",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
+    "10",
+    "11",
+    "12",
+    "13",
+    "14",
+    "15"
+  ],
+  "e_cores": [
+    "16",
+    "17",
+    "18",
+    "19",
+    "20",
+    "21",
+    "22",
+    "23",
+    "24",
+    "25",
+    "26",
+    "27",
+    "28",
+    "29",
+    "30",
+    "31"
+  ],
+  "affinity_sets": {
+    "unrestricted": "0,1,10,11,12,13,14,15,16,17,18,19,2,20,21,22,23,24,25,26,27,28,29,3,30,31,4,5,6,7,8,9",
+    "p_physical": "0,2,4,6,8,10,12,14",
+    "p_all_threads": "0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15",
+    "p_plus_e": "0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23"
+  }
+}

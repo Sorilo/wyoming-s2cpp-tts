@@ -1,0 +1,78 @@
+{
+  "endpoint": "127.0.0.1:3034",
+  "text_len": 361,
+  "stride": 4,
+  "codec_context": 4,
+  "holdback": 0,
+  "start_buffer_ms": 0,
+  "low_latency": true,
+  "sample_rate_hz": 44100,
+  "warmup_runs": 1,
+  "measured_runs": 3,
+  "candidate_models": [
+    {
+      "filename": "s2-pro-q4_k_m.gguf",
+      "quant_label": "Q4_K_M",
+      "sha256": "83963e1b7cec980b41eb2163d617e2b6241bfd1564dd880e5b43fc4834807bd9",
+      "size_bytes": 3566165088,
+      "exists": true
+    }
+  ],
+  "summaries": [
+    {
+      "quant": "Q4_K_M",
+      "model_filename": "s2-pro-q4_k_m.gguf",
+      "model_sha256": "83963e1b7cec980b41eb2163d617e2b6241bfd1564dd880e5b43fc4834807bd9",
+      "model_size_bytes": 3566165088,
+      "avg_rtf": 1.0061506344977413,
+      "min_rtf": 1.000894056571533,
+      "max_rtf": 1.0095028706902793,
+      "avg_first_pcm_ms": 226.31080400121087,
+      "avg_total_ms": 22619.781599001726,
+      "runs": [
+        {
+          "run": 1,
+          "run_type": "measured",
+          "status": "success",
+          "rtf": 1.0095028706902793,
+          "time_to_headers_ms": 1.5552539844065905,
+          "time_to_first_pcm_ms": 226.81240699603222,
+          "total_wall_ms": 24003.185535984812,
+          "pcm_bytes": 2097152,
+          "audio_duration_ms": 23777.233560090703,
+          "error": "",
+          "pcm_path": "/mnt/user/appdata/hermes-agent/webui-workspace/wyoming-s2cpp-tts/verification_artifacts/q4_runtime_tuning/20260710_064041/threads_32/quant_q4km_run1/quant_q4km_run1.pcm",
+          "backend_metrics": null
+        },
+        {
+          "run": 2,
+          "run_type": "measured",
+          "status": "success",
+          "rtf": 1.008054976231412,
+          "time_to_headers_ms": 0.9441790170967579,
+          "time_to_first_pcm_ms": 229.80832000030205,
+          "total_wall_ms": 23032.478978013387,
+          "pcm_bytes": 2015232,
+          "audio_duration_ms": 22848.43537414966,
+          "error": "",
+          "pcm_path": "/mnt/user/appdata/hermes-agent/webui-workspace/wyoming-s2cpp-tts/verification_artifacts/q4_runtime_tuning/20260710_064041/threads_32/quant_q4km_run2/quant_q4km_run2.pcm",
+          "backend_metrics": null
+        },
+        {
+          "run": 3,
+          "run_type": "measured",
+          "status": "success",
+          "rtf": 1.000894056571533,
+          "time_to_headers_ms": 1.0341870074626058,
+          "time_to_first_pcm_ms": 222.31168500729837,
+          "total_wall_ms": 20823.68028300698,
+          "pcm_bytes": 1835008,
+          "audio_duration_ms": 20805.079365079364,
+          "error": "",
+          "pcm_path": "/mnt/user/appdata/hermes-agent/webui-workspace/wyoming-s2cpp-tts/verification_artifacts/q4_runtime_tuning/20260710_064041/threads_32/quant_q4km_run3/quant_q4km_run3.pcm",
+          "backend_metrics": null
+        }
+      ]
+    }
+  ]
+}

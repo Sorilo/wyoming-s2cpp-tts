@@ -1,0 +1,50 @@
+{
+  "endpoint": "127.0.0.1:3034",
+  "text_len": 361,
+  "stride": 4,
+  "codec_context": 8,
+  "holdback": 0,
+  "start_buffer_ms": 0,
+  "low_latency": true,
+  "sample_rate_hz": 44100,
+  "warmup_runs": 1,
+  "measured_runs": 1,
+  "candidate_models": [
+    {
+      "filename": "s2-pro-q4_k_m.gguf",
+      "quant_label": "Q4_K_M",
+      "sha256": "83963e1b7cec980b41eb2163d617e2b6241bfd1564dd880e5b43fc4834807bd9",
+      "size_bytes": 3566165088,
+      "exists": true
+    }
+  ],
+  "summaries": [
+    {
+      "quant": "Q4_K_M",
+      "model_filename": "s2-pro-q4_k_m.gguf",
+      "model_sha256": "83963e1b7cec980b41eb2163d617e2b6241bfd1564dd880e5b43fc4834807bd9",
+      "model_size_bytes": 3566165088,
+      "avg_rtf": 1.0624421045520556,
+      "min_rtf": 1.0624421045520556,
+      "max_rtf": 1.0624421045520556,
+      "avg_first_pcm_ms": 238.54594898875803,
+      "avg_total_ms": 25261.93406400853,
+      "runs": [
+        {
+          "run": 1,
+          "run_type": "measured",
+          "status": "success",
+          "rtf": 1.0624421045520556,
+          "time_to_headers_ms": 1.092261984013021,
+          "time_to_first_pcm_ms": 238.54594898875803,
+          "total_wall_ms": 25261.93406400853,
+          "pcm_bytes": 2097152,
+          "audio_duration_ms": 23777.233560090703,
+          "error": "",
+          "pcm_path": "verification_artifacts/q4_runtime_tuning/20260710_074118/context_8/quant_q4km_run1/quant_q4km_run1.pcm",
+          "backend_metrics": null
+        }
+      ]
+    }
+  ]
+}

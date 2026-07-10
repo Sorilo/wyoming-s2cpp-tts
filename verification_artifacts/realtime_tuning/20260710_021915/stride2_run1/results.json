@@ -1,0 +1,39 @@
+{
+  "endpoint": "127.0.0.1:3032",
+  "text": "The morning sun cast long shadows across the quiet neighborhood as residents began their daily routines. A gentle breeze carried the scent of fresh coffee from the corner cafe, where early customers sat reading newspapers and checking their phones. Children hurried past with backpacks slung over their shoulders, their laughter echoing off the brick buildings.",
+  "text_len": 361,
+  "codec_context": 4,
+  "holdback": 0,
+  "start_buffer_ms": 0,
+  "low_latency": true,
+  "strides": [
+    2
+  ],
+  "warmup_runs": 0,
+  "measured_runs": 1,
+  "sample_rate_hz": 44100,
+  "summaries": [
+    {
+      "stride": 2,
+      "avg_rtf": 1.1885385759070795,
+      "avg_first_pcm_ms": 149.61039097397588,
+      "avg_total_ms": 23458.14005599823,
+      "runs": [
+        {
+          "run": 1,
+          "run_type": "measured",
+          "run_label": "stride2_run1",
+          "status": "success",
+          "rtf": 1.1885385759070795,
+          "time_to_headers_ms": 2.859697997337207,
+          "time_to_first_pcm_ms": 149.61039097397588,
+          "total_wall_ms": 23458.14005599823,
+          "pcm_bytes": 1740800,
+          "audio_duration_ms": 19736.961451247163,
+          "error": "",
+          "pcm_path": "/mnt/user/appdata/hermes-agent/webui-workspace/wyoming-s2cpp-tts/verification_artifacts/realtime_tuning/20260710_021915/stride2_run1/stride2_run1.pcm"
+        }
+      ]
+    }
+  ]
+}

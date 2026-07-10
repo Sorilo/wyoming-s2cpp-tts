@@ -153,10 +153,10 @@ alone do not capture perceptual quality.
 
 | Quant   | Filename                | Expected Size | Status        |
 |---------|-------------------------|---------------|---------------|
-| Q6_K    | s2-pro-q6_k.gguf       | ~3.2 GB       | Baseline ✅   |
-| Q5_K_M  | s2-pro-q5_k_m.gguf     | ~2.9 GB       | To download   |
-| Q4_K_M  | s2-pro-q4_k_m.gguf     | ~2.6 GB       | To download   |
-| Q8_0    | s2-pro-q8_0.gguf       | ~3.8 GB       | Optional      |
+| Q6_K    | s2-pro-q6_k.gguf       | ~4.5 GB       | Baseline ✅   |
+| Q5_K_M  | s2-pro-q5_k_m.gguf     | ~4.0 GB       | To download   |
+| Q4_K_M  | s2-pro-q4_k_m.gguf     | ~3.6 GB       | To download   |
+| Q8_0    | s2-pro-q8_0.gguf       | ~5.2 GB       | Optional      |
 
 ### Fixed Variables
 
@@ -237,7 +237,7 @@ Q8_0 is an 8-bit quantization with near-lossless quality — effectively the
 quality ceiling for quantized models.  It may be benchmarked as an optional
 reference point if:
 
-- Storage is sufficient (~3.8 GB vs 3.2 GB for Q6_K)
+- Storage is sufficient (~5.2 GB vs 3.2 GB for Q6_K)
 - The file is verified as compatible with s2.cpp backend
 - Adding it does not delay the primary Q6/Q5/Q4 comparison
 
@@ -262,6 +262,209 @@ Each artifact directory contains:
 - `per_run_metrics.json` — correlated backend [Metrics] per run
 - `stride*_run*_metrics.log` — raw `docker logs` per run
 - `stride*_run*/` — per-run subdirectories with raw PCM
+
+---
+
+## Hardware and Software Provenance
+
+| Component | Value |
+|---|---|
+| **GPU** | NVIDIA RTX 3080 (UUID: GPU-65b9a886-d157-27fa-09d1-8894bc5cc135) |
+| **GPU driver** | Running container's CUDA driver |
+| **Backend image** | `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-edf89bd` |
+| **Backend digest** | `sha256:c29e41e59b470d58bf4b88c11c9ec753e00fa74a3bffbb003bc257fb9c6e46d9` |
+| **s2.cpp revision** | edf89bd7c5554769bb36cbd049b6fbb98bcb9d41 |
+| **Repository commit** | 97eb49c (perf/realtime-stride-tuning) |
+| **Wrapper (production)** | `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-9c134cc` |
+| **Container network** | sorilonet |
+| **Backend port** | 3032 (host) → 3030 (container) |
+| **Unraid host** | 192.168.1.45 |
+| **Home Assistant** | 192.168.1.233 → 192.168.1.45:10200 |
+
+---
+
+## Benchmark Limitations
+
+1. **Single GPU**: all results are on one RTX 3080.  Different GPUs will have
+   different RTF characteristics.
+2. **Single text sample**: the 361-char benchmark text may not represent all
+   synthesis workloads (short commands, long narratives).
+3. **No production load simulation**: benchmarks run sequentially with idle GPU
+   between runs.  Concurrent TTS requests or HA pipeline activity may affect
+   real-world performance.
+4. **Three measured runs**: not statistically definitive.  Variability across
+   runs is reported but confidence intervals are not computed.
+5. **Audio quality**: assessed informally by one listener.  Perceptual quality
+   claims require controlled listening tests.
+6. **Model loading**: each quant comparison requires container restart, which
+   includes model loading time (~10–30s).  This is excluded from measurement
+   but documented.
+7. **Backend metrics correlation**: the [Metrics] Streaming line is polled
+   from `docker logs --since` with a 30s bounded timeout.  Concurrent requests
+   to the same backend could cause metric misattribution (the benchmark
+   container is dedicated, mitigating this).
+
+---
+
+## Host-Side Live Benchmark Runbook
+
+> **Architecture**: The s2.cpp server loads ONE GGUF at process startup via the
+> `S2_MODEL` environment variable.  HTTP requests cannot switch models mid-process.
+> Each candidate requires a fresh backend container start/stop cycle.
+
+### Step 1: Pull the latest commit
+
+```bash
+cd /mnt/user/appdata/hermes-agent/webui-workspace/wyoming-s2cpp-tts
+git fetch origin
+git checkout perf/realtime-stride-tuning
+git pull origin perf/realtime-stride-tuning
+git log --oneline -1
+```
+
+### Step 2: Discover the `/models` host mount
+
+```bash
+docker inspect s2cpp-backend \
+  --format '{{range .Mounts}}{{if eq .Destination "/models"}}{{.Source}}{{end}}{{end}}'
+```
+
+Use the printed host source path for all model file operations below.
+
+### Step 3: List existing GGUF files and calculate required storage
+
+```bash
+HOST_MODELS="/mnt/user/appdata/s2cpp/models"  # ← REPLACE with discovered path
+ls -lh "$HOST_MODELS"/s2-pro-q*.gguf 2>/dev/null
+df -h "$HOST_MODELS"
+```
+
+### Step 4: Download missing candidate models
+
+| Model          | Filename                | ~Size  | Status     |
+|----------------|-------------------------|--------|------------|
+| Q6_K (baseline)| s2-pro-q6_k.gguf       | 4.5 GB | Existing   |
+| Q5_K_M         | s2-pro-q5_k_m.gguf     | 4.0 GB | Download   |
+| Q4_K_M         | s2-pro-q4_k_m.gguf     | 3.6 GB | Download   |
+
+Download using resumable curl with atomic rename:
+
+```bash
+HOST_MODELS="/mnt/user/appdata/s2cpp/models"  # ← REPLACE with discovered path
+
+# Q5_K_M (~4.0 GB)
+curl --continue-at - --fail --location --retry 3 \
+  -o "$HOST_MODELS/s2-pro-q5_k_m.gguf.part" \
+  "<UPSTREAM_Q5_URL>" \
+  && mv "$HOST_MODELS/s2-pro-q5_k_m.gguf.part" "$HOST_MODELS/s2-pro-q5_k_m.gguf"
+
+# Q4_K_M (~3.6 GB)
+curl --continue-at - --fail --location --retry 3 \
+  -o "$HOST_MODELS/s2-pro-q4_k_m.gguf.part" \
+  "<UPSTREAM_Q4_URL>" \
+  && mv "$HOST_MODELS/s2-pro-q4_k_m.gguf.part" "$HOST_MODELS/s2-pro-q4_k_m.gguf"
+```
+
+> **Replace `<UPSTREAM_*_URL>` with the verified upstream S2 Pro GGUF download URLs.**
+
+Record checksums:
+
+```bash
+sha256sum "$HOST_MODELS"/s2-pro-q*.gguf | tee model_sha256.txt
+```
+
+### Step 5: Dry-run the orchestrator (safe, no containers)
+
+```bash
+cd /mnt/user/appdata/hermes-agent/webui-workspace/wyoming-s2cpp-tts
+bash scripts/run_quantization_benchmark_unraid.sh
+```
+
+### Step 6: Run the real benchmark
+
+```bash
+bash scripts/run_quantization_benchmark_unraid.sh --run-real
+```
+
+This orchestration sequence:
+1. Discovers idle GPU (avoids the production TTS GPU if busy)
+2. Checks available storage
+3. For each candidate (Q6 → Q5 → Q4):
+   - Starts temporary `s2cpp-backend-bench` container with `S2_MODEL=/models/<file>`
+   - Waits for `Launching: s2 --model /models/<file>` in startup logs
+   - Verifies HTTP endpoint reachability
+   - Runs `benchmark_quantization.py --run-real` with exactly one model
+   - Captures container inspect, startup logs, backend metrics, GPU telemetry
+   - Stops and removes the temporary container
+4. Produces combined results in `verification_artifacts/quant_benchmark/<timestamp>/`
+
+### Step 7: Identify the artifact directory
+
+```bash
+ls -d verification_artifacts/quant_benchmark/*/ | tail -1
+```
+
+### Step 8: Convert PCM to WAV for listening
+
+**Primary path: Hermes-Suite ffmpeg** (Unraid host lacks ffmpeg):
+
+```bash
+ARTIFACT_DIR="verification_artifacts/quant_benchmark/<timestamp>"  # ← fill in
+
+for label in q6_k q5_k_m q4_k_m; do
+  docker exec Hermes-Suite ffmpeg -y -f s16le -ar 44100 -ac 1 \
+    -i "/workspace/wyoming-s2cpp-tts/$ARTIFACT_DIR/$label/quant_${label}_run1.pcm" \
+    "/workspace/wyoming-s2cpp-tts/$ARTIFACT_DIR/$label/quant_${label}_run1.wav"
+done
+```
+
+**Fallback: Python wave module** (no transcoding, adds WAV header):
+
+```bash
+ARTIFACT_DIR="verification_artifacts/quant_benchmark/<timestamp>"  # ← fill in
+
+python3 -c "
+import wave, sys
+for label in ['q6_k', 'q5_k_m', 'q4_k_m']:
+    pcm_path = f'$ARTIFACT_DIR/{label}/quant_{label}_run1.pcm'
+    wav_path = f'$ARTIFACT_DIR/{label}/quant_{label}_run1.wav'
+    with open(pcm_path, 'rb') as pf:
+        pcm = pf.read()
+    with wave.open(wav_path, 'wb') as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(44100)
+        wf.writeframes(pcm)
+    print(f'  {wav_path}')
+"
+```
+
+### Step 9: View the aggregate report
+
+```bash
+cat "$ARTIFACT_DIR/summary.md"
+python3 -m json.tool "$ARTIFACT_DIR/combined_results.json" | head -80
+```
+
+### Step 10: Human listening evaluation
+
+Use the Listening Checklist in this document to evaluate each quant's WAV file.
+
+### Step 11: Cleanup
+
+The orchestrator handles cleanup automatically (trap on EXIT/INT/TERM).
+Verify no benchmark containers remain:
+
+```bash
+docker ps -a | grep s2cpp-backend-bench || echo "Clean"
+```
+
+### Step 12: Selection decision
+
+- If a lower quant achieves **RTF < 0.95** with **no quality regression** →
+  recommend as production model.
+- If no quant reaches RTF < 1.0 → **no production change**; proceed to Phase 8E.
+- **DO NOT automatically promote** — human listening required first.
 
 ---
 

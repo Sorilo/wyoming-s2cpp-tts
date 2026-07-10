@@ -99,7 +99,8 @@ Stride 4 is the current preferred Q6_K latency/throughput compromise (RTF 1.13, 
 
 Select a single preferred runtime quantization by benchmarking candidate Q6_K, Q5_K_M, and Q4_K_M GGUF models against the RTX 3080 at fixed stride 4, holding all other variables constant.  The phase delivers: (a) hardened benchmark tooling with reliable metric correlation, port discovery, and WAV conversion; (b) a controlled quant comparison under identical conditions (same GPU, backend build, container environment, voice, and text); (c) human listening evaluation of audio quality across quants; and (d) a single recommended runtime model.
 
-**Status**: Tooling complete (benchmark harness, metric correlation, model provenance, docs, 574 tests).
+**Status**: Architecture corrected (single-container-per-model via S2_MODEL env var).
+Tooling complete (orchestrator, harness, metric correlation, model provenance, docs, 590 tests).
 Live Q5_K_M and Q4_K_M quant benchmark + human listening still pending.
 
 This phase does NOT implement dynamic model switching, multi-worker routing, or multi-GPU scheduling.  Those remain in post-v0.1.  A conditional Phase 8E placeholder exists for non-fork runtime tuning if no quant achieves safe real-time performance.

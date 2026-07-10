@@ -172,8 +172,8 @@
 - Added ``--model`` CLI argument for explicit model path recording.
 - Benchmark scripts ready for controlled Q6_K/Q5_K_M/Q4_K_M comparison at fixed stride 4.
 
-**Status**: Phase 8D tooling complete. Live Q5_K_M/Q4_K_M quant benchmark and human listening still pending.
-- Full suite: 574/574 passing (25 Phase 8D-specific tests included).
+**Status**: Phase 8D.2 architecture corrected. Single-container-per-model orchestrator (`scripts/run_quantization_benchmark_unraid.sh`). Live Q5_K_M/Q4_K_M quant benchmark and human listening still pending.
+- Full suite: 590/590 passing (25 Phase 8D + 16 Phase 8D.2 tests included).
 
 ## Phase 8C results: realtime stride tuning infrastructure
 

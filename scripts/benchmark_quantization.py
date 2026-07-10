@@ -414,6 +414,10 @@ def parse_args(argv=None):
     p.add_argument("--output-dir", default=None)
     p.add_argument("--voice", default="")
     p.add_argument("--voice-dir", default="")
+    p.add_argument("--candidate-dir", default="",
+                   help="Per-candidate subdirectory name (e.g. q6_k, q5_k_m)")
+    p.add_argument("--expected-model-file", default="",
+                   help="Expected model filename in startup logs (for verification)")
     p.add_argument("--json", action="store_true")
     p.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
     return p.parse_args(argv)
@@ -435,10 +439,28 @@ def main(argv=None):
         print("\nAdd --run-real to execute against a live backend.")
         return 0
 
+    # Live mode: model selection happens at backend startup via S2_MODEL env var.
+    # The HTTP request cannot switch models — each backend process loads exactly
+    # one GGUF file.  Accept exactly one model path for provenance recording.
+    if len(models) != 1:
+        print("ERROR: --run-real requires exactly one model path per invocation.", file=sys.stderr)
+        print("       The s2.cpp backend loads ONE GGUF at startup (S2_MODEL env var).", file=sys.stderr)
+        print("       Use the shell orchestrator to restart the backend per candidate.", file=sys.stderr)
+        print(f"       Received {len(models)} model paths: {models}", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("       Example (one invocation per candidate):", file=sys.stderr)
+        print("         python3 scripts/benchmark_quantization.py --run-real \\", file=sys.stderr)
+        print("           --models /models/s2-pro-q5_k_m.gguf --endpoint 127.0.0.1:3033", file=sys.stderr)
+        return 1
+
     output_dir = Path(args.output_dir) if args.output_dir else (
         Path(_PROJECT_ROOT) / "verification_artifacts" / "quant_benchmark"
         / datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     )
+    # Nest into candidate-dir if provided (shell orchestrator per-model layout)
+    if getattr(args, 'candidate_dir', '') or getattr(args, 'candidate-dir', ''):
+        cd = getattr(args, 'candidate_dir', '') or getattr(args, 'candidate-dir', '')
+        output_dir = output_dir / cd
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Quant Benchmark: endpoint={args.endpoint}, stride={args.stride}, models={models}")

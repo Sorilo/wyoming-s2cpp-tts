@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+- Phase 8D.2: corrected live quantization benchmark architecture.
+  **Critical fix**: the s2.cpp server loads ONE GGUF at startup via the
+  ``S2_MODEL`` environment variable; HTTP requests cannot switch models.
+  The previous runbook (single container, multi-model Python invocation)
+  would have benchmarked the same model repeatedly with different labels.
+  Changes:
+  * ``benchmark_quantization.py`` now rejects multiple ``--models`` in
+    ``--run-real`` mode (exit 1 with clear error).  Dry-run multi-model
+    inspection preserved.
+  * New orchestrator: ``scripts/run_quantization_benchmark_unraid.sh``
+    (495 lines) — default dry-run, ``--run-real`` for live.  Starts one
+    backend container per candidate (Q6→Q5→Q4), each with ``S2_MODEL``
+    pointing to the correct GGUF.  Waits for ``Launching: s2 --model``
+    confirmation in startup logs (bounded 120s timeout, not blind sleep).
+    Captures per-candidate container inspect, startup logs, backend
+    metrics, GPU telemetry.  Cleans up on EXIT/INT/TERM.
+  * Model size estimates corrected (Q6≈4.5 GB, Q5_K_M≈4.0 GB,
+    Q4_K_M≈3.6 GB) from verified upstream information.
+  * WAV conversion path updated: primary = ``docker exec Hermes-Suite
+    ffmpeg``; fallback = Python ``wave`` module (header-only, no transcode).
+  * 16 new Phase 8D.2 tests (multi-model rejection, candidate-dir nesting,
+    orchestrator syntax, metric parsing, WAV fallback, GPU-busy detection,
+    Hermes-Suite ffmpeg path).
+  Full suite: **590/590 passing** (all tests, excluding standalone shell
+  behavior tests).
+
 - Phase 8D: controlled quantized-model performance and quality benchmark.
   Fixed benchmark-tool issues: removed false "No live RTX 3080 benchmark"
   claim from all scripts and documentation (live benchmarks completed for

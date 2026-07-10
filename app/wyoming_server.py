@@ -354,6 +354,17 @@ def synthesize_s2cpp_tts_events(
 
         metrics.finalize("success")
         return events
+    except S2BackendBusyError:
+        backend_elapsed_ms = int((time.monotonic() - backend_start) * 1000)
+        obs_log("backend_done",
+                connection_id=_ctx.connection_id,
+                synthesis_id=_ctx.synthesis_id,
+                text_fp=fp,
+                elapsed_ms=backend_elapsed_ms,
+                status="error",
+                error="backend_busy")
+        metrics.finalize("error", "backend_busy")
+        raise
     except S2ClientError:
         backend_elapsed_ms = int((time.monotonic() - backend_start) * 1000)
         obs_log("backend_done",
@@ -395,6 +406,35 @@ def _read_stream_chunk(stream):
         return next(stream)
     except StopIteration:
         return _STREAM_EOF
+
+
+async def _read_stream_with_deadline(stream, deadline: float):
+    """Read one chunk from *stream* enforcing *deadline*.
+
+    Starts :func:`asyncio.to_thread` to read, awaits with
+    ``asyncio.wait_for`` using the remaining time.  On timeout,
+    cancels the stream and reaps the read task to prevent orphan
+    threads.
+    """
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise asyncio.TimeoutError("Synthesis deadline passed")
+    read_task = asyncio.create_task(
+        asyncio.to_thread(_read_stream_chunk, stream))
+    try:
+        return await asyncio.wait_for(read_task, timeout=remaining)
+    except asyncio.TimeoutError:
+        try:
+            stream.cancel()
+        except Exception:
+            pass
+        # Reap the read task
+        if not read_task.done():
+            try:
+                await asyncio.wait_for(read_task, timeout=2.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                read_task.cancel()
+        raise asyncio.TimeoutError("Synthesis timeout during read")
 
 
 
@@ -795,7 +835,7 @@ async def synthesize_s2cpp_streaming_tts_events(
                     max_attempts=max_total_attempts,
                     pcm_observed=backend_data_observed,
                     audio_start_emitted=first_audio_emitted)
-            if not backend_data_observed and not first_audio_emitted                 and retry_count < max_total_attempts:
+            if not backend_data_observed and not audio_start_emitted                 and retry_count < max_total_attempts:
                 obs_log("backend_busy_retry",
                         connection_id=_ctx.connection_id,
                         synthesis_id=_ctx.synthesis_id,
@@ -946,6 +986,9 @@ class SingleWorkerSynthesisQueue:
         if not acquired:
             try:
                 await asyncio.wait_for(future, timeout=self.wait_timeout_sec)
+                # Successfully resumed — now we're the active worker
+                async with self._lock:
+                    self._active_task = asyncio.current_task()
             except asyncio.TimeoutError:
                 async with self._lock:
                     for j, (_sid, fut, _cid) in enumerate(self._waiters):
@@ -990,6 +1033,7 @@ class SingleWorkerSynthesisQueue:
                 if self._waiters:
                     nsid, nfut, _nc = self._waiters.popleft()
                     self._active_synthesis_id = nsid
+                    # _active_task is set by the waiter after it resumes
                     nfut.set_result(None)
                 else:
                     self._active = False
@@ -997,14 +1041,18 @@ class SingleWorkerSynthesisQueue:
                     connection_id=connection_id, queue_depth=self._depth)
 
     async def cancel_waiting(self, connection_id: str) -> int:
+        """Cancel all waiting requests for *connection_id*.  Returns count.
+
+        Counter decrements are handled by each waiter's ``run()``
+        cleanup path — this method only removes from the deque and
+        cancels the future.
+        """
         cancelled = 0
         async with self._lock:
             keep = []
             for sid, fut, cid in self._waiters:
                 if cid == connection_id:
                     fut.cancel()
-                    self._depth -= 1
-                    self._pending -= 1
                     cancelled += 1
                 else:
                     keep.append((sid, fut, cid))
@@ -1225,7 +1273,7 @@ class FakeTtsEventHandler(AsyncEventHandler):
             if self.settings.cancel_on_new_request:
                 self.queue.cancel_active_if_matches(
                     self.queue._active_synthesis_id or "")
-                self.queue.cancel_waiting(self._conn_id)
+                await self.queue.cancel_waiting(self._conn_id)
                 await asyncio.sleep(0)
 
             syn_id = new_synthesis_id()
@@ -1351,7 +1399,7 @@ class FakeTtsEventHandler(AsyncEventHandler):
                 if self.settings.cancel_on_new_request and self.queue._depth > 0:
                     self.queue.cancel_active_if_matches(
                         self.queue._active_synthesis_id or "")
-                    self.queue.cancel_waiting(self._conn_id)
+                    await self.queue.cancel_waiting(self._conn_id)
                     await asyncio.sleep(0)
 
                 await self.queue.run(send_streaming_audio,
@@ -1366,11 +1414,16 @@ class FakeTtsEventHandler(AsyncEventHandler):
         return True
 
     async def disconnect(self) -> None:
-        """Log connection close, then delegate to the base class."""
+        """Log connection close and cancel queue entries, then delegate."""
         self._streaming_text_parts = []
         self._streaming_compat_text = ""
         self._streaming_compat_voice = None
         self._in_streaming_session = False
+        if self.settings.cancel_on_client_disconnect:
+            await self.queue.cancel_waiting(self._conn_id)
+            # Also cancel active if it belongs to this connection.
+            # Currently we don't track connection_id for active;
+            # cancel-waiting handles queued entries.
         obs_log("conn_close", connection_id=self._conn_id)
         await super().disconnect()
 

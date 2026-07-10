@@ -99,6 +99,9 @@ class RunResult:
     error: str = ""
     response_headers: dict[str, str] = field(default_factory=dict)
     pcm_saved_path: str = ""
+    model_file: str = ""
+    model_sha256: str = ""
+    model_size_bytes: int = 0
     run_type: str = ""  # "warmup" or "measured"
 
 
@@ -251,6 +254,19 @@ def run_one_benchmark(
             pcm_path = pcm_dir / pcm_name
             pcm_path.write_bytes(pcm)
 
+            # Record model file metadata
+            model_path = Path(request.model) if request.model else Path("/models/s2-pro-q6_k.gguf")
+            model_sha = ""
+            model_size = 0
+            if model_path.exists():
+                import hashlib
+                model_size = model_path.stat().st_size
+                h = hashlib.sha256()
+                with open(model_path, "rb") as mf:
+                    for chunk in iter(lambda: mf.read(65536), b""):
+                        h.update(chunk)
+                model_sha = h.hexdigest()
+
             return RunResult(
                 stride=stride,
                 run_index=run_index,
@@ -263,6 +279,9 @@ def run_one_benchmark(
                 status="success",
                 response_headers=response_headers,
                 pcm_saved_path=str(pcm_path),
+                model_file=str(request.model),
+                model_sha256=model_sha,
+                model_size_bytes=model_size,
             )
 
     except (S2ClientError, urllib.error.URLError, OSError) as exc:
@@ -596,6 +615,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--voice-dir",
         default="",
         help="Voice directory path",
+    )
+    parser.add_argument(
+        "--model",
+        default="/models/s2-pro-q6_k.gguf",
+        help="Model file path (for metadata recording, default: /models/s2-pro-q6_k.gguf)",
     )
     parser.add_argument(
         "--json",

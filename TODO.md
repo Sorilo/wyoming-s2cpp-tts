@@ -165,6 +165,14 @@
 - Wrapper remains `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-9c134cc`; BrokenPipe task-exception noise on deliberate disconnect is a separate logging issue and did not block cleanup.
 
 
+## Phase 8D results: controlled quantized-model performance and quality benchmark
+
+- Fixed benchmark-tool issues: false "No live RTX 3080" claim removed, metric correlation hardened with bounded polling, WAV conversion guidance updated for Hermes-Suite ffmpeg path.
+- Benchmark harness now records model SHA-256 and file size per run.
+- Added ``--model`` CLI argument for explicit model path recording.
+- Benchmark scripts ready for controlled Q6_K/Q5_K_M/Q4_K_M comparison at fixed stride 4.
+- Full suite: to be reported after Phase 8D commit.
+
 ## Phase 8C results: realtime stride tuning infrastructure
 
 - Four new wrapper env vars with strict validation: S2_STREAM_DECODE_STRIDE_FRAMES (1-64),
@@ -183,7 +191,7 @@
 - scripts/run_realtime_tuning_unraid.sh: one-command Unraid host orchestration.
 - Unraid wrapper template updated with Phase 8C config vars.
 - 80 new tests. Full suite: 540/540 passing.
-- No backend image change. No live RTX 3080 performance measured.
+- No backend image change. Live RTX 3080 benchmarks completed (strides 1-24).
 - Stride 4 is a candidate only; real benchmarking pending on Unraid host.
 
 ## Approved remaining v0.1 phases

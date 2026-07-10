@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- Phase 8D: controlled quantized-model performance and quality benchmark.
+  Fixed benchmark-tool issues: removed false "No live RTX 3080 benchmark"
+  claim from all scripts and documentation (live benchmarks completed for
+  strides 1–24 on Q6_K model).  Hardened backend metric correlation with
+  bounded polling (30s max wait for completed ``[Metrics] Streaming`` line)
+  replacing naive one-shot ``docker logs`` capture.  Updated WAV conversion
+  guidance to reference Hermes-Suite ``ffmpeg`` path (``/usr/bin/ffmpeg``).
+  Benchmark harness now records model SHA-256 and file size per run via
+  ``--model`` CLI argument.  Added model metadata fields to ``RunResult``
+  and aggregate output.  Inserted Phase 8D into roadmap between Phase 8C
+  and Phase 9: controlled comparison of Q6_K, Q5_K_M, and Q4_K_M GGUF
+  models at fixed stride 4 under identical conditions (same GPU, backend
+  build, container, voice, text, and settings).  Added conditional Phase 8E
+  placeholder for non-fork runtime tuning as fallback.  Created comprehensive
+  ``docs/STREAMING_STRIDE_AND_QUANT_BENCHMARKS.md`` documenting stride
+  tuning principles, live RTX 3080 results, quantization methodology,
+  and benchmark limitations.  Clarified post-v0.1 roadmap items (dynamic
+  model switching, multi-GPU scheduling).  See roadmap and benchmark doc
+  for full details.
+
 - Phase 8C: real-time stride tuning infrastructure for RTX 3080 performance
   optimisation.  Added four new environment-backed wrapper settings:
   ``S2_STREAM_DECODE_STRIDE_FRAMES`` (1--64, default 4),
@@ -39,7 +59,7 @@
   However, for Home Assistant / Wyoming to use the new stride tuning
   environment variables, a NEW WRAPPER IMAGE must be built and deployed;
   the current production wrapper (sha-9c134cc) does not support them.
-  No live RTX 3080 performance measurement was performed — stride 4 is
+  Live RTX 3080 benchmarks completed (strides 1-24) — Q6_K model RTF 1.13 at stride 4; stride 4 preferred for TTFA/throughput balance
   a candidate only.
 
 

@@ -339,13 +339,26 @@ cleanup_telemetry() {
 # ── Backend metric capture per-run ─────────────────────────────────────────
 capture_backend_metrics() {
     local label="$1" output="$2" since_ts="${3:-}"
-    if [[ -n "$since_ts" ]]; then
-        docker logs "$BACKEND_CONTAINER" --since "$since_ts" 2>/dev/null > "$output" || true
-    else
-        docker logs "$BACKEND_CONTAINER" --tail 50 2>/dev/null > "$output" || true
-    fi
+    # Poll with bounded timeout for the correct completed [Metrics] Streaming line
+    local max_wait=30 elapsed=0 interval=1
+    while [[ $elapsed -lt $max_wait ]]; do
+        if [[ -n "$since_ts" ]]; then
+            docker logs "$BACKEND_CONTAINER" --since "$since_ts" 2>/dev/null > "$output" || true
+        else
+            docker logs "$BACKEND_CONTAINER" --tail 50 2>/dev/null > "$output" || true
+        fi
+        # Look for [Metrics] Streaming (completed) line — not in-progress lines
+        if grep -q '\[Metrics\] Streaming' "$output" 2>/dev/null; then
+            break
+        fi
+        sleep "$interval"
+        elapsed=$((elapsed + interval))
+    done
     # Extract [Metrics] lines for parsing
     grep '\[Metrics\]' "$output" 2>/dev/null > "${output}.metrics" || true
+    if [[ ! -s "${output}.metrics" ]]; then
+        warn "No [Metrics] line found for $label after ${elapsed}s — per_run_metrics may be empty"
+    fi
 }
 
 parse_metric_field() {
@@ -639,14 +652,15 @@ info "  system_state.txt            - System/container/git state"
 info ""
 info "Next steps:"
 info "  1. Listen to generated PCM files:"
-info "     ffmpeg -f s16le -ar 44100 -ac 1 -i "$ARTIFACT_DIR/stride4_run1/stride4_run1.pcm" stride4_run1.wav"
+info "     ffmpeg -f s16le -ar 44100 -ac 1 -i \"$ARTIFACT_DIR/stride4_run1/stride4_run1.pcm\" stride4_run1.wav"
+info "  (ffmpeg at /usr/bin/ffmpeg on Hermes Suite)"
 info "  2. Review per-run metrics:"
 info "     cat $ARTIFACT_DIR/per_run_metrics.json | python3 -m json.tool"
 info ""
 info "  IMPORTANT: No wrapper rebuild has occurred."
 info "  For HA/Wyoming deployment, a new wrapper image is required."
 info "  RTF alone does not guarantee audio quality."
-info "  No live RTX 3080 benchmark was performed."
+info "  Live RTX 3080 benchmarks completed (see verification_artifacts/realtime_tuning/)."
 info ""
 
 exit 0

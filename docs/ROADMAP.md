@@ -91,9 +91,23 @@ Implemented configurable streaming decode stride, holdback, start-buffer,
 and low-latency settings with strict validation, explicit multipart
 request parameters, enhanced observability, an opt-in Python benchmark
 harness, and a one-command Unraid orchestration script. 80 new tests,
-540/540 passing. No backend image change; no live RTX 3080 performance
+540/540 passing. No backend image change; live RTX 3080 benchmarks completed (strides 1-24, see verification_artifacts/realtime_tuning/)
 was measured — stride 4 is a candidate only. See ``CHANGELOG.md`` and
 ``scripts/benchmark_realtime_tuning.py`` for the benchmark workflow.
+
+### Phase 8D: controlled quantized-model performance and quality benchmark 🔄
+
+Select a single preferred runtime quantization by benchmarking candidate Q6_K, Q5_K_M, and Q4_K_M GGUF models against the RTX 3080 at fixed stride 4, holding all other variables constant.  The phase delivers: (a) hardened benchmark tooling with reliable metric correlation, port discovery, and WAV conversion; (b) a controlled quant comparison under identical conditions (same GPU, backend build, container environment, voice, and text); (c) human listening evaluation of audio quality across quants; and (d) a single recommended runtime model.
+
+This phase does NOT implement dynamic model switching, multi-worker routing, or multi-GPU scheduling.  Those remain in post-v0.1.  A conditional Phase 8E placeholder exists for non-fork runtime tuning if no quant achieves safe real-time performance.
+
+Candidate models: s2-pro-q6_k.gguf (baseline), s2-pro-q5_k_m.gguf, s2-pro-q4_k_m.gguf.  Q8_0 is an optional quality ceiling if storage permits.  Models are acquired from the verified upstream S2 Pro GGUF source with SHA-256 verification and resumable downloads.
+
+See ``docs/STREAMING_STRIDE_AND_QUANT_BENCHMARKS.md`` for the comprehensive stride and quantization benchmark documentation.
+
+### Phase 8E: conditional non-fork runtime performance tuning (placeholder)
+
+Only triggered if no acceptable quant reaches safe real time.  Investigate generation-profile-specific decode-stride tuning, codec-context variants, and AR-batch sizing adjustments without forking s2.cpp.
 
 ### Phase 9: queue, busy handling, and timeout policy
 Define queue capacity behavior, busy responses, backend HTTP 503 handling, queue wait timeout, synthesis timeout, and controlled Wyoming failure behavior.
@@ -115,8 +129,8 @@ Finalize templates after real restart/update/persistence/backup validation.
 
 ## Post-v0.1
 
-- Multiple model profiles / quantizations
-- Multi-worker / multi-GPU routing
+- Dynamic model switching and simultaneously served quantization profiles
+- Multi-worker / multi-GPU routing and scheduling
 - Hardware upgrade benchmarking
 
 ## Governance

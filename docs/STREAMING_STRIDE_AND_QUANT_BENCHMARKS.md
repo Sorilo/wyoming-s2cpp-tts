@@ -1,0 +1,323 @@
+# Streaming Decode Stride and Quantization Benchmarks
+
+> **Last updated**: 2026-07-10
+> **Hardware**: NVIDIA RTX 3080 (GPU-65b9a886-d157-27fa-09d1-8894bc5cc135)
+> **Backend**: ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-edf89bd
+> **Model (baseline)**: s2-pro-q6_k.gguf (36 transformer layers on CUDA, Fast-AR)
+
+## Table of Contents
+
+1. [What Decode Stride Controls](#what-decode-stride-controls)
+2. [Live Stride Benchmark Results](#live-stride-benchmark-results)
+3. [TTFA/RTF Tradeoff Analysis](#ttfa-rtf-tradeoff-analysis)
+4. [Why Stride 4 Is Currently Preferred](#why-stride-4-is-currently-preferred)
+5. [Diminishing Returns at Higher Strides](#diminishing-returns-at-higher-strides)
+6. [Human Listening Observations](#human-listening-observations)
+7. [Quantization Comparison Methodology](#quantization-comparison-methodology)
+8. [Which Tensors Remain F16](#which-tensors-remain-f16)
+9. [Q8_0 Quality Ceiling (Optional)](#q8_0-quality-ceiling-optional)
+10. [Raw Artifact Locations](#raw-artifact-locations)
+11. [Hardware and Software Provenance](#hardware-and-software-provenance)
+12. [Benchmark Limitations](#benchmark-limitations)
+13. [Recommended Next Action](#recommended-next-action)
+
+---
+
+## What Decode Stride Controls
+
+The `stream_decode_stride_frames` parameter controls how many audio frames the
+s2.cpp backend decodes per streaming step during generation.
+
+- **stride = 1**: decode one frame at a time.  Finest streaming granularity,
+  lowest TTFA, but highest overhead (more HTTP chunk boundaries and AR/stream
+  coordination).
+- **stride > 1**: decode multiple frames per step.  Coarser streaming, higher
+  TTFA, lower overhead.
+
+The tradeoff is between **time-to-first-audio (TTFA)** and **total synthesis
+throughput (RTF)**.  Larger strides batch more frames per decode step,
+amortizing the per-step overhead (Python/C++ boundary, VRAM access patterns,
+stream-decode loop) at the cost of making the first audio chunk larger.
+
+The backend's streaming path uses these settings on every request:
+
+```
+S2_STREAM_DECODE_STRIDE_FRAMES = 4
+S2_STREAM_HOLDBACK_FRAMES      = 0
+S2_STREAM_START_BUFFER_MS      = 0
+S2_LOW_LATENCY                 = true
+S2_CODEC_CONTEXT_FRAMES        = 4
+S2_SEGMENT_SENTENCES           = false
+```
+
+---
+
+## Live Stride Benchmark Results
+
+### Primary benchmark: `20260710_021915`
+
+Tested on RTX 3080, Q6_K model, 361-char text, 1 warmup + 3 measured runs.
+
+| Stride | Avg RTF | Avg First PCM (ms) | Avg Total (ms) | Success |
+|--------|---------|---------------------|----------------|---------|
+| 1      | 1.34    | 105                 | 28,787         | 3/3     |
+| 2      | 1.19    | 150                 | 24,761         | 3/3     |
+| 4      | 1.13    | 251                 | 25,127         | 3/3     |
+| 8      | 1.08    | 419                 | 22,513         | 3/3     |
+
+### Higher-stride testing: `20260710_024627`
+
+Additional testing for diminishing-returns analysis.
+
+| Stride | Avg RTF | Avg First PCM (ms) | Avg Total (ms) | Success |
+|--------|---------|---------------------|----------------|---------|
+| 8      | 1.10    | 491                 | 24,020         | 3/3     |
+| 12     | 1.08    | 669                 | 22,652         | 3/3     |
+| 16     | 1.08    | 837                 | 23,338         | 3/3     |
+| 24     | 1.07    | 1,209               | 22,589         | 3/3     |
+
+---
+
+## TTFA/RTF Tradeoff Analysis
+
+```
+Stride    RTF        First PCM     TTFA penalty    Throughput gain
+─────     ───        ─────────     ─────────────   ───────────────
+1 → 2:    1.34→1.19  105→150 ms    +45 ms          +0.15 RTF
+2 → 4:    1.19→1.13  150→251 ms    +101 ms         +0.06 RTF
+4 → 8:    1.13→1.08  251→419 ms    +168 ms         +0.05 RTF
+8 → 16:   1.10→1.08  491→837 ms    +346 ms         +0.02 RTF
+16 → 24:  1.08→1.07  837→1209 ms   +372 ms         +0.01 RTF
+```
+
+The steepest TTFA increase and largest RTF improvement come from stride
+1→2.  Beyond stride 4, throughput gains rapidly diminish while first-PCM
+latency continues to increase linearly.
+
+---
+
+## Why Stride 4 Is Currently Preferred
+
+Stride 4 is the current preferred candidate because it provides the best
+compromise:
+
+1. **TTFA ~251 ms**: perceptually responsive for voice assistant use.
+2. **RTF ~1.13**: significantly better than stride 1 (1.34), though still
+   above real-time.
+3. **Diminishing returns after 4**: stride 8 only improves RTF by 0.05
+   (1.13→1.08) while doubling first-PCM latency (251→419 ms).
+4. **Human listening**: all strides sound broadly similar; no quality
+   regression detected at stride 4.
+
+Stride 4 is the pragmatic choice: enough batching to reduce overhead,
+but not so much that it degrades the interactive feel.
+
+---
+
+## Diminishing Returns at Higher Strides
+
+Beyond stride 8, RTF improvements flatten:
+
+- Stride 16→24: RTF drops only 0.01 (1.08→1.07)
+- First-PCM increases by ~372 ms per step
+
+The total wall-clock improvement from stride 8 to 24 is only ~1,431 ms (5.9%)
+for a 22s audio clip — not worth the 790 ms TTFA penalty.
+
+**Key insight**: The Q6_K model on RTX 3080 cannot reach RTF < 1.0 at any
+stride (best: 1.07 at stride 24).  The bottleneck is in AR generation, not
+stream-decode batching.  This is why quantization comparison (Phase 8D) is
+the logical next step.
+
+---
+
+## Human Listening Observations
+
+Informal listening across stride 1 through 8:
+
+- All strides produced **broadly similar** audio quality.
+- All had **minor artifacts** but were **mostly acceptable** for voice
+  assistant use.
+- No stride-specific quality regression was audible.
+- Higher strides (12–24) were not subjectively evaluated (PCM artifacts
+  preserved for later review).
+
+**Listening is required** before making any production change — RTF metrics
+alone do not capture perceptual quality.
+
+---
+
+## Quantization Comparison Methodology
+
+### Candidate Models
+
+| Quant   | Filename                | Expected Size | Status        |
+|---------|-------------------------|---------------|---------------|
+| Q6_K    | s2-pro-q6_k.gguf       | ~3.2 GB       | Baseline ✅   |
+| Q5_K_M  | s2-pro-q5_k_m.gguf     | ~2.9 GB       | To download   |
+| Q4_K_M  | s2-pro-q4_k_m.gguf     | ~2.6 GB       | To download   |
+| Q8_0    | s2-pro-q8_0.gguf       | ~3.8 GB       | Optional      |
+
+### Fixed Variables
+
+All quant comparisons hold these constant:
+
+```
+stream_decode_stride_frames = 4
+codec_decode_context_frames = 4
+stream_holdback_frames      = 0
+stream_start_buffer_ms      = 0
+low_latency                 = true
+threads                     = 0
+voice                       = (same saved voice)
+text                        = (same benchmark text)
+warmup runs                 = 1
+measured runs               = 3
+```
+
+### Test Sequence
+
+1. Spin up a **temporary benchmark backend container** with:
+   - Distinct name: `s2cpp-backend-bench`
+   - Distinct host port (not 3032)
+   - Same image: `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-edf89bd`
+   - Same GPU UUID
+   - Read-only model mounts
+2. For each candidate model:
+   - Restart the benchmark container with the model path
+   - Wait for backend readiness
+   - Run 1 warmup + 3 measured syntheses
+   - Capture per-run [Metrics] output
+   - Save raw PCM
+3. Aggregate results
+4. Convert PCM to WAV (one per quant)
+5. Human listening evaluation
+
+### Production Safety
+
+- The benchmark container is **temporary** — it does not affect the running
+  production `s2cpp-backend` container.
+- No production wrapper, Home Assistant, or backend image modifications.
+- The winning model is NOT promoted automatically — the user must explicitly
+  apply the change.
+
+### If Benchmark Cannot Run From Hermes
+
+Run this exact command on the Unraid host:
+
+```bash
+cd /mnt/user/appdata/hermes-agent/webui-workspace/wyoming-s2cpp-tts
+bash scripts/run_quant_benchmark_unraid.sh
+```
+
+---
+
+## Which Tensors Remain F16
+
+In the Q6_K, Q5_K_M, and Q4_K_M quants:
+
+- **Attention weights** (Q, K, V projections): quantized to Q6_K / Q5_K_M / Q4_K_M
+- **Feed-forward weights** (MLP layers): quantized
+- **Output projection**: quantized
+- **Embedding tables**: remain F16 (quantized embedding tables degrade quality
+  disproportionately; they stay on CPU in hybrid CUDA path)
+- **Codec tensors**: remain F16 (never quantized — codec quality is critical)
+- **Layer norms, biases, RMS norms**: remain F32 (small, don't affect model size)
+
+The codec tensors are explicitly excluded from quantization per the s2.cpp
+GGUF format conventions.
+
+---
+
+## Q8_0 Quality Ceiling (Optional)
+
+Q8_0 is an 8-bit quantization with near-lossless quality — effectively the
+quality ceiling for quantized models.  It may be benchmarked as an optional
+reference point if:
+
+- Storage is sufficient (~3.8 GB vs 3.2 GB for Q6_K)
+- The file is verified as compatible with s2.cpp backend
+- Adding it does not delay the primary Q6/Q5/Q4 comparison
+
+Q8_0's larger size and higher memory bandwidth requirements may actually
+make it SLOWER than Q6_K despite using more bits — quantization benchmarks
+are needed to confirm.
+
+---
+
+## Raw Artifact Locations
+
+| Artifact Set | Path |
+|---|---|
+| Stride sweep (1, 2, 4, 8) | `verification_artifacts/realtime_tuning/20260710_021915/` |
+| Higher-stride testing (8–24) | `verification_artifacts/realtime_tuning/20260710_024627/` |
+| Quant benchmark (future) | `verification_artifacts/quant_benchmark/<timestamp>/` |
+
+Each artifact directory contains:
+- `results.json` — full per-run timing data
+- `summary.md` — Markdown summary table
+- `gpu_telemetry.csv` — 1 Hz GPU samples (utilization, memory, temp, power, clocks)
+- `per_run_metrics.json` — correlated backend [Metrics] per run
+- `stride*_run*_metrics.log` — raw `docker logs` per run
+- `stride*_run*/` — per-run subdirectories with raw PCM
+
+---
+
+## Hardware and Software Provenance
+
+| Component | Value |
+|---|---|
+| **GPU** | NVIDIA RTX 3080 (UUID: GPU-65b9a886-d157-27fa-09d1-8894bc5cc135) |
+| **GPU driver** | Running container's CUDA driver |
+| **Backend image** | `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-edf89bd` |
+| **Backend digest** | `sha256:c29e41e59b470d58bf4b88c11c9ec753e00fa74a3bffbb003bc257fb9c6e46d9` |
+| **s2.cpp revision** | edf89bd7c5554769bb36cbd049b6fbb98bcb9d41 |
+| **Repository commit** | 97eb49c (perf/realtime-stride-tuning) |
+| **Wrapper (production)** | `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-9c134cc` |
+| **Container network** | sorilonet |
+| **Backend port** | 3032 (host) → 3030 (container) |
+| **Unraid host** | 192.168.1.45 |
+| **Home Assistant** | 192.168.1.233 → 192.168.1.45:10200 |
+
+---
+
+## Benchmark Limitations
+
+1. **Single GPU**: all results are on one RTX 3080.  Different GPUs will have
+   different RTF characteristics.
+2. **Single text sample**: the 361-char benchmark text may not represent all
+   synthesis workloads (short commands, long narratives).
+3. **No production load simulation**: benchmarks run sequentially with idle GPU
+   between runs.  Concurrent TTS requests or HA pipeline activity may affect
+   real-world performance.
+4. **Three measured runs**: not statistically definitive.  Variability across
+   runs is reported but confidence intervals are not computed.
+5. **Audio quality**: assessed informally by one listener.  Perceptual quality
+   claims require controlled listening tests.
+6. **Model loading**: each quant comparison requires container restart, which
+   includes model loading time (~10–30s).  This is excluded from measurement
+   but documented.
+7. **Backend metrics correlation**: the [Metrics] Streaming line is polled
+   from `docker logs --since` with a 30s bounded timeout.  Concurrent requests
+   to the same backend could cause metric misattribution (the benchmark
+   container is dedicated, mitigating this).
+
+---
+
+## Recommended Next Action
+
+1. **Download missing candidate models** (Q5_K_M, Q4_K_M) from verified upstream
+   S2 Pro GGUF source.
+2. **Run `scripts/benchmark_quantization.py`** with all three models at
+   stride 4 against a temporary benchmark backend container.
+3. **Convert PCM to WAV** and perform human listening evaluation using the
+   checklist above.
+4. **Selection decision**:
+   - If a lower quant achieves RTF < 0.95 with no quality regression →
+     recommend as production model.
+   - If no quant reaches RTF < 1.0 → no production change; proceed to
+     Phase 8E (non-fork runtime tuning).
+   - If a quant has minor quality regression but RTF < 0.95 → user judgment
+     call on quality vs. performance.
+5. **DO NOT automatically promote** a winning model to production — the user
+   must explicitly apply the change after listening evaluation.

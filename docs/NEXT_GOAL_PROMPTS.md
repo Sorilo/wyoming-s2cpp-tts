@@ -26,31 +26,24 @@ state after every `/goal` run. Do not copy stale assumptions forward.
 - ``scripts/benchmark_realtime_tuning.py``: dry-run-safe stride-sweep harness.
 - ``scripts/run_realtime_tuning_unraid.sh``: one-command Unraid host script.
 - 80 new tests; full suite: **540/540 passing**.
-- No live RTX 3080 performance was measured. Stride 4 is a candidate only.
+- Live RTX 3080 benchmarks completed (strides 1-24). Stride 4 is the preferred candidate.
 
-## Next phase: live RTX 3080 benchmark and apply
+## Current state after live RTX 3080 stride benchmarks
 
-```text
-/goal
+- Live RTX 3080 benchmarks completed across strides 1-24 (Q6_K model).
+- Primary artifact directory: ``verification_artifacts/realtime_tuning/20260710_021915`` (strides 1, 2, 4, 8).
+- Higher-stride testing: ``verification_artifacts/realtime_tuning/20260710_024627`` (strides 8, 12, 16, 24).
+- Summary results (strides 1/2/4/8):
+  stride 1: RTF ~1.34, first PCM ~105 ms
+  stride 2: RTF ~1.19, first PCM ~150 ms
+  stride 4: RTF ~1.13, first PCM ~251 ms
+  stride 8: RTF ~1.08, first PCM ~419 ms
+- Stride 4 is currently preferred for TTFA/throughput compromise.
+- Higher strides (8-24) show diminishing returns (RTF 1.08→1.07) with significant first-PCM penalty (419→1209 ms).
+- Human listening: all strides broadly similar, minor artifacts, mostly acceptable.
+- Q6_K model does NOT achieve RTF < 1.0 at any stride — quantization comparison (Phase 8D) is the next step.
 
-On your Unraid host at 192.168.1.45, pull the ``perf/realtime-stride-tuning``
-branch and run the real-time tuning benchmark against the live s2.cpp backend:
-
-  bash scripts/run_realtime_tuning_unraid.sh --benchmark
-
-This will:
-1. Capture system state (git commit, image IDs, GPU info, container logs).
-2. Run a stride sweep (1, 2, 4, 8) with warm-up and measured repetitions.
-3. Save PCM artifacts and a JSON + Markdown summary.
-4. Recommend a winning candidate based on RTF (below 1.0 preferred).
-
-After listening to candidate audio, apply the winning stride:
-
-  bash scripts/run_realtime_tuning_unraid.sh --apply <STRIDE> --yes
-
-Do NOT apply any stride without listening to the candidate audio first.
-RTF alone does not guarantee audio quality.
-```
+## Next phase: Phase 9 queue, busy handling, and timeout policy
 
 ## Current state after Phase 8B2 production backend promotion
 

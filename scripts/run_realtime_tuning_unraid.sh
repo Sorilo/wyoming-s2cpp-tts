@@ -560,7 +560,7 @@ for stride in "${STRIDE_ARR[@]}"; do
             --warmup-runs 0 \
             --measured-runs 1 \
             --output-dir "$ARTIFACT_DIR" \
-            --run-label "$RUN_LABEL" || true
+            --run-label "$RUN_LABEL" || warn "Warm-up ${w}/${WARMUP_RUNS} failed (stride $stride)"
 
         # Capture backend metrics for this run
         METRICS_FILE="$ARTIFACT_DIR/${RUN_LABEL}_metrics.log"
@@ -612,8 +612,11 @@ EOJ
     done
 done
 
-echo "" >> "$METRICS_JSON_FILE"
 echo "]" >> "$METRICS_JSON_FILE"
+
+# Aggregate per-run results into canonical files
+info "Aggregating per-run results..."
+python3 scripts/aggregate_results.py "$ARTIFACT_DIR"
 
 # ── Produce summary ────────────────────────────────────────────────────────
 info ""

@@ -610,3 +610,111 @@ class TestEnvVarAudit:
         monkeypatch.setenv("MAX_QUEUE_SIZE", "5")
         s = Settings.from_env()
         assert s.max_queue_size == 5
+# ============================================================================
+# Phase 8C: Artifact naming and non-overwriting tests
+# ============================================================================
+
+import json
+from unittest.mock import patch, MagicMock
+
+class TestRunLabelSanitization:
+    """_sanitize_label produces filesystem-safe names."""
+
+    def test_empty_label_returns_empty(self):
+        from scripts.benchmark_realtime_tuning import _sanitize_label
+        assert _sanitize_label("") == ""
+
+    def test_simple_label_preserved(self):
+        from scripts.benchmark_realtime_tuning import _sanitize_label
+        assert _sanitize_label("stride4_run2") == "stride4_run2"
+
+    def test_special_chars_replaced(self):
+        from scripts.benchmark_realtime_tuning import _sanitize_label
+        result = _sanitize_label("path/traversal..test")
+        assert "/" not in result
+        assert ".." not in result
+
+    def test_very_long_label_truncated(self):
+        from scripts.benchmark_realtime_tuning import _sanitize_label
+        result = _sanitize_label("a" * 100)
+        assert len(result) <= 64
+
+    def test_leading_trailing_special_stripped(self):
+        from scripts.benchmark_realtime_tuning import _sanitize_label
+        result = _sanitize_label("..bad--")
+        assert result not in ("..bad--", ".bad-")
+
+
+class TestArtifactNonOverwriting:
+    """Per-run artifacts go to unique subdirectories."""
+
+    def test_two_runs_different_labels_no_overwrite(self, tmp_path):
+        """Two runs with different labels write to different subdirs."""
+        from scripts.benchmark_realtime_tuning import run_stride_sweep
+
+        mock_stream = MagicMock()
+        mock_stream.__iter__ = lambda self: iter([b"\x00\x00" * 441])
+        mock_stream.__enter__ = lambda self: self
+        mock_stream.__exit__ = lambda *a: None
+        mock_stream.response_headers = {}
+        mock_stream.content_type = "audio/L16; rate=44100; channels=1"
+
+        mock_client = MagicMock()
+        mock_client.generate_stream.return_value = mock_stream
+
+        with patch("scripts.benchmark_realtime_tuning.S2Client", return_value=mock_client):
+            with patch("scripts.benchmark_realtime_tuning.S2Endpoint"):
+                run_stride_sweep(endpoint="127.0.0.1:3030", text="test", strides=[1],
+                    codec_context=4, holdback=0, start_buffer_ms=0,
+                    low_latency=True, warmup_runs=0, measured_runs=3,
+                    output_dir=tmp_path, run_label="alpha")
+                run_stride_sweep(endpoint="127.0.0.1:3030", text="test", strides=[2],
+                    codec_context=4, holdback=0, start_buffer_ms=0,
+                    low_latency=True, warmup_runs=0, measured_runs=3,
+                    output_dir=tmp_path, run_label="beta")
+
+        subdirs = [d for d in tmp_path.iterdir() if d.is_dir()]
+        assert len(subdirs) >= 2, f"Expected >=2 subdirs, got {len(subdirs)}"
+
+
+class TestAggregateOutput:
+    """Aggregate results include all measured runs."""
+
+    def test_aggregate_counts_all_runs(self, tmp_path):
+        from scripts.aggregate_results import aggregate_results
+
+        for stride in [1, 4]:
+            for run_idx in [1, 2, 3]:
+                label = f"stride{stride}_run{run_idx}"
+                subdir = tmp_path / label; subdir.mkdir()
+                data = {"endpoint": "x", "text": "hello world", "codec_context": 4,
+                    "summaries": [{"stride": stride, "avg_rtf": 1.0,
+                        "runs": [{"run": run_idx, "status": "success", "rtf": 1.0,
+                            "time_to_headers_ms": 10, "time_to_first_pcm_ms": 100,
+                            "total_wall_ms": 500, "pcm_bytes": 88200, "audio_duration_ms": 1000}]}]}
+                (subdir / "results.json").write_text(json.dumps(data))
+
+        result = aggregate_results(tmp_path)
+        assert result["total_measured_runs"] == 6
+        assert len(result["summaries"]) == 2
+
+    def test_aggregate_summary_has_all_strides(self, tmp_path):
+        from scripts.aggregate_results import aggregate_results, format_summary
+
+        for stride in [1, 2, 4, 8]:
+            subdir = tmp_path / f"stride{stride}_run1"; subdir.mkdir()
+            data = {"endpoint": "x", "text": "x", "codec_context": 4,
+                "summaries": [{"stride": stride, "runs": [{"run": 1, "status": "success",
+                    "rtf": 1.0, "time_to_headers_ms": 10, "time_to_first_pcm_ms": 100,
+                    "total_wall_ms": 500, "pcm_bytes": 88200, "audio_duration_ms": 1000}]}]}
+            (subdir / "results.json").write_text(json.dumps(data))
+
+        result = aggregate_results(tmp_path)
+        summary = format_summary(result)
+        for stride in [1, 2, 4, 8]:
+            assert f"| {stride} |" in summary
+
+    def test_run_label_changes_filename(self, tmp_path):
+        from scripts.benchmark_realtime_tuning import _sanitize_label
+        assert _sanitize_label("stride4_run2") == "stride4_run2"
+        assert _sanitize_label("bad/path") != "bad/path"

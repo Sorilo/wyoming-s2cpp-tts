@@ -36,6 +36,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -177,12 +178,23 @@ def _read_all_chunks(stream: S2StreamResult) -> tuple[bytes, float, float]:
 
 # ── Core benchmark logic ─────────────────────────────────────────────────
 
+def _sanitize_label(label: str) -> str:
+    """Return a filesystem-safe label or empty string."""
+    if not label:
+        return ""
+    safe = re.sub(r'[^a-zA-Z0-9._-]', '_', label)
+    safe = re.sub(r'\.{2,}', '.', safe)
+    safe = safe.strip('._-')[:64]
+    return safe
+
+
 def run_one_benchmark(
     client: S2Client,
     request: S2GenerateRequest,
     stride: int,
     run_index: int,
     output_dir: Path,
+    run_label: str = "",
     timeout: float = DEFAULT_TIMEOUT,
 ) -> RunResult:
     """Run one synthesis and measure performance."""
@@ -230,8 +242,12 @@ def run_one_benchmark(
             duration_ms = pcm_duration_ms(len(pcm))
             rtf = real_time_factor(total_ms, duration_ms)
 
-            # Save PCM artifact
-            pcm_path = output_dir / f"stride{stride}_run{run_index}.pcm"
+            # Save PCM artifact (in per-run subdirectory when run_label provided)
+            safe_label = _sanitize_label(run_label)
+            pcm_dir = output_dir / safe_label if safe_label else output_dir
+            pcm_dir.mkdir(parents=True, exist_ok=True)
+            pcm_name = f"stride{stride}_run{run_index}.pcm" if not safe_label else f"{safe_label}.pcm"
+            pcm_path = pcm_dir / pcm_name
             pcm_path.write_bytes(pcm)
 
             return RunResult(
@@ -279,6 +295,7 @@ def run_stride_sweep(
     voice_dir: str = "",
     model: str = "/models/s2-pro-q6_k.gguf",
     timeout: float = DEFAULT_TIMEOUT,
+    run_label: str = "",
 ) -> dict[str, Any]:
     """Run a complete stride sweep and return results."""
     host, port_str = endpoint.rsplit(":", 1)
@@ -309,18 +326,26 @@ def run_stride_sweep(
 
         summary = StrideSummary(stride=stride)
 
-        # Warm-up (discard results)
+        # Warm-up (save results but exclude from measured averages)
+        warmup_results = []
         for i in range(warmup_runs):
+            label = f"{run_label}_warmup{i+1}" if run_label else ""
+            warmup_label = f"stride{stride}_warmup{i+1}"
+            w_label = _sanitize_label(label) if label else _sanitize_label(warmup_label)
             print(f"  Warm-up {i+1}/{warmup_runs}...")
             try:
-                run_one_benchmark(client, base_request, stride, 999, output_dir, timeout)
+                wr = run_one_benchmark(client, base_request, stride, 999, output_dir, run_label=w_label, timeout=timeout)
+                warmup_results.append(wr)
             except Exception as exc:
                 print(f"  Warm-up failed: {exc}")
 
         # Measured runs
         for i in range(measured_runs):
+            label = f"{run_label}_run{i+1}" if run_label else ""
+            measured_label = f"stride{stride}_run{i+1}"
+            m_label = _sanitize_label(label) if label else _sanitize_label(measured_label)
             print(f"  Run {i+1}/{measured_runs}...", end=" ", flush=True)
-            result = run_one_benchmark(client, base_request, stride, i + 1, output_dir, timeout)
+            result = run_one_benchmark(client, base_request, stride, i + 1, output_dir, run_label=m_label, timeout=timeout)
             summary.runs.append(result)
             if result.status == "success":
                 print(f"RTF={result.real_time_factor:.2f}, "
@@ -593,21 +618,29 @@ def main(argv: list[str] | None = None) -> int:
         voice=args.voice,
         voice_dir=args.voice_dir,
         timeout=args.timeout,
+        run_label=getattr(args, 'run_label', ''),
     )
 
-    # Save JSON
-    json_path = output_dir / "results.json"
-    json_path.write_text(json.dumps(results, indent=2, default=str))
-    print(f"\nJSON results: {json_path}")
+    safe_label = _sanitize_label(getattr(args, 'run_label', ''))
+    if safe_label:
+        # Single-run mode: write to per-run subdirectory
+        run_dir = output_dir / safe_label
+        run_dir.mkdir(parents=True, exist_ok=True)
+        json_path = run_dir / "results.json"
+        json_path.write_text(json.dumps(results, indent=2, default=str))
+        print(f"\nPer-run results: {json_path}")
+    else:
+        # Full sweep mode: write canonical aggregate files
+        json_path = output_dir / "results.json"
+        json_path.write_text(json.dumps(results, indent=2, default=str))
+        print(f"\nJSON results: {json_path}")
 
-    # Save Markdown summary
-    md_path = output_dir / "summary.md"
-    md_path.write_text(format_summary(results))
-    print(f"Markdown summary: {md_path}")
+        md_path = output_dir / "summary.md"
+        md_path.write_text(format_summary(results))
+        print(f"Markdown summary: {md_path}")
 
-    # Print summary
-    print()
-    print(format_summary(results))
+        print()
+        print(format_summary(results))
 
     if args.json:
         print(json.dumps(results, indent=2, default=str))

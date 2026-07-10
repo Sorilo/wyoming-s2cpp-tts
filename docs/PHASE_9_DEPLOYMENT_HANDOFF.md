@@ -2,7 +2,7 @@
 
 ## Source
 
-- **Commit:** `476685f`
+- **Commit:** `12f3bf8`
 - **Branch:** `phase/phase-9-queue-busy-timeouts`
 
 ## New Environment Variables
@@ -22,10 +22,15 @@ All values validated at startup with strict range checks.
 
 ### Wrapper (NEW)
 ```
-ghcr.io/sorilo/wyoming-s2cpp-tts:sha-476685f
+ghcr.io/sorilo/wyoming-s2cpp-tts:sha-12f3bf8
+
+**Workflow Run:** 29129753396
+**Job:** 86482658019
+**Source SHA:** 12f3bf8a489e76b13c62bd62c52fd443d1b07d82
 ```
-**Build:** `docker build -t ghcr.io/sorilo/wyoming-s2cpp-tts:sha-476685f .`
-**Push:** `docker push ghcr.io/sorilo/wyoming-s2cpp-tts:sha-476685f`
+**Workflow:** https://github.com/Sorilo/wyoming-s2cpp-tts/actions/runs/29129753396
+**Build:** `docker build -t ghcr.io/sorilo/wyoming-s2cpp-tts:sha-12f3bf8 .`
+**Push:** `docker push ghcr.io/sorilo/wyoming-s2cpp-tts:sha-12f3bf8`
 
 ### Backend (UNCHANGED)
 ```

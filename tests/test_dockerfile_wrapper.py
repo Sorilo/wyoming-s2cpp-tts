@@ -246,7 +246,7 @@ def test_unraid_wrapper_container_name() -> None:
 def test_unraid_wrapper_image_is_wrapper_not_backend() -> None:
     """Template references the verified immutable wrapper image, not backend."""
     content = _read(UNRAID_TEMPLATE)
-    assert "wyoming-s2cpp-tts:sha-22db725" in content
+    assert "wyoming-s2cpp-tts:sha-12f3bf8" in content
     assert "wyoming-s2cpp-tts-backend" not in content
 
 

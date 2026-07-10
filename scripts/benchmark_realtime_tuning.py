@@ -99,6 +99,7 @@ class RunResult:
     error: str = ""
     response_headers: dict[str, str] = field(default_factory=dict)
     pcm_saved_path: str = ""
+    run_type: str = ""  # "warmup" or "measured"
 
 
 @dataclass
@@ -296,6 +297,7 @@ def run_stride_sweep(
     model: str = "/models/s2-pro-q6_k.gguf",
     timeout: float = DEFAULT_TIMEOUT,
     run_label: str = "",
+    run_type: str = "",
 ) -> dict[str, Any]:
     """Run a complete stride sweep and return results."""
     host, port_str = endpoint.rsplit(":", 1)
@@ -318,35 +320,67 @@ def run_stride_sweep(
     )
 
     summaries: list[StrideSummary] = []
+    all_warmup_results = []
+    safe_label = _sanitize_label(run_label)
 
-    for stride in strides:
+    # Single-run mode: explicit label + run_type, one stride, one run
+    if safe_label and run_type:
+        stride = strides[0]
         print(f"\n{'='*60}")
-        print(f"Stride {stride}: {measured_runs} measured runs (warmup={warmup_runs})")
+        print(f"Single run: {safe_label} (stride={stride}, type={run_type})")
         print(f"{'='*60}")
 
         summary = StrideSummary(stride=stride)
 
-        # Warm-up (save results but exclude from measured averages)
-        warmup_results = []
-        for i in range(warmup_runs):
-            label = f"{run_label}_warmup{i+1}" if run_label else ""
-            warmup_label = f"stride{stride}_warmup{i+1}"
-            w_label = _sanitize_label(label) if label else _sanitize_label(warmup_label)
-            print(f"  Warm-up {i+1}/{warmup_runs}...")
+        if run_type == "warmup":
+            print(f"  Warm-up...")
             try:
-                wr = run_one_benchmark(client, base_request, stride, 999, output_dir, run_label=w_label, timeout=timeout)
-                warmup_results.append(wr)
+                wr = run_one_benchmark(client, base_request, stride, 1, output_dir, run_label=safe_label, timeout=timeout)
+                wr.run_type = "warmup"
+                all_warmup_results.append(wr)
             except Exception as exc:
                 print(f"  Warm-up failed: {exc}")
-
-        # Measured runs
-        for i in range(measured_runs):
-            label = f"{run_label}_run{i+1}" if run_label else ""
-            measured_label = f"stride{stride}_run{i+1}"
-            m_label = _sanitize_label(label) if label else _sanitize_label(measured_label)
-            print(f"  Run {i+1}/{measured_runs}...", end=" ", flush=True)
-            result = run_one_benchmark(client, base_request, stride, i + 1, output_dir, run_label=m_label, timeout=timeout)
+        else:
+            print(f"  Run...", end=" ", flush=True)
+            result = run_one_benchmark(client, base_request, stride, 1, output_dir, run_label=safe_label, timeout=timeout)
+            result.run_type = "measured"
             summary.runs.append(result)
+            if result.status == "success":
+                print(f"RTF={result.real_time_factor:.2f}, "
+                      f"first_pcm={result.time_to_first_pcm_ms:.0f}ms, "
+                      f"total={result.total_wall_ms:.0f}ms, "
+                      f"pcm={result.pcm_bytes}B, "
+                      f"duration={result.audio_duration_ms:.0f}ms")
+            else:
+                print(f"ERROR: {result.error}")
+
+        summaries.append(summary)
+
+    else:
+        # Full sweep mode (original behavior with proper warmup/measured labels)
+        for stride in strides:
+            print(f"\n{'='*60}")
+            print(f"Stride {stride}: {measured_runs} measured runs (warmup={warmup_runs})")
+            print(f"{'='*60}")
+
+            summary = StrideSummary(stride=stride)
+
+            for i in range(warmup_runs):
+                w_label = _sanitize_label(f"stride{stride}_warmup{i+1}")
+                print(f"  Warm-up {i+1}/{warmup_runs}...")
+                try:
+                    wr = run_one_benchmark(client, base_request, stride, i+1, output_dir, run_label=w_label, timeout=timeout)
+                    wr.run_type = "warmup"
+                    all_warmup_results.append(wr)
+                except Exception as exc:
+                    print(f"  Warm-up failed: {exc}")
+
+            for i in range(measured_runs):
+                m_label = _sanitize_label(f"stride{stride}_run{i+1}")
+                print(f"  Run {i+1}/{measured_runs}...", end=" ", flush=True)
+                result = run_one_benchmark(client, base_request, stride, i+1, output_dir, run_label=m_label, timeout=timeout)
+                result.run_type = "measured"
+                summary.runs.append(result)
             if result.status == "success":
                 print(f"RTF={result.real_time_factor:.2f}, "
                       f"first_pcm={result.time_to_first_pcm_ms:.0f}ms, "
@@ -379,6 +413,8 @@ def run_stride_sweep(
                 "runs": [
                     {
                         "run": r.run_index,
+                        "run_type": r.run_type,
+                        "run_label": safe_label if safe_label else "",
                         "status": r.status,
                         "rtf": r.real_time_factor,
                         "time_to_headers_ms": r.time_to_headers_ms,
@@ -568,6 +604,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Label for this run (used in artifact filenames)",
     )
     parser.add_argument(
+        "--run-type",
+        default="",
+        choices=["", "warmup", "measured"],
+        help="Run type: warmup or measured (only with --run-label)",
+    )
+    parser.add_argument(
         "--timeout",
         type=float,
         default=DEFAULT_TIMEOUT,
@@ -619,6 +661,7 @@ def main(argv: list[str] | None = None) -> int:
         voice_dir=args.voice_dir,
         timeout=args.timeout,
         run_label=getattr(args, 'run_label', ''),
+        run_type=getattr(args, 'run_type', ''),
     )
 
     safe_label = _sanitize_label(getattr(args, 'run_label', ''))

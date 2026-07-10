@@ -560,6 +560,7 @@ for stride in "${STRIDE_ARR[@]}"; do
             --warmup-runs 0 \
             --measured-runs 1 \
             --output-dir "$ARTIFACT_DIR" \
+            --run-type warmup \
             --run-label "$RUN_LABEL" || warn "Warm-up ${w}/${WARMUP_RUNS} failed (stride $stride)"
 
         # Capture backend metrics for this run
@@ -581,6 +582,7 @@ for stride in "${STRIDE_ARR[@]}"; do
             --warmup-runs 0 \
             --measured-runs 1 \
             --output-dir "$ARTIFACT_DIR" \
+            --run-type measured \
             --run-label "$RUN_LABEL"
 
         # Capture backend metrics for this run
@@ -635,7 +637,7 @@ info "  system_state.txt            - System/container/git state"
 info ""
 info "Next steps:"
 info "  1. Listen to generated PCM files:"
-info "     ffmpeg -f s16le -ar 44100 -ac 1 -i $ARTIFACT_DIR/stride4_run1.pcm stride4_run1.wav"
+info "     ffmpeg -f s16le -ar 44100 -ac 1 -i "$ARTIFACT_DIR/stride4_run1/stride4_run1.pcm" stride4_run1.wav"
 info "  2. Review per-run metrics:"
 info "     cat $ARTIFACT_DIR/per_run_metrics.json | python3 -m json.tool"
 info ""

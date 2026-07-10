@@ -81,8 +81,9 @@ discover_production_voice() {
   if [[ -n "$EFFECTIVE_VOICE" ]] && [[ -n "$EFFECTIVE_VOICE" ]]; then
     info "Production voice: $EFFECTIVE_VOICE (dir=$CONTAINER_VOICE_DIR)"
     # Verify .s2voice file exists on host
-    local voice_file="$HOST_VOICES/${EFFECTIVE_VOICE}.s2voice"
-    if [[ -n "$HOST_VOICES" ]] && [[ -f "$voice_file" ]]; then
+    local voice_host="${USER_VOICE_DIR:-$HOST_VOICES}"
+    local voice_file="$voice_host/${EFFECTIVE_VOICE}.s2voice"
+    if [[ -n "$voice_host" ]] && [[ -f "$voice_file" ]]; then
       ok "Voice profile exists: $voice_file"
     elif [[ -n "$HOST_VOICES" ]]; then
       err "Production voice '$EFFECTIVE_VOICE' not found at: $voice_file"
@@ -155,13 +156,32 @@ for cpu_dir in sorted(glob.glob('/sys/devices/system/cpu/cpu[0-9]*')):
     cpu_id = int(os.path.basename(cpu_dir).replace('cpu', ''))
     ct_file = os.path.join(cpu_dir, 'topology/core_type')
     raw_type = open(ct_file).read().strip() if os.path.exists(ct_file) else None
-    # Normalize: kernel reports 'Intel Core' or 'Core' for P-cores, 'Intel Atom' or 'Atom' for E-cores
+    # Normalize: handle textual ('Intel Core', 'Intel Atom'), numeric (0=P-core, 1=E-core on some kernels), and empty
     norm_type = 'unknown'
     if raw_type:
-        t = raw_type.lower()
-        if 'core' in t and 'atom' not in t: norm_type = 'P-core'
-        elif 'atom' in t: norm_type = 'E-core'
-    # Fallback to cpu_capacity if core_type unavailable
+        t = raw_type.strip()
+        # Numeric core_type (0x0 = P-core, 0x1 or higher = E-core on some kernels)
+        if t.isdigit():
+            n = int(t)
+            norm_type = 'P-core' if n == 0 else 'E-core'
+        else:
+            t = t.lower()
+            if 'core' in t and 'atom' not in t: norm_type = 'P-core'
+            elif 'atom' in t: norm_type = 'E-core'
+    # Fallback: lscpu CORETYPE (parse cached output if available, or run inline)
+    if norm_type == 'unknown':
+        import subprocess
+        try:
+            lscpu_out = subprocess.check_output(['lscpu', '-e=CPU,CORETYPE'], text=True, timeout=5)
+            for line in lscpu_out.strip().split(chr(10)):
+                parts = line.split()
+                if len(parts) >= 2 and parts[0] == str(cpu_id):
+                    ct = parts[1].lower()
+                    if 'p' in ct or ('core' in ct and 'atom' not in ct): norm_type = 'P-core'
+                    elif 'e' in ct or 'atom' in ct: norm_type = 'E-core'
+                    break
+        except: pass
+    # Fallback to cpu_capacity
     if norm_type == 'unknown':
         cap_file = os.path.join(cpu_dir, 'cpu_capacity')
         if os.path.exists(cap_file):
@@ -259,7 +279,8 @@ start_backend_q4() {
   info "Starting: $label (threads=$threads${cpuset:+, cpuset=$cpuset})..."
   docker rm -f "$BENCH_CONTAINER" 2>/dev/null || true
   local cpuset_arg=""; [[ -n "$cpuset" ]] && cpuset_arg="--cpuset-cpus=$cpuset"
-  local voice_mount=""; [[ -n "$HOST_VOICES" ]] && voice_mount="-v $HOST_VOICES:/voices:ro"
+  local voice_host="${USER_VOICE_DIR:-$HOST_VOICES}"
+  local voice_mount=""; [[ -n "$voice_host" ]] && voice_mount="-v $voice_host:/voices:ro"
   docker run -d --name "$BENCH_CONTAINER" \
     --gpus "\"device=$GPU_UUID\"" --network sorilonet $cpuset_arg \
     -p "$BENCH_PORT:3030" -v "$HOST_MODELS:/models:ro" $voice_mount \
@@ -271,7 +292,7 @@ stop_backend() { docker rm -f "$BENCH_CONTAINER" 2>/dev/null || true; }
 
 # ── Run benchmark (bash array, all params) ─────────────────────────────────
 run_q4_benchmark() {
-  local label="$1" threads="$2" ctx="$3" hb="$4" sb="$5" ll="$6"
+  local label="$1" threads="$2" cpuset="$3" ctx="$4" hb="$5" sb="$6" ll="$7"
   local args=(
     --run-real --endpoint "127.0.0.1:$BENCH_PORT" --models "$HOST_MODELS/$MODEL_FILE"
     --stride "$STRIDE" --codec-context "$ctx" --holdback "$hb" --start-buffer-ms "$sb"
@@ -284,7 +305,7 @@ run_q4_benchmark() {
 
   # Save effective config
   python3 -c "import json; json.dump({
-    'threads': $threads, 'cpuset': '${2:-}', 'stride': $STRIDE,
+    'threads': $threads, 'cpuset': '${cpuset}', 'stride': $STRIDE,
     'codec_context': $ctx, 'holdback': $hb, 'start_buffer_ms': $sb,
     'low_latency': '$ll' == 'true', 'voice': '${EFFECTIVE_VOICE:-}',
     'voice_dir': '${CONTAINER_VOICE_DIR:-/voices}', 'model': '$MODEL_FILE'
@@ -292,17 +313,35 @@ run_q4_benchmark() {
 
   PYTHONPATH="$REPO_ROOT" python3 "$REPO_ROOT/scripts/benchmark_quantization.py" "${args[@]}" || warn "Benchmark exited non-zero for $label"
 
-  # Verify settings match
+  # Verify settings match between effective_config.json and results.json
   local rj="$ARTIFACT_DIR/$label/results.json"
   if [[ -f "$rj" ]]; then
-    python3 -c "
-import json
-with open('$rj') as f: data = json.load(f)
+    python3 << VERIFYEOF
+import json, sys
+with open('$rj') as f:
+    data = json.load(f)
 eff = json.load(open('$ARTIFACT_DIR/$label/effective_config.json'))
-# Verify measured runs
+errors = []
+
+# Check measured runs
 measured = [r for s in data['summaries'] for r in s['runs'] if r.get('run_type')=='measured' and r.get('status')=='success']
 if len(measured) < 3:
-    print(f'WARN: Only {len(measured)}/3 measured runs succeeded for $label')" 2>/dev/null
+    errors.append(f'Only {len(measured)}/3 measured runs succeeded')
+
+# Verify effective settings match requested (from results.json metadata)
+meta_stride = data.get('stride')
+meta_ctx = data.get('codec_context')
+if meta_stride is not None and meta_stride != eff['stride']:
+    errors.append(f'stride mismatch: requested={eff["stride"]}, effective={meta_stride}')
+if meta_ctx is not None and meta_ctx != eff['codec_context']:
+    errors.append(f'codec_context mismatch: requested={eff["codec_context"]}, effective={meta_ctx}')
+
+if errors:
+    print(f'FAIL: $label: ' + '; '.join(errors))
+    # Don't exit here — let the caller handle it via RESULTS_OK tracking
+else:
+    print(f'OK: $label: settings validated')
+VERIFYEOF
   fi
 }
 
@@ -349,7 +388,7 @@ run_thread_sweep() {
     start_gpu_telemetry "$ARTIFACT_DIR/$label/gpu_telemetry.csv"
     start_cpu_telemetry "$ARTIFACT_DIR/$label/cpu_telemetry.csv"
     start_backend_q4 "$t" "" "$label" || { stop_gpu_telemetry; stop_cpu_telemetry; FAILED=$((FAILED+1)); continue; }
-    run_q4_benchmark "$label" "$t" "$CODEC_CONTEXT" "$HOLDBACK" "$START_BUFFER" "$LOW_LATENCY"
+    run_q4_benchmark "$label" "$t" "" "$CODEC_CONTEXT" "$HOLDBACK" "$START_BUFFER" "$LOW_LATENCY"
     capture_metrics_q4 "$label" "$ARTIFACT_DIR/$label"
     docker logs "$BENCH_CONTAINER" 2>/dev/null > "$ARTIFACT_DIR/$label/startup.log" || true
     stop_gpu_telemetry; stop_cpu_telemetry; stop_backend
@@ -375,7 +414,7 @@ run_affinity_sweep() {
     start_gpu_telemetry "$ARTIFACT_DIR/$label/gpu_telemetry.csv"
     start_cpu_telemetry "$ARTIFACT_DIR/$label/cpu_telemetry.csv"
     start_backend_q4 "$best_t" "$cpus" "$label" || { stop_gpu_telemetry; stop_cpu_telemetry; FAILED=$((FAILED+1)); continue; }
-    run_q4_benchmark "$label" "$best_t" "$CODEC_CONTEXT" "$HOLDBACK" "$START_BUFFER" "$LOW_LATENCY"
+    run_q4_benchmark "$label" "$best_t" "$cpus" "$CODEC_CONTEXT" "$HOLDBACK" "$START_BUFFER" "$LOW_LATENCY"
     capture_metrics_q4 "$label" "$ARTIFACT_DIR/$label"
     docker logs "$BENCH_CONTAINER" 2>/dev/null > "$ARTIFACT_DIR/$label/startup.log" || true
     stop_gpu_telemetry; stop_cpu_telemetry; stop_backend
@@ -390,7 +429,7 @@ run_blipping_diagnostic() {
     ensure_dir "$ARTIFACT_DIR/$label"; ATTEMPTED=$((ATTEMPTED+1))
     start_gpu_telemetry "$ARTIFACT_DIR/$label/gpu_telemetry.csv"
     start_backend_q4 "$best_t" "" "$label" || { stop_gpu_telemetry; FAILED=$((FAILED+1)); continue; }
-    run_q4_benchmark "$label" "$best_t" "$ctx" "$hb" "$START_BUFFER" "$LOW_LATENCY"
+    run_q4_benchmark "$label" "$best_t" "" "$ctx" "$hb" "$START_BUFFER" "$LOW_LATENCY"
     capture_metrics_q4 "$label" "$ARTIFACT_DIR/$label"
     docker logs "$BENCH_CONTAINER" 2>/dev/null > "$ARTIFACT_DIR/$label/startup.log" || true
     stop_gpu_telemetry; stop_backend
@@ -420,7 +459,7 @@ if [[ "$VALIDATE_ONLY" == true ]]; then
   discover_mounts
   [[ -f "$HOST_MODELS/$MODEL_FILE" ]] && echo "Model exists: $(stat -c%s "$HOST_MODELS/$MODEL_FILE" | numfmt --to=iec)" && sha256sum "$HOST_MODELS/$MODEL_FILE" || echo "MISSING"
   discover_production_gpu; echo "Production GPU: $PRODUCTION_GPU"
-  discover_production_voice; echo "Voice: ${EFFECTIVE_VOICE:-none} (dir=${CONTAINER_VOICE_DIR:-/voices})"
+  discover_production_voice; echo "Voice: ${EFFECTIVE_VOICE:-none} (container_dir=${CONTAINER_VOICE_DIR:-/voices}, host=${USER_VOICE_DIR:-${HOST_VOICES:-none}})"
   echo "Host voices: ${HOST_VOICES:-none}"
   build_cpu_topology /tmp/q4_topo_validate.json && python3 -c "import json; t=json.load(open('/tmp/q4_topo_validate.json')); print(f'P-cores: {len(t[\"p_cores\"])}, E-cores: {len(t[\"e_cores\"])}'); [print(f'  {k}: {v}') for k,v in t['affinity_sets'].items()]" || echo "Topology failed"
   echo ""
@@ -456,23 +495,47 @@ nvidia-smi > "$ARTIFACT_DIR/nvidia_smi_snapshot.txt" 2>/dev/null || true
 nvidia-smi --query-gpu=uuid,clocks.max.sm,clocks.max.mem,power.limit --format=csv,noheader > "$ARTIFACT_DIR/stock_gpu_state.txt" 2>/dev/null || true
 build_cpu_topology "$ARTIFACT_DIR/core_topology.json" || warn "Topology build had issues"
 
-# Smoke test mode
+# Smoke test mode (fail non-zero on any error)
 if [[ "$SMOKE_TEST" == true ]]; then
+  SMOKE_FAILED=false
   info "Smoke test — one short synthesis..."
   ensure_dir "$ARTIFACT_DIR/smoke_test"
   start_backend_q4 "0" "" "smoke" || { err "Smoke backend failed"; exit 1; }
-  PYTHONPATH="$REPO_ROOT" python3 "$REPO_ROOT/scripts/benchmark_quantization.py" \
+  if PYTHONPATH="$REPO_ROOT" python3 "$REPO_ROOT/scripts/benchmark_quantization.py" \
     --run-real --endpoint "127.0.0.1:$BENCH_PORT" --models "$HOST_MODELS/$MODEL_FILE" \
     --stride "$STRIDE" --codec-context 4 --warmup-runs 0 --measured-runs 1 \
     --output-dir "$ARTIFACT_DIR" --candidate-dir "smoke_test" \
     --text "Hello, this is a smoke test." --timeout 60 \
     ${EFFECTIVE_VOICE:+--voice "$EFFECTIVE_VOICE"} \
-    ${CONTAINER_VOICE_DIR:+--voice-dir "$CONTAINER_VOICE_DIR"} \
-    || warn "Smoke synthesis failed"
+    ${CONTAINER_VOICE_DIR:+--voice-dir "$CONTAINER_VOICE_DIR"}; then
+    ok "Smoke synthesis succeeded"
+  else
+    err "Smoke synthesis failed"; SMOKE_FAILED=true
+  fi
+  # Verify results
+  local srj="$ARTIFACT_DIR/smoke_test/results.json"
+  if [[ -f "$srj" ]]; then
+    local measured=$(python3 -c "import json; d=json.load(open('$srj')); measured=[r for s in d['summaries'] for r in s['runs'] if r.get('run_type')=='measured' and r.get('status')=='success']; print(len(measured))" 2>/dev/null || echo 0)
+    if [[ "$measured" -ge 1 ]]; then ok "$measured measured run(s) succeeded"; else err "No measured runs succeeded"; SMOKE_FAILED=true; fi
+  else
+    err "results.json missing"; SMOKE_FAILED=true
+  fi
+  # Verify PCM
+  local pcm_count=$(find "$ARTIFACT_DIR/smoke_test" -name '*.pcm' -size +0c 2>/dev/null | wc -l)
+  if [[ "$pcm_count" -ge 1 ]]; then ok "$pcm_count non-empty PCM file(s)"; else err "No non-empty PCM files"; SMOKE_FAILED=true; fi
+  # Create and verify WAV
+  local wav_ok=false
   find "$ARTIFACT_DIR/smoke_test" -name '*.pcm' -print0 2>/dev/null | while IFS= read -r -d '' pcm; do
-    create_host_wav "$pcm" "${pcm%.pcm}.wav" && ok "Smoke WAV: ${pcm%.pcm}.wav"
+    if create_host_wav "$pcm" "${pcm%.pcm}.wav"; then ok "Smoke WAV: ${pcm%.pcm}.wav"; wav_ok=true; fi
   done
-  stop_backend; ok "Smoke test complete"; exit 0
+  # Re-check outside subshell
+  local wav_count=$(find "$ARTIFACT_DIR/smoke_test" -name '*.wav' -size +0c 2>/dev/null | wc -l)
+  if [[ "$wav_count" -ge 1 ]]; then ok "$wav_count valid WAV file(s)"; else err "No valid WAV files"; SMOKE_FAILED=true; fi
+  stop_backend
+  if [[ "$SMOKE_FAILED" == true ]]; then
+    err "Smoke test FAILED"; exit 1
+  fi
+  ok "Smoke test passed"; exit 0
 fi
 
 # Full sweep

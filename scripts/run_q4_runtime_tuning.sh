@@ -160,28 +160,31 @@ select_gpu() {
 build_cpu_topology() {
   local out="$1"
   python3 -c "
-import json, os, glob, sys
+import json, os, glob, sys, subprocess
 
 cores = {}
+classification_method = 'unknown'
+
 for cpu_dir in sorted(glob.glob('/sys/devices/system/cpu/cpu[0-9]*')):
     cpu_id = int(os.path.basename(cpu_dir).replace('cpu', ''))
     ct_file = os.path.join(cpu_dir, 'topology/core_type')
     raw_type = open(ct_file).read().strip() if os.path.exists(ct_file) else None
-    # Normalize: handle textual ('Intel Core', 'Intel Atom'), numeric (0=P-core, 1=E-core on some kernels), and empty
     norm_type = 'unknown'
+
+    # 1. core_type (preferred)
     if raw_type:
         t = raw_type.strip()
-        # Numeric core_type (0x0 = P-core, 0x1 or higher = E-core on some kernels)
         if t.isdigit():
-            n = int(t)
-            norm_type = 'P-core' if n == 0 else 'E-core'
+            norm_type = 'P-core' if int(t) == 0 else 'E-core'
         else:
             t = t.lower()
             if 'core' in t and 'atom' not in t: norm_type = 'P-core'
             elif 'atom' in t: norm_type = 'E-core'
-    # Fallback: lscpu CORETYPE (parse cached output if available, or run inline)
+        if norm_type != 'unknown':
+            classification_method = 'core_type'
+
+    # 2. lscpu CORETYPE
     if norm_type == 'unknown':
-        import subprocess
         try:
             lscpu_out = subprocess.check_output(['lscpu', '-e=CPU,CORETYPE'], text=True, timeout=5)
             for line in lscpu_out.strip().split(chr(10)):
@@ -191,61 +194,103 @@ for cpu_dir in sorted(glob.glob('/sys/devices/system/cpu/cpu[0-9]*')):
                     if 'p' in ct or ('core' in ct and 'atom' not in ct): norm_type = 'P-core'
                     elif 'e' in ct or 'atom' in ct: norm_type = 'E-core'
                     break
+            if norm_type != 'unknown':
+                classification_method = 'lscpu_coretype'
         except: pass
-    # Fallback to cpu_capacity
+
+    # 3. cpu_capacity
     if norm_type == 'unknown':
         cap_file = os.path.join(cpu_dir, 'cpu_capacity')
         if os.path.exists(cap_file):
             cap = int(open(cap_file).read().strip())
-            # i9-13900K: P-cores ~1152-1190, E-cores ~800-860
             norm_type = 'P-core' if cap > 900 else 'E-core' if cap > 100 else 'unknown'
+            if norm_type != 'unknown':
+                classification_method = 'cpu_capacity'
+
     ts_file = os.path.join(cpu_dir, 'topology/thread_siblings_list')
     siblings = open(ts_file).read().strip() if os.path.exists(ts_file) else str(cpu_id)
     cid_file = os.path.join(cpu_dir, 'topology/core_id')
     core_id = int(open(cid_file).read().strip()) if os.path.exists(cid_file) else cpu_id
-    cores[str(cpu_id)] = {'cpu_id': cpu_id, 'core_id': core_id, 'raw_type': raw_type,
-                           'normalized_type': norm_type, 'siblings': siblings}
 
-p_cores = [str(c['cpu_id']) for c in cores.values() if c['normalized_type'] == 'P-core']
-e_cores = [str(c['cpu_id']) for c in cores.values() if c['normalized_type'] == 'E-core']
-unknown = [str(c['cpu_id']) for c in cores.values() if c['normalized_type'] == 'unknown']
+    cores[str(cpu_id)] = {'cpu_id': cpu_id, 'core_id': core_id, 'raw_type': raw_type,
+                           'normalized_type': norm_type, 'siblings': siblings,
+                           'classification_method': ''}
+
+# 4. Hybrid Intel fallback: thread_siblings_list — P-cores have 2 siblings (HT), E-cores have 1
+if all(c['normalized_type'] == 'unknown' for c in cores.values()):
+    # Group by physical core: core_id determines which CPUs share a physical core
+    core_groups = {}
+    for cid, c in cores.items():
+        key = c['core_id']
+        core_groups.setdefault(key, []).append(cid)
+    for cid, c in cores.items():
+        group = core_groups[c['core_id']]
+        if len(group) == 2:
+            c['normalized_type'] = 'P-core'
+        elif len(group) == 1:
+            c['normalized_type'] = 'E-core'
+    classification_method = 'thread_siblings'
+
+# Record method
+for c in cores.values():
+    c['classification_method'] = classification_method
+
+p_cores = sorted([c['cpu_id'] for c in cores.values() if c['normalized_type'] == 'P-core'])
+e_cores = sorted([c['cpu_id'] for c in cores.values() if c['normalized_type'] == 'E-core'])
+unknown = [c['cpu_id'] for c in cores.values() if c['normalized_type'] == 'unknown']
+
+print(f'Classification method: {classification_method}', file=sys.stderr)
+print(f'P-cores: {p_cores}', file=sys.stderr)
+print(f'E-cores: {e_cores}', file=sys.stderr)
 
 if unknown:
-    print(f'WARN: {len(unknown)} CPUs could not be classified: {unknown}', file=sys.stderr)
+    print(f'WARN: {len(unknown)} CPUs unclassified: {unknown}', file=sys.stderr)
 if not p_cores:
-    print('ERROR: No P-cores identified. Topology parsing failed.', file=sys.stderr); sys.exit(1)
+    print('ERROR: No P-cores identified', file=sys.stderr); sys.exit(1)
 if not e_cores:
     print('WARN: No E-cores identified (expected on i9-13900K)', file=sys.stderr)
 
 # Build affinity sets
 seen_p = set(); p_physical = []; p_all = []
-for cid in p_cores:
+for cid in map(str, sorted(p_cores)):
     c = cores[cid]
     if c['core_id'] not in seen_p: seen_p.add(c['core_id']); p_physical.append(cid)
     p_all.append(cid)
 seen_e = set(); e_distinct = []
-for cid in e_cores:
+for cid in map(str, sorted(e_cores)):
     c = cores[cid]
     if c['core_id'] not in seen_e: seen_e.add(c['core_id']); e_distinct.append(cid)
 e_half = e_distinct[:max(1, len(e_distinct)//2)]
 p_plus_e = p_all + e_half
 
 affinity = {
-    'unrestricted': ','.join(sorted(cores.keys(), key=int)),
-    'p_physical': ','.join(sorted(p_physical, key=int)),
-    'p_all_threads': ','.join(sorted(p_all, key=int)),
-    'p_plus_e': ','.join(sorted(p_plus_e, key=int)),
+    'unrestricted': ','.join(map(str, sorted(cores.keys()))),
+    'p_physical': ','.join(p_physical),
+    'p_all_threads': ','.join(p_all),
+    'p_plus_e': ','.join(p_plus_e),
 }
-# Validate non-empty
 for name, cpuset in affinity.items():
     if not cpuset:
         print(f'ERROR: empty affinity set: {name}', file=sys.stderr); sys.exit(1)
 
 with open('$out', 'w') as f:
-    json.dump({'core_topology': cores, 'p_cores': p_cores, 'e_cores': e_cores,
-               'affinity_sets': affinity}, f, indent=2)
-print(json.dumps({'status': 'ok', 'p_count': len(p_cores), 'e_count': len(e_cores),
-                  'affinity_sets': list(affinity.keys())}))
+    json.dump({
+        'classification_method': classification_method,
+        'core_topology': {str(k): v for k, v in cores.items()},
+        'p_cores': [str(c) for c in p_cores],
+        'e_cores': [str(c) for c in e_cores],
+        'affinity_sets': affinity,
+    }, f, indent=2)
+
+# Validate expected topology for i9-13900K
+if len(p_cores) == 16 and len(p_physical) == 8 and len(e_cores) == 16:
+    print(f'MATCH: i9-13900K topology confirmed (8P+16E, 32 logical)', file=sys.stderr)
+elif len(p_all) == 16 and len(e_cores) >= 8:
+    print(f'WARN: P/E ratio unusual but usable: {len(p_cores)} P logical, {len(e_cores)} E logical', file=sys.stderr)
+
+print(json.dumps({'status': 'ok', 'method': classification_method,
+                  'p_logical': len(p_cores), 'e_logical': len(e_cores),
+                  'p_physical': len(p_physical), 'affinity_sets': list(affinity.keys())}))
 " 2>/dev/null
 }
 

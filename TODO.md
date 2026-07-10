@@ -172,7 +172,7 @@
 - Added ``--model`` CLI argument for explicit model path recording.
 - Benchmark scripts ready for controlled Q6_K/Q5_K_M/Q4_K_M comparison at fixed stride 4.
 
-**Status**: Phase 8D.2 architecture corrected. Single-container-per-model orchestrator (`scripts/run_quantization_benchmark_unraid.sh`). Live Q5_K_M/Q4_K_M quant benchmark and human listening still pending.
+**Status**: Phase 8D complete. Phase 8E.1 complete. See docs/PERFORMANCE_TUNING_RESULTS.md. Single-container-per-model orchestrator (`scripts/run_quantization_benchmark_unraid.sh`). Live Q5_K_M/Q4_K_M quant benchmark and human listening still pending.
 - Full suite: 590/590 passing (25 Phase 8D + 16 Phase 8D.2 tests included).
 
 ## Phase 8C results: realtime stride tuning infrastructure
@@ -196,7 +196,17 @@
 - No backend image change. Live RTX 3080 benchmarks completed (strides 1-24).
 - Stride 4 is a candidate only; real benchmarking pending on Unraid host.
 
-## Approved remaining v0.1 phases
+## Phase 8E.1 results: Q4_K_M non-fork runtime tuning
+
+- Thread sweep: threads=8 is optimal on i9-13900K (RTF 0.954 at context 4)
+- Context screen: context 32 is quality floor (first without tapping/blipping)
+- Context-32 stride sweep: stride 32 only sub-1.0 configuration (RTF 0.987)
+- Provisional baseline: Q4_K_M, threads=8, context=32, stride=32, P-cores 0-15
+- Wrapper image published: ghcr.io/sorilo/wyoming-s2cpp-tts:sha-22db725
+- Deployment handoff: docs/PHASE_8E1_DEPLOYMENT_HANDOFF.md
+- Tuning paused for end-to-end HA validation
+
+## Approved remaining v0.1 phases## Approved remaining v0.1 phases
 
 21. ~~Phase 7.5: wire true progressive backend HTTP audio streaming into the production Wyoming event handler when `S2_STREAM=true`~~ ✅ Phase 7.5A complete
 23. Phase 8: client disconnect cleanup, open HTTP stream closure, cancellation behavior, and documented backend cancellation limitations

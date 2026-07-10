@@ -113,23 +113,33 @@ See ``docs/STREAMING_STRIDE_AND_QUANT_BENCHMARKS.md`` for the comprehensive stri
 
 Only triggered if no acceptable quant reaches safe real time.  Investigate generation-profile-specific decode-stride tuning, codec-context variants, and AR-batch sizing adjustments without forking s2.cpp.
 
-### Phase 8E.1: Q4_K_M non-fork runtime tuning 🔄
+### Phase 8E.1: Q4_K_M non-fork runtime tuning ✅
 
 Find the best non-fork runtime configuration for Q4_K_M at fixed stride 4.
 Thread-count sweep (0,8,16,24,32), CPU-affinity sweep (P-core physical/logical,
 P+E), and blipping diagnostic (codec context 4 vs 64, holdback 0 vs 1).
 GPU telemetry, stock-clock verification, and saved-voice verification included.
 
-**Status**: Tooling ready; live tuning not yet executed.
+**Status**: Complete. Q4_K_M selected, threads=8, context=32, stride=32 baseline frozen. See `docs/PERFORMANCE_TUNING_RESULTS.md`.
 
-### Phase 8E.2: build-level and stride tuning (placeholder)
+### Phase 8E.2: build-level and stride tuning ⏸️ (paused)
 
-Conditional future phase: CUDA kernel selection (MMQ vs CUBLAS), GGML_NATIVE+LTO
+**Status**: Paused. Tuning deferred pending end-to-end HA measurements. Conditional future phase: CUDA kernel selection (MMQ vs CUBLAS), GGML_NATIVE+LTO
 build comparison, mild GPU overclock testing, final stride 5/6/8 comparison.
 Requires separate goal and controlled backend-image builds.
 
 ### Phase 9: queue, busy handling, and timeout policy
 Define queue capacity behavior, busy responses, backend HTTP 503 handling, queue wait timeout, synthesis timeout, and controlled Wyoming failure behavior.
+
+### Phase 9.5: progressive LLM text-to-TTS phrase pipeline
+
+Home Assistant sends streaming TTS input via synthesize-start/chunk/stop.
+The wrapper currently accumulates all chunks until synthesize-stop, so TTS
+does not begin while the LLM is still generating.  This phase should add
+phrase-boundary accumulation, serialized phrase synthesis, continuous
+Wyoming audio timestamps, cancellation, queueing, and barge-in-safe
+behavior.  Must preserve one active s2.cpp synthesis at a time and avoid
+double-synthesizing the backwards-compatibility full-message event.
 
 ### Phase 10: end-to-end barge-in testing with HA satellite/player
 Test with an actual Home Assistant satellite/player path including VAD, wake word, playback interruption, and new-request behavior.

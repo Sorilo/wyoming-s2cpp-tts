@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Phase 8E.1 closure: Q4_K_M runtime tuning complete.  After six benchmark
+  phases, the provisional baseline is Q4_K_M at context=32, stride=32,
+  threads=8.  Backend first PCM ~1.35s, RTF 0.987 (narrow margin).
+  Wrapper image published: ``ghcr.io/sorilo/wyoming-s2cpp-tts:sha-22db725``.
+  See ``docs/PERFORMANCE_TUNING_RESULTS.md`` for full evidence and
+  ``docs/PHASE_8E1_DEPLOYMENT_HANDOFF.md`` for deployment procedure.
+  Phase 9.5 (progressive LLM-to-TTS phrase pipeline) added to roadmap.
+  Tuning paused pending end-to-end Home Assistant measurements.
+
 - Phase 8D.2: corrected live quantization benchmark architecture.
   **Critical fix**: the s2.cpp server loads ONE GGUF at startup via the
   ``S2_MODEL`` environment variable; HTTP requests cannot switch models.

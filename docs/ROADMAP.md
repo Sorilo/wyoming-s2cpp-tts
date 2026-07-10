@@ -95,13 +95,13 @@ harness, and a one-command Unraid orchestration script. 80 new tests,
 Stride 4 is the current preferred Q6_K latency/throughput compromise (RTF 1.13, first PCM ~251 ms). See ``CHANGELOG.md`` and
 ``scripts/benchmark_realtime_tuning.py`` for the benchmark workflow.
 
-### Phase 8D: controlled quantized-model performance and quality benchmark 🔧 (tooling complete; live quant pending)
+### Phase 8D: controlled quantized-model performance and quality benchmark ✅
 
 Select a single preferred runtime quantization by benchmarking candidate Q6_K, Q5_K_M, and Q4_K_M GGUF models against the RTX 3080 at fixed stride 4, holding all other variables constant.  The phase delivers: (a) hardened benchmark tooling with reliable metric correlation, port discovery, and WAV conversion; (b) a controlled quant comparison under identical conditions (same GPU, backend build, container environment, voice, and text); (c) human listening evaluation of audio quality across quants; and (d) a single recommended runtime model.
 
-**Status**: Architecture corrected (single-container-per-model via S2_MODEL env var).
-Tooling complete (orchestrator, harness, metric correlation, model provenance, docs, 590 tests).
-Live Q5_K_M and Q4_K_M quant benchmark + human listening still pending.
+**Status**: Complete. First live quant inference benchmark + human listening finished.
+Q4_K_M selected as performance candidate (RTF 1.015). Q5_K_M retained as quality fallback.
+Phase 8E.1 (Q4 runtime tuning) in progress.
 
 This phase does NOT implement dynamic model switching, multi-worker routing, or multi-GPU scheduling.  Those remain in post-v0.1.  A conditional Phase 8E placeholder exists for non-fork runtime tuning if no quant achieves safe real-time performance.
 
@@ -112,6 +112,21 @@ See ``docs/STREAMING_STRIDE_AND_QUANT_BENCHMARKS.md`` for the comprehensive stri
 ### Phase 8E: conditional non-fork runtime performance tuning (placeholder)
 
 Only triggered if no acceptable quant reaches safe real time.  Investigate generation-profile-specific decode-stride tuning, codec-context variants, and AR-batch sizing adjustments without forking s2.cpp.
+
+### Phase 8E.1: Q4_K_M non-fork runtime tuning 🔄
+
+Find the best non-fork runtime configuration for Q4_K_M at fixed stride 4.
+Thread-count sweep (0,8,16,24,32), CPU-affinity sweep (P-core physical/logical,
+P+E), and blipping diagnostic (codec context 4 vs 64, holdback 0 vs 1).
+GPU telemetry, stock-clock verification, and saved-voice verification included.
+
+**Status**: Tooling ready; live tuning not yet executed.
+
+### Phase 8E.2: build-level and stride tuning (placeholder)
+
+Conditional future phase: CUDA kernel selection (MMQ vs CUBLAS), GGML_NATIVE+LTO
+build comparison, mild GPU overclock testing, final stride 5/6/8 comparison.
+Requires separate goal and controlled backend-image builds.
 
 ### Phase 9: queue, busy handling, and timeout policy
 Define queue capacity behavior, busy responses, backend HTTP 503 handling, queue wait timeout, synthesis timeout, and controlled Wyoming failure behavior.

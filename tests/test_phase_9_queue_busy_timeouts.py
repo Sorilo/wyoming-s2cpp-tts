@@ -234,6 +234,9 @@ class _ControllableMockStream:
     def cancel(self):
         self._cancelled = True
         self._closed = True
+        # Unblock any pending __next__ wait
+        if self._behavior.block_event is not None:
+            self._behavior.block_event.set()
         with self._backend._active_lock:
             if id(self) in self._backend.active_requests:
                 self._backend.active_requests.remove(id(self))

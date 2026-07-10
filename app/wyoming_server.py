@@ -613,7 +613,7 @@ async def synthesize_s2cpp_streaming_tts_events(
                         # Accumulate PCM until target reached, stream ends, or cap hit
                         while True:
                             try:
-                                chunk = await asyncio.to_thread(_read_stream_chunk, stream)
+                                chunk = await _read_stream_with_deadline(stream, synthesis_deadline)
                             except S2ClientError:
                                 raise
                             if chunk is _STREAM_EOF:
@@ -732,7 +732,7 @@ async def synthesize_s2cpp_streaming_tts_events(
                             if time.monotonic() >= synthesis_deadline:
                                 raise asyncio.TimeoutError("Synthesis timeout exceeded")
                             try:
-                                chunk = await asyncio.to_thread(_read_stream_chunk, stream)
+                                chunk = await _read_stream_with_deadline(stream, synthesis_deadline)
                             except S2ClientError:
                                 raise
                             if chunk is _STREAM_EOF:
@@ -1064,6 +1064,14 @@ class SingleWorkerSynthesisQueue:
 
     def cancel_active_if_matches(self, synthesis_id: str) -> bool:
         if (self._active_synthesis_id == synthesis_id
+                and self._active_task is not None):
+            self._active_task.cancel()
+            return True
+        return False
+
+    def cancel_active_for_connection(self, connection_id: str) -> bool:
+        """Cancel the active synthesis if it belongs to *connection_id*."""
+        if (self._active_connection_id == connection_id
                 and self._active_task is not None):
             self._active_task.cancel()
             return True
@@ -1424,6 +1432,7 @@ class FakeTtsEventHandler(AsyncEventHandler):
         self._in_streaming_session = False
         if self.settings.cancel_on_client_disconnect:
             await self.queue.cancel_waiting(self._conn_id)
+            self.queue.cancel_active_for_connection(self._conn_id)
             self.queue.cancel_active_for_connection(self._conn_id)
         obs_log("conn_close", connection_id=self._conn_id)
         await super().disconnect()

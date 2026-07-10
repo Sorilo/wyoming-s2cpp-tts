@@ -561,6 +561,7 @@ for stride in "${STRIDE_ARR[@]}"; do
             --measured-runs 1 \
             --output-dir "$ARTIFACT_DIR" \
             --run-type warmup \
+            --run-index $w \
             --run-label "$RUN_LABEL" || warn "Warm-up ${w}/${WARMUP_RUNS} failed (stride $stride)"
 
         # Capture backend metrics for this run
@@ -583,6 +584,7 @@ for stride in "${STRIDE_ARR[@]}"; do
             --measured-runs 1 \
             --output-dir "$ARTIFACT_DIR" \
             --run-type measured \
+            --run-index $m \
             --run-label "$RUN_LABEL"
 
         # Capture backend metrics for this run
@@ -601,11 +603,11 @@ for stride in "${STRIDE_ARR[@]}"; do
     "run_type": "measured",
     "run_label": "$RUN_LABEL",
     "raw": $(echo "$mline" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read().strip()))"),
-    "generate_ms": $(parse_metric_field "$mline" "generate" || echo null),
-    "stream_decode_ms": $(parse_metric_field "$mline" "stream_decode" || echo null),
+    "generate": $(parse_metric_field "$mline" "generate" || echo null),
+    "stream_decode": $(parse_metric_field "$mline" "stream_decode" || echo null),
     "stream_batches": $(parse_metric_field "$mline" "stream_batches" || echo null),
-    "ar_only_ms": $(parse_metric_field "$mline" "ar_only" || echo null),
-    "total_ms": $(parse_metric_field "$mline" "total" || echo null),
+    "ar_only": $(parse_metric_field "$mline" "ar_only" || echo null),
+    "total": $(parse_metric_field "$mline" "total" || echo null),
     "total_rtf": $(parse_metric_field "$mline" "total_rtf" || echo null)
   }
 EOJ

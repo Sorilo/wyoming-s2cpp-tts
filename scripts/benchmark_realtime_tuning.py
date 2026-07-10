@@ -298,6 +298,7 @@ def run_stride_sweep(
     timeout: float = DEFAULT_TIMEOUT,
     run_label: str = "",
     run_type: str = "",
+    run_index: int = 1,
 ) -> dict[str, Any]:
     """Run a complete stride sweep and return results."""
     host, port_str = endpoint.rsplit(":", 1)
@@ -335,15 +336,17 @@ def run_stride_sweep(
         if run_type == "warmup":
             print(f"  Warm-up...")
             try:
-                wr = run_one_benchmark(client, base_request, stride, 1, output_dir, run_label=safe_label, timeout=timeout)
+                wr = run_one_benchmark(client, base_request, stride, run_index, output_dir, run_label=safe_label, timeout=timeout)
                 wr.run_type = "warmup"
-                all_warmup_results.append(wr)
+                wr.run_index = run_index
+                summary.runs.append(wr)
             except Exception as exc:
                 print(f"  Warm-up failed: {exc}")
         else:
             print(f"  Run...", end=" ", flush=True)
-            result = run_one_benchmark(client, base_request, stride, 1, output_dir, run_label=safe_label, timeout=timeout)
+            result = run_one_benchmark(client, base_request, stride, run_index, output_dir, run_label=safe_label, timeout=timeout)
             result.run_type = "measured"
+            result.run_index = run_index
             summary.runs.append(result)
             if result.status == "success":
                 print(f"RTF={result.real_time_factor:.2f}, "
@@ -380,17 +383,18 @@ def run_stride_sweep(
                 print(f"  Run {i+1}/{measured_runs}...", end=" ", flush=True)
                 result = run_one_benchmark(client, base_request, stride, i+1, output_dir, run_label=m_label, timeout=timeout)
                 result.run_type = "measured"
+                result.run_index = i+1
                 summary.runs.append(result)
-            if result.status == "success":
-                print(f"RTF={result.real_time_factor:.2f}, "
-                      f"first_pcm={result.time_to_first_pcm_ms:.0f}ms, "
-                      f"total={result.total_wall_ms:.0f}ms, "
-                      f"pcm={result.pcm_bytes}B, "
-                      f"duration={result.audio_duration_ms:.0f}ms")
-            else:
-                print(f"ERROR: {result.error}")
+                if result.status == "success":
+                    print(f"RTF={result.real_time_factor:.2f}, "
+                          f"first_pcm={result.time_to_first_pcm_ms:.0f}ms, "
+                          f"total={result.total_wall_ms:.0f}ms, "
+                          f"pcm={result.pcm_bytes}B, "
+                          f"duration={result.audio_duration_ms:.0f}ms")
+                else:
+                    print(f"ERROR: {result.error}")
 
-        summaries.append(summary)
+            summaries.append(summary)
 
     return {
         "endpoint": endpoint,
@@ -604,6 +608,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Label for this run (used in artifact filenames)",
     )
     parser.add_argument(
+        "--run-index",
+        type=int,
+        default=1,
+        help="Run index for this invocation (1-based)",
+    )
+    parser.add_argument(
         "--run-type",
         default="",
         choices=["", "warmup", "measured"],
@@ -662,6 +672,7 @@ def main(argv: list[str] | None = None) -> int:
         timeout=args.timeout,
         run_label=getattr(args, 'run_label', ''),
         run_type=getattr(args, 'run_type', ''),
+        run_index=getattr(args, 'run_index', 1),
     )
 
     safe_label = _sanitize_label(getattr(args, 'run_label', ''))

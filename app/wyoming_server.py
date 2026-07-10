@@ -48,7 +48,7 @@ import sys
 import time
 
 from app.metrics import MetricsCollector
-from app.s2_client import S2Client, S2ClientError, S2GenerateRequest
+from app.s2_client import S2BackendBusyError, S2Client, S2ClientError, S2GenerateRequest
 
 
 class S2GenerateClient(Protocol):
@@ -433,6 +433,7 @@ async def synthesize_s2cpp_streaming_tts_events(
     backend_data_observed = False
     first_audio_emitted = False
     stream_start = time.monotonic()
+    synthesis_deadline = time.monotonic() + settings.s2_synthesis_timeout_sec
 
     fp = text_fingerprint(request.text)
     obs_log("backend_start",
@@ -678,6 +679,8 @@ async def synthesize_s2cpp_streaming_tts_events(
 
             if not backend_completed_before_buffer_target:
                 while True:
+                    if time.monotonic() >= synthesis_deadline:
+                        raise asyncio.TimeoutError("Synthesis timeout exceeded")
                     try:
                         chunk = await asyncio.to_thread(_read_stream_chunk, stream)
                     except S2ClientError:
@@ -771,6 +774,28 @@ async def synthesize_s2cpp_streaming_tts_events(
 
         metrics.finalize("success")
 
+    except S2BackendBusyError:
+        obs_log("backend_stream_done",
+                connection_id=_ctx.connection_id,
+                synthesis_id=_ctx.synthesis_id,
+                text_fp=fp,
+                total_elapsed_ms=int((time.monotonic() - stream_start) * 1000),
+                status="error",
+                error="backend_busy",
+                audio_start_emitted=first_audio_emitted)
+        metrics.finalize("error", "backend_busy")
+        raise
+    except asyncio.TimeoutError:
+        obs_log("synthesis_timeout",
+                connection_id=_ctx.connection_id,
+                synthesis_id=_ctx.synthesis_id,
+                text_fp=fp,
+                elapsed_ms=int((time.monotonic() - stream_start) * 1000),
+                pcm_bytes_received=metrics.total_emitted_bytes,
+                chunk_count=metrics.emitted_chunk_count,
+                audio_start_emitted=first_audio_emitted)
+        metrics.finalize("error", "synthesis_timeout")
+        raise
     except (GeneratorExit, asyncio.CancelledError) as exc:
         total_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
         # Explicitly close the backend stream so any blocked
@@ -815,34 +840,118 @@ async def synthesize_s2cpp_streaming_tts_events(
         metrics.finalize("error", exc_name)
         raise
 
+
+class QueueFullError(RuntimeError):
+    """Raised when the synthesis queue is at capacity."""
+
+class QueueTimeoutError(asyncio.TimeoutError):
+    """Raised when a waiting request exceeds the queue wait timeout."""
+
 class SingleWorkerSynthesisQueue:
-    """Bounded one-worker queue gate for initial single-active-synthesis policy."""
+    """Bounded FIFO queue gate ensuring one active backend synthesis at a time.
+
+    Semantics: ``max_size`` INCLUDES the active synthesis.
+    """
 
     worker_count = 1
 
-    def __init__(self, max_size: int) -> None:
+    def __init__(self, max_size: int, wait_timeout_sec: float = 30) -> None:
         if max_size <= 0:
             raise ValueError("max_size must be positive")
         self.max_size = max_size
+        self.wait_timeout_sec = wait_timeout_sec
         self._semaphore = asyncio.Semaphore(1)
         self._pending = 0
+        self._depth = 0
+        self._lock = asyncio.Lock()
+        self._active_synthesis_id: str | None = None
+        self._active_task: asyncio.Task | None = None
+        self._waiting: dict[str, asyncio.Event] = {}
+        self._waiting_connections: dict[str, set[str]] = {}
 
     @property
     def pending(self) -> int:
-        """Return the number of accepted requests waiting/running."""
         return self._pending
 
-    async def run(self, operation: Callable[[], Awaitable[None]]) -> None:
-        """Run one synthesis operation when capacity is available."""
-        if self._pending >= self.max_size:
-            raise RuntimeError("fake TTS synthesis queue is full")
+    @property
+    def depth(self) -> int:
+        return self._depth
 
-        self._pending += 1
+    async def run(self, operation, synthesis_id="", connection_id="") -> None:
+        obs_log("queue_request_received", synthesis_id=synthesis_id,
+                connection_id=connection_id, queue_depth=self._depth,
+                max_queue_size=self.max_size)
+        async with self._lock:
+            if self._depth >= self.max_size:
+                obs_log("queue_rejected", synthesis_id=synthesis_id,
+                        connection_id=connection_id, queue_depth=self._depth,
+                        max_queue_size=self.max_size, reason="queue_full")
+                raise QueueFullError(
+                    f"Synthesis queue is full (depth={self._depth}, max={self.max_size})")
+            self._depth += 1; self._pending += 1
+            obs_log("queue_admitted", synthesis_id=synthesis_id,
+                    connection_id=connection_id, queue_depth=self._depth,
+                    max_queue_size=self.max_size)
+        cancel_event = asyncio.Event()
+        if synthesis_id: self._waiting[synthesis_id] = cancel_event
+        if connection_id and synthesis_id:
+            self._waiting_connections.setdefault(connection_id, set()).add(synthesis_id)
+        def _release():
+            if synthesis_id: self._waiting.pop(synthesis_id, None)
+            if connection_id and synthesis_id:
+                cs = self._waiting_connections.get(connection_id)
+                if cs: cs.discard(synthesis_id)
+                if not cs: self._waiting_connections.pop(connection_id, None)
         try:
-            async with self._semaphore:
-                await operation()
+            obs_log("queue_wait_started", synthesis_id=synthesis_id,
+                    connection_id=connection_id, queue_depth=self._depth)
+            if self.wait_timeout_sec > 0:
+                try:
+                    await asyncio.wait_for(self._semaphore.acquire(),
+                                           timeout=self.wait_timeout_sec)
+                except asyncio.TimeoutError:
+                    obs_log("queue_wait_timeout", synthesis_id=synthesis_id,
+                            connection_id=connection_id, queue_depth=self._depth,
+                            wait_timeout_sec=self.wait_timeout_sec)
+                    raise QueueTimeoutError(f"Queue wait timeout after {self.wait_timeout_sec}s")
+            else:
+                await self._semaphore.acquire()
+            if cancel_event.is_set():
+                obs_log("queue_cancelled", synthesis_id=synthesis_id,
+                        connection_id=connection_id, reason="cancelled_while_waiting")
+                self._semaphore.release()
+                raise asyncio.CancelledError("Request cancelled while waiting")
+            self._active_synthesis_id = synthesis_id
+            self._active_task = asyncio.current_task()
+            obs_log("queue_started", synthesis_id=synthesis_id,
+                    connection_id=connection_id, queue_depth=self._depth)
+            await operation()
+        except (asyncio.CancelledError, QueueTimeoutError):
+            raise
         finally:
-            self._pending -= 1
+            _release()
+            try: self._semaphore.release()
+            except RuntimeError: pass
+            async with self._lock:
+                self._pending -= 1; self._depth -= 1
+                if self._active_synthesis_id == synthesis_id:
+                    self._active_synthesis_id = None; self._active_task = None
+            obs_log("queue_depth_changed", synthesis_id=synthesis_id,
+                    connection_id=connection_id, queue_depth=self._depth)
+
+    def cancel_waiting(self, connection_id: str) -> int:
+        sids = self._waiting_connections.get(connection_id, set()).copy()
+        count = 0
+        for sid in sids:
+            ev = self._waiting.get(sid)
+            if ev is not None: ev.set(); count += 1
+        self._waiting_connections.pop(connection_id, None)
+        return count
+
+    def cancel_active_if_matches(self, synthesis_id: str) -> bool:
+        if self._active_synthesis_id == synthesis_id and self._active_task is not None:
+            self._active_task.cancel(); return True
+        return False
 
 
 def _resolve_voice_from_synthesize(
@@ -1046,7 +1155,15 @@ class FakeTtsEventHandler(AsyncEventHandler):
                             reason="task_cancelled")
                     raise
 
-            await self.queue.run(send_audio)
+            if self.settings.cancel_on_new_request:
+                self.queue.cancel_active_if_matches(
+                    self.queue._active_synthesis_id or "")
+                self.queue.cancel_waiting(self._conn_id)
+                await asyncio.sleep(0)
+
+            syn_id = new_synthesis_id()
+            await self.queue.run(send_audio, synthesis_id=syn_id,
+                                 connection_id=self._conn_id)
             return True
 
         # ── Streaming TTS: synthesize-start ──────────────────────────
@@ -1164,7 +1281,15 @@ class FakeTtsEventHandler(AsyncEventHandler):
                                 reason="task_cancelled")
                         raise
 
-                await self.queue.run(send_streaming_audio)
+                if self.settings.cancel_on_new_request and self.queue._depth > 0:
+                    self.queue.cancel_active_if_matches(
+                        self.queue._active_synthesis_id or "")
+                    self.queue.cancel_waiting(self._conn_id)
+                    await asyncio.sleep(0)
+
+                await self.queue.run(send_streaming_audio,
+                                     synthesis_id=syn_id,
+                                     connection_id=self._conn_id)
             else:
                 # No text accumulated — still signal end of streaming response
                 await self.write_event(SynthesizeStopped().event())
@@ -1309,7 +1434,10 @@ async def start_fake_tts_server(
     """
     active_settings = settings or Settings()
     fake_config = config or FakeTtsConfig.from_settings(active_settings)
-    queue = SingleWorkerSynthesisQueue(max_size=max_queue_size)
+    queue = SingleWorkerSynthesisQueue(
+        max_size=max_queue_size,
+        wait_timeout_sec=active_settings.s2_queue_wait_timeout_sec,
+    )
     server = AsyncTcpServer(host, port)
 
     def handler_factory(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):

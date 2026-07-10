@@ -46,7 +46,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-case "$PHASE" in all|threads|affinity|blipping) ;; *) err "Invalid phase: $PHASE"; exit 1 ;; esac
+case "$PHASE" in all|threads|affinity|blipping|context-screen) ;; *) err "Invalid phase: $PHASE"; exit 1 ;; esac
 
 float_lt() { python3 -c "import sys; sys.exit(0 if float('$1') < float('$2') else 1)"; }
 ensure_dir() { mkdir -p "$1"; }
@@ -510,6 +510,47 @@ run_blipping_diagnostic() {
   done
 }
 
+# ── Context screening ──────────────────────────────────────────────────────
+run_context_screen() {
+  local contexts=(4 8 12 16 24 32 48 64)
+  info "Context screen: ${contexts[*]} (threads=8, stride=4, hb=0, ll=true)"
+
+  for ctx in "${contexts[@]}"; do
+    local label="context_${ctx}"; ensure_dir "$ARTIFACT_DIR/$label"
+    ATTEMPTED=$((ATTEMPTED + 1))
+    info "Context=$ctx..."
+
+    start_gpu_telemetry "$ARTIFACT_DIR/$label/gpu_telemetry.csv"
+    start_cpu_telemetry "$ARTIFACT_DIR/$label/cpu_telemetry.csv"
+    if ! start_backend_q4 "8" "" "$label"; then
+      stop_gpu_telemetry; stop_cpu_telemetry; FAILED=$((FAILED+1)); continue
+    fi
+    if ! run_q4_benchmark "$label" "8" "" "$ctx" "0" "0" "true"; then
+      warn "Benchmark/validation failed for $label"
+    fi
+    capture_metrics_q4 "$label" "$ARTIFACT_DIR/$label"
+    docker logs "$BENCH_CONTAINER" 2>/dev/null > "$ARTIFACT_DIR/$label/startup.log" || true
+    stop_gpu_telemetry; stop_cpu_telemetry; stop_backend
+
+    # Create WAV for listening
+    local wok=true
+    while IFS= read -r -d '' pcm; do create_host_wav "$pcm" "${pcm%.pcm}.wav" || wok=false; done < <(find "$ARTIFACT_DIR/$label" -name '*.pcm' -print0 2>/dev/null || true)
+    [[ "$wok" != true ]] && WAV_FAILURES=$((WAV_FAILURES+1))
+
+    local rj="$ARTIFACT_DIR/$label/results.json"
+    if [[ -f "$rj" ]]; then
+      local rtf=$(python3 -c "import json; d=json.load(open('$rj')); s=d['summaries'][0]; print(s['avg_rtf'])" 2>/dev/null || echo "999")
+      info "  ctx=$ctx: RTF=$rtf"
+      SUCCESSFUL=$((SUCCESSFUL+1))
+    else
+      MISSING_RESULTS=$((MISSING_RESULTS+1)); FAILED=$((FAILED+1))
+    fi
+  done
+
+  # Generate context comparison
+  python3 "$REPO_ROOT/scripts/_generate_context_comparison.py" "$ARTIFACT_DIR" 2>/dev/null || warn "Context report failed"
+}
+
 generate_combined_report() { python3 "$REPO_ROOT/scripts/_generate_q4_combined_report.py" "$ARTIFACT_DIR" 2>/dev/null || warn "Report failed"; }
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -539,6 +580,7 @@ if [[ "$RUN_REAL" != true ]]; then
   echo "Model: $MODEL_FILE | Stride: $STRIDE | Phase: $PHASE"; [[ -n "$USER_THREADS" ]] && echo "Threads: $USER_THREADS"
   echo ""; [[ "$PHASE" == "all" || "$PHASE" == "threads" ]] && echo "Thread sweep: 0,8,16,24,32"
   [[ "$PHASE" == "all" || "$PHASE" == "affinity" ]] && echo "Affinity: unrestricted, p_physical, p_all_threads, p_plus_e"
+  [[ "$PHASE" == "all" || "$PHASE" == "context-screen" ]] && echo "Context screen: 4,8,12,16,24,32,48,64 (threads=8, stride=4, hb=0)"
   [[ "$PHASE" == "all" || "$PHASE" == "blipping" ]] && echo "Blipping: ctx4/hb0, ctx64/hb0, ctx64/hb1"
   echo ""; echo "--validate-only  : inspect env, no Docker"; echo "--smoke-test     : one short synthesis"; echo "--run-real       : full sweep"
   exit 0
@@ -605,10 +647,11 @@ if [[ "$SMOKE_TEST" == true ]]; then
 fi
 
 # Full sweep
-BEST_THREADS="${USER_THREADS:-0}"
+BEST_THREADS="${USER_THREADS:-8}"
 [[ "$PHASE" == "all" || "$PHASE" == "threads" ]] && run_thread_sweep
 [[ -f "$ARTIFACT_DIR/best_threads.txt" ]] && BEST_THREADS=$(cat "$ARTIFACT_DIR/best_threads.txt")
 [[ "$PHASE" == "all" || "$PHASE" == "affinity" ]] && run_affinity_sweep "$BEST_THREADS"
+[[ "$PHASE" == "all" || "$PHASE" == "context-screen" ]] && run_context_screen
 [[ "$PHASE" == "all" || "$PHASE" == "blipping" ]] && run_blipping_diagnostic "$BEST_THREADS"
 generate_combined_report
 

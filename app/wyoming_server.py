@@ -441,7 +441,14 @@ async def synthesize_s2cpp_streaming_tts_events(
             text_fp=fp,
             text_len=len(request.text),
             voice=request.voice or "generic",
-            mode="streaming")
+            mode="streaming",
+            low_latency=request.low_latency,
+            stream_decode_stride_frames=request.stream_decode_stride_frames,
+            stream_holdback_frames=request.stream_holdback_frames,
+            stream_start_buffer_ms=request.stream_start_buffer_ms,
+            codec_decode_context_frames=request.codec_decode_context_frames,
+            segment_sentences=request.segment_sentences,
+            model=settings.s2_model)
 
     try:
         with client.generate_stream(request) as stream:

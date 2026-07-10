@@ -164,6 +164,48 @@
 - Rollback backend remains `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b`.
 - Wrapper remains `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-9c134cc`; BrokenPipe task-exception noise on deliberate disconnect is a separate logging issue and did not block cleanup.
 
+
+## Phase 8D results: controlled quantized-model performance and quality benchmark
+
+- Fixed benchmark-tool issues: false "No live RTX 3080" claim removed, metric correlation hardened with bounded polling, WAV conversion guidance updated for Hermes-Suite ffmpeg path.
+- Benchmark harness now records model SHA-256 and file size per run.
+- Added ``--model`` CLI argument for explicit model path recording.
+- Benchmark scripts ready for controlled Q6_K/Q5_K_M/Q4_K_M comparison at fixed stride 4.
+
+**Status**: Phase 8D complete. Phase 8E.1 complete. See docs/PERFORMANCE_TUNING_RESULTS.md. Single-container-per-model orchestrator (`scripts/run_quantization_benchmark_unraid.sh`). Live Q5_K_M/Q4_K_M quant benchmark and human listening still pending.
+- Full suite: 590/590 passing (25 Phase 8D + 16 Phase 8D.2 tests included).
+
+## Phase 8C results: realtime stride tuning infrastructure
+
+- Four new wrapper env vars with strict validation: S2_STREAM_DECODE_STRIDE_FRAMES (1-64),
+  S2_STREAM_HOLDBACK_FRAMES (non-negative), S2_STREAM_START_BUFFER_MS (non-negative),
+  S2_LOW_LATENCY (bool).
+- Environment audit: S2_MAX_NEW_TOKENS, S2_TEMPERATURE, S2_TOP_P, S2_TOP_K,
+  S2_CHUNKED, S2_OUTPUT_FORMAT, S2_MODEL, S2_GPU_INDEX, S2_GPU_LAYERS,
+  S2_CODEC_CPU, BARGE_IN_FRIENDLY, CANCEL_ON_CLIENT_DISCONNECT,
+  CANCEL_ON_NEW_REQUEST, MAX_QUEUE_SIZE now parseable with strict validation.
+- S2GenerateRequest.to_multipart_fields(streaming=True) now explicitly sends:
+  low_latency, stream_decode_stride_frames, stream_holdback_frames,
+  stream_start_buffer_ms alongside existing params.
+- Backend_start observability extended with all tuning parameters.
+- scripts/benchmark_realtime_tuning.py: dry-run-safe Python stride-sweep harness
+  (--run-real to contact backend; measures RTF, first-PCM, total synthesis).
+- scripts/run_realtime_tuning_unraid.sh: one-command Unraid host orchestration.
+- Unraid wrapper template updated with Phase 8C config vars.
+- 80 new tests. Full suite: 540/540 passing.
+- No backend image change. Live RTX 3080 benchmarks completed (strides 1-24).
+- Stride 4 is a candidate only; real benchmarking pending on Unraid host.
+
+## Phase 8E.1 results: Q4_K_M non-fork runtime tuning
+
+- Thread sweep: threads=8 is optimal on i9-13900K (RTF 0.954 at context 4)
+- Context screen: context 32 is quality floor (first without tapping/blipping)
+- Context-32 stride sweep: stride 32 only sub-1.0 configuration (RTF 0.987)
+- Provisional baseline: Q4_K_M, threads=8, context=32, stride=32, P-cores 0-15
+- Wrapper image published: ghcr.io/sorilo/wyoming-s2cpp-tts:sha-22db725
+- Deployment handoff: docs/PHASE_8E1_DEPLOYMENT_HANDOFF.md
+- Tuning paused for end-to-end HA validation
+
 ## Approved remaining v0.1 phases
 
 21. ~~Phase 7.5: wire true progressive backend HTTP audio streaming into the production Wyoming event handler when `S2_STREAM=true`~~ ✅ Phase 7.5A complete

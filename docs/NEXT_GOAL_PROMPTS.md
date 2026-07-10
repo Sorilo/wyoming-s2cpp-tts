@@ -3,6 +3,48 @@
 Run phases one at a time. This file is regenerated from the actual repository
 state after every `/goal` run. Do not copy stale assumptions forward.
 
+## Current state after Phase 8C realtime stride tuning
+
+- Repository branch: ``perf/realtime-stride-tuning``.
+- Backend image unchanged: ``ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-edf89bd``.
+- Wrapper image unchanged: ``ghcr.io/sorilo/wyoming-s2cpp-tts:sha-9c134cc``.
+  **A new wrapper image must be built and deployed** before Home Assistant
+  can use the new stride tuning env vars.  The benchmark harness contacts the
+  backend directly and does NOT require a wrapper rebuild.
+- New wrapper env vars: ``S2_STREAM_DECODE_STRIDE_FRAMES`` (1-64, default 4),
+  ``S2_STREAM_HOLDBACK_FRAMES`` (non-negative, default 0),
+  ``S2_STREAM_START_BUFFER_MS`` (non-negative, default 0),
+  ``S2_LOW_LATENCY`` (bool, default true).
+- Environment audit complete: ``S2_MAX_NEW_TOKENS``, ``S2_TEMPERATURE``,
+  ``S2_TOP_P``, ``S2_TOP_K``, ``S2_CHUNKED``, ``S2_OUTPUT_FORMAT``,
+  ``S2_MODEL``, ``S2_GPU_INDEX``, ``S2_GPU_LAYERS``, ``S2_CODEC_CPU``,
+  ``BARGE_IN_FRIENDLY``, ``CANCEL_ON_CLIENT_DISCONNECT``,
+  ``CANCEL_ON_NEW_REQUEST``, and ``MAX_QUEUE_SIZE`` are now parseable
+  from environment with strict validation.
+- All new tuning params are sent explicitly in streaming multipart requests.
+- ``backend_start`` observability includes all tuning parameters.
+- ``scripts/benchmark_realtime_tuning.py``: dry-run-safe stride-sweep harness.
+- ``scripts/run_realtime_tuning_unraid.sh``: one-command Unraid host script.
+- 80 new tests; full suite: **540/540 passing**.
+- Live RTX 3080 benchmarks completed (strides 1-24). Stride 4 is the preferred candidate.
+
+## Current state after live RTX 3080 stride benchmarks
+
+- Live RTX 3080 benchmarks completed across strides 1-24 (Q6_K model).
+- Primary artifact directory: ``verification_artifacts/realtime_tuning/20260710_021915`` (strides 1, 2, 4, 8).
+- Higher-stride testing: ``verification_artifacts/realtime_tuning/20260710_024627`` (strides 8, 12, 16, 24).
+- Summary results (strides 1/2/4/8):
+  stride 1: RTF ~1.34, first PCM ~105 ms
+  stride 2: RTF ~1.19, first PCM ~150 ms
+  stride 4: RTF ~1.13, first PCM ~251 ms
+  stride 8: RTF ~1.08, first PCM ~419 ms
+- Stride 4 is currently preferred for TTFA/throughput compromise.
+- Higher strides (8-24) show diminishing returns (RTF 1.08→1.07) with significant first-PCM penalty (419→1209 ms).
+- Human listening: all strides broadly similar, minor artifacts, mostly acceptable.
+- Q6_K model does NOT achieve RTF < 1.0 at any stride — quantization comparison (Phase 8D) is the next step.
+
+## Next phase: Phase 9 queue, busy handling, and timeout policy
+
 ## Current state after Phase 8B2 production backend promotion
 
 - Repository branch: `main`.

@@ -14,7 +14,7 @@
 -->
 <Container version="2">
   <Name>wyoming-s2cpp-tts</Name>
-  <Repository>ghcr.io/sorilo/wyoming-s2cpp-tts:sha-4b49a70</Repository>
+  <Repository>ghcr.io/sorilo/wyoming-s2cpp-tts:sha-22db725</Repository>
   <Registry>https://ghcr.io</Registry>
   <Network>custom</Network>
   <Privileged>false</Privileged>
@@ -60,15 +60,26 @@ The s2cpp-backend container must be running before this wrapper. Wyoming protoco
 
   <!-- Progressive streaming settings -->
   <Config Name="Segment Sentences" Target="S2_SEGMENT_SENTENCES" Default="false" Mode="" Description="When true, splits text into sentences and synthesizes each separately (buffered per-sentence). When false, uses raw frame-level progressive synthesis for lower first-audio latency. Set to true only if progressive synthesis causes quality issues." Type="Variable" Display="always" Required="false" Mask="false">false</Config>
-  <Config Name="Codec Context Frames" Target="S2_CODEC_CONTEXT_FRAMES" Default="4" Mode="" Description="Codec streaming decode context window in frames. Lower values reduce total synthesis time but may affect audio quality. Accepted values: 4 (fast, low-latency), 64, 160 (quality fallback), or auto/empty to use backend model default. Values outside 4/64/160 are rejected." Type="Variable" Display="always" Required="false" Mask="false">4</Config>
+  <Config Name="Codec Context Frames" Target="S2_CODEC_CONTEXT_FRAMES" Default="32" Mode="" Description="Codec streaming decode context window in frames. Lower values reduce total synthesis time but may affect audio quality. Any non-negative integer accepted (upstream API minimum 0, no enum). Context 32 is the provisional quality baseline. Higher = better quality, slower." Type="Variable" Display="always" Required="false" Mask="false">32</Config>
 
   <!-- Voice profiles -->
   <Config Name="Voice Directory" Target="S2_VOICE_DIR" Default="/voices" Mode="" Description="Directory inside the container where .s2voice profile files are mounted. Must match the backend voice directory and the host mount path." Type="Variable" Display="always" Required="false" Mask="false">/voices</Config>
-  <Config Name="Default Voice" Target="S2_DEFAULT_VOICE" Default="" Mode="" Description="Optional default voice profile ID (e.g. cmu_bdl_male_us). Leave empty to use the generic s2-pro backend fallback when no voice is requested." Type="Variable" Display="always" Required="false" Mask="false"></Config>
+  <Config Name="Default Voice" Target="S2_DEFAULT_VOICE" Default="cmu_bdl_male_us" Mode="" Description="Optional default voice profile ID (e.g. cmu_bdl_male_us). Leave empty to use the generic s2-pro backend fallback when no voice is requested." Type="Variable" Display="always" Required="false" Mask="false">cmu_bdl_male_us</Config>
 
   <!-- Host path for voice profiles (read-only) -->
   <Config Name="Voices Host Path" Target="/voices" Default="/mnt/user/appdata/s2cpp/voices" Mode="ro" Description="Host directory for .s2voice profile files. Mounted read-only in the wrapper; profiles are created by the backend container." Type="Path" Display="always" Required="false" Mask="false">/mnt/user/appdata/s2cpp/voices</Config>
 
   <!-- Host path for application data (future use) -->
   <Config Name="App Data" Target="/app/data" Default="/mnt/user/appdata/wyoming-s2cpp-tts" Mode="rw" Description="Host directory for wrapper runtime data (currently reserved for future use)." Type="Path" Display="advanced" Required="false" Mask="false">/mnt/user/appdata/wyoming-s2cpp-tts</Config>
+
+  <!-- Phase 8C: Real-time stride tuning -->
+  <Config Name="Stream Decode Stride" Target="S2_STREAM_DECODE_STRIDE_FRAMES" Default="32" Mode="" Description="Streaming decode stride in frames. Higher values (2, 4, 8) reduce CUDA launch overhead by decoding more frames per step at the cost of slightly higher first-audio latency. Lower value (1) matches legacy low_latency behavior. Accepted range: 1-64. Default: 4 (balanced)." Type="Variable" Display="always" Required="false" Mask="false">32</Config>
+  <Config Name="Stream Holdback Frames" Target="S2_STREAM_HOLDBACK_FRAMES" Default="0" Mode="" Description="Number of frames to hold back before streaming output. Higher values accumulate more audio before first chunk emission. 0 = no intentional holdback. Non-negative integer." Type="Variable" Display="advanced" Required="false" Mask="false">0</Config>
+  <Config Name="Stream Start Buffer MS" Target="S2_STREAM_START_BUFFER_MS" Default="0" Mode="" Description="Initial buffer duration in milliseconds before audio streaming begins. Higher values reduce underrun risk but increase first-audio latency. 0 = no initial buffer. Non-negative integer." Type="Variable" Display="advanced" Required="false" Mask="false">0</Config>
+  <Config Name="Initial Buffer MS" Target="S2_INITIAL_BUFFER_MS" Default="0" Mode="" Description="Wrapper initial buffer duration in milliseconds. 0 = no buffering (progressive streaming). Non-negative integer." Type="Variable" Display="advanced" Required="false" Mask="false">0</Config>
+  <Config Name="Low Latency Mode" Target="S2_LOW_LATENCY" Default="true" Mode="" Description="Enable backend low-latency streaming mode. When true, backend emits audio frames as soon as available rather than batching. Set to false only if audio quality issues are observed." Type="Variable" Display="always" Required="false" Mask="false">true</Config>
+  <Config Name="Temperature" Target="S2_TEMPERATURE" Default="0.58" Mode="" Description="Sampling temperature (0.0-2.0). Lower values = more deterministic, higher = more creative. Default: 0.58." Type="Variable" Display="advanced" Required="false" Mask="false">0.58</Config>
+  <Config Name="Top-P" Target="S2_TOP_P" Default="0.88" Mode="" Description="Nucleus sampling probability threshold (0.0-1.0). Default: 0.88." Type="Variable" Display="advanced" Required="false" Mask="false">0.88</Config>
+  <Config Name="Top-K" Target="S2_TOP_K" Default="40" Mode="" Description="Top-K sampling: only consider top K tokens. Range: 1-200. Default: 40." Type="Variable" Display="advanced" Required="false" Mask="false">40</Config>
+  <Config Name="Max New Tokens" Target="S2_MAX_NEW_TOKENS" Default="512" Mode="" Description="Maximum number of new tokens to generate per synthesis request. Range: 1-4096. Default: 512." Type="Variable" Display="advanced" Required="false" Mask="false">512</Config>
 </Container>

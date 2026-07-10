@@ -246,7 +246,7 @@ def test_unraid_wrapper_container_name() -> None:
 def test_unraid_wrapper_image_is_wrapper_not_backend() -> None:
     """Template references the verified immutable wrapper image, not backend."""
     content = _read(UNRAID_TEMPLATE)
-    assert "wyoming-s2cpp-tts:sha-4b49a70" in content
+    assert "wyoming-s2cpp-tts:sha-22db725" in content
     assert "wyoming-s2cpp-tts-backend" not in content
 
 
@@ -326,7 +326,11 @@ def test_config_from_env_reads_wyoming_uri() -> None:
 def test_config_from_env_reads_s2_stream() -> None:
     """from_env() supports S2_STREAM override with boolean coercion."""
     content = _read(APP_CONFIG)
-    assert 'os.getenv("S2_STREAM"' in content, (
+    s2_stream_read = (
+        'os.getenv("S2_STREAM"' in content
+        or '_bool_or_error("S2_STREAM"' in content
+    )
+    assert s2_stream_read, (
         "from_env() must read S2_STREAM from environment"
     )
 
@@ -345,3 +349,32 @@ def test_config_s2_stream_default_is_true() -> None:
     assert "S2_STREAM = True" in content, (
         "S2_STREAM must default to True"
     )
+
+
+def test_wrapper_context_is_32():
+    content = _read(UNRAID_TEMPLATE)
+    assert 'S2_CODEC_CONTEXT_FRAMES" Default="32"' in content
+    assert 'S2_CODEC_CONTEXT_FRAMES" Default="32"' in content  # attribute
+    # '>32<' is the expected element value
+    import re
+    m = re.search(r'S2_CODEC_CONTEXT_FRAMES"[^>]*>([^<]+)<', content)
+    assert m and m.group(1) == '32', f'Element value is {m.group(1) if m else "??"}'
+
+def test_wrapper_stride_is_32():
+    content = _read(UNRAID_TEMPLATE)
+    import re
+    m = re.search(r'S2_STREAM_DECODE_STRIDE_FRAMES"[^>]*>([^<]+)<', content)
+    assert m and m.group(1) == '32'
+
+def test_wrapper_voice_is_cmu_bdl_male_us():
+    content = _read(UNRAID_TEMPLATE)
+    import re
+    m = re.search(r'S2_DEFAULT_VOICE"[^>]*>([^<]+)<', content)
+    assert m and m.group(1) == 'cmu_bdl_male_us'
+
+def test_wrapper_initial_buffer_is_0():
+    content = _read(UNRAID_TEMPLATE)
+    assert 'S2_INITIAL_BUFFER_MS' in content
+    import re
+    m = re.search(r'S2_INITIAL_BUFFER_MS"[^>]*>([^<]+)<', content)
+    assert m and m.group(1) == '0'

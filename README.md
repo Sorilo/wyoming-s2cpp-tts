@@ -36,6 +36,36 @@ The verified first model target is:
 
 This `q6_k` target is the current RTX 3080 baseline. Future model choices may include `s2-pro-q8_0.gguf` for quality if VRAM allows, or `s2-pro-q4_k_m.gguf` as a lower-VRAM fallback. Hardware-upgrade benchmarking is post-v0.1 work.
 
+
+## Real-time stride tuning (Phase 8C)
+
+The wrapper code now supports configurable streaming decode stride for
+RTX 3080 performance optimisation. The benchmark harness contacts the s2.cpp
+backend directly — no wrapper rebuild is required to run the stride sweep.
+**To use these settings through Home Assistant / Wyoming, a new wrapper image
+must be built and deployed** (the current production image sha-9c134cc does
+not include these changes). The s2.cpp backend with ``low_latency=true`` defaults to stride 1 (one frame per CUDA kernel launch), which may cause excessive overhead with ``codec_decode_context_frames=4``.
+
+### Quick benchmark (on Unraid host)
+
+```bash
+# Safe: runs benchmark only, no container changes
+bash scripts/run_realtime_tuning_unraid.sh --benchmark
+```
+
+This sweeps stride values (1, 2, 4, 8) against the live backend, measures real-time factor (RTF), and produces a recommendation. **RTF alone does not guarantee audio quality** — listen to the generated PCM files before applying any settings.
+
+### New configuration variables
+
+| Variable | Default | Range | Description |
+|---|---|---|---|
+| ``S2_STREAM_DECODE_STRIDE_FRAMES`` | 4 | 1--64 | Frames decoded per streaming step |
+| ``S2_STREAM_HOLDBACK_FRAMES`` | 0 | ≥0 | Frame holdback before first chunk |
+| ``S2_STREAM_START_BUFFER_MS`` | 0 | ≥0 | Initial backend buffer (ms) |
+| ``S2_LOW_LATENCY`` | true | bool | Backend low-latency mode |
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#streaming-decode-stride-tuning-phase-11) for the full explanation of stride vs. context vs. holdback vs. buffer.
+
 ## Current verified deployment
 
 | Component | Value |

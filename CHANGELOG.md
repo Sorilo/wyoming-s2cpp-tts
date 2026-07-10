@@ -2,6 +2,102 @@
 
 ## Unreleased
 
+- Phase 8E.1 closure: Q4_K_M runtime tuning complete.  After six benchmark
+  phases, the provisional baseline is Q4_K_M at context=32, stride=32,
+  threads=8.  Backend first PCM ~1.35s, RTF 0.987 (narrow margin).
+  Wrapper image published: ``ghcr.io/sorilo/wyoming-s2cpp-tts:sha-22db725``.
+  See ``docs/PERFORMANCE_TUNING_RESULTS.md`` for full evidence and
+  ``docs/PHASE_8E1_DEPLOYMENT_HANDOFF.md`` for deployment procedure.
+  Phase 9.5 (progressive LLM-to-TTS phrase pipeline) added to roadmap.
+  Tuning paused pending end-to-end Home Assistant measurements.
+
+- Phase 8D.2: corrected live quantization benchmark architecture.
+  **Critical fix**: the s2.cpp server loads ONE GGUF at startup via the
+  ``S2_MODEL`` environment variable; HTTP requests cannot switch models.
+  The previous runbook (single container, multi-model Python invocation)
+  would have benchmarked the same model repeatedly with different labels.
+  Changes:
+  * ``benchmark_quantization.py`` now rejects multiple ``--models`` in
+    ``--run-real`` mode (exit 1 with clear error).  Dry-run multi-model
+    inspection preserved.
+  * New orchestrator: ``scripts/run_quantization_benchmark_unraid.sh``
+    (495 lines) — default dry-run, ``--run-real`` for live.  Starts one
+    backend container per candidate (Q6→Q5→Q4), each with ``S2_MODEL``
+    pointing to the correct GGUF.  Waits for ``Launching: s2 --model``
+    confirmation in startup logs (bounded 120s timeout, not blind sleep).
+    Captures per-candidate container inspect, startup logs, backend
+    metrics, GPU telemetry.  Cleans up on EXIT/INT/TERM.
+  * Model size estimates corrected (Q6≈4.5 GB, Q5_K_M≈4.0 GB,
+    Q4_K_M≈3.6 GB) from verified upstream information.
+  * WAV conversion path updated: primary = ``docker exec Hermes-Suite
+    ffmpeg``; fallback = Python ``wave`` module (header-only, no transcode).
+  * 16 new Phase 8D.2 tests (multi-model rejection, candidate-dir nesting,
+    orchestrator syntax, metric parsing, WAV fallback, GPU-busy detection,
+    Hermes-Suite ffmpeg path).
+  Full suite: **590/590 passing** (all tests, excluding standalone shell
+  behavior tests).
+
+- Phase 8D: controlled quantized-model performance and quality benchmark.
+  Fixed benchmark-tool issues: removed false "No live RTX 3080 benchmark"
+  claim from all scripts and documentation (live benchmarks completed for
+  strides 1–24 on Q6_K model).  Hardened backend metric correlation with
+  bounded polling (30s max wait for completed ``[Metrics] Streaming`` line)
+  replacing naive one-shot ``docker logs`` capture.  Updated WAV conversion
+  guidance to reference Hermes-Suite ``ffmpeg`` path (``/usr/bin/ffmpeg``).
+  Benchmark harness now records model SHA-256 and file size per run via
+  ``--model`` CLI argument.  Added model metadata fields to ``RunResult``
+  and aggregate output.  Inserted Phase 8D into roadmap between Phase 8C
+  and Phase 9: controlled comparison of Q6_K, Q5_K_M, and Q4_K_M GGUF
+  models at fixed stride 4 under identical conditions (same GPU, backend
+  build, container, voice, text, and settings).  Added conditional Phase 8E
+  placeholder for non-fork runtime tuning as fallback.  Created comprehensive
+  ``docs/STREAMING_STRIDE_AND_QUANT_BENCHMARKS.md`` documenting stride
+  tuning principles, live RTX 3080 results, quantization methodology,
+  and benchmark limitations.  Clarified post-v0.1 roadmap items (dynamic
+  model switching, multi-GPU scheduling).  **Status**: Tooling complete. Live Q5_K_M/Q4_K_M quant benchmark and
+  human listening still pending. See roadmap and benchmark doc for details.
+
+- Phase 8C: real-time stride tuning infrastructure for RTX 3080 performance
+  optimisation.  Added four new environment-backed wrapper settings:
+  ``S2_STREAM_DECODE_STRIDE_FRAMES`` (1--64, default 4),
+  ``S2_STREAM_HOLDBACK_FRAMES`` (non-negative, default 0),
+  ``S2_STREAM_START_BUFFER_MS`` (non-negative ms, default 0), and
+  ``S2_LOW_LATENCY`` (bool, default true).  All are strictly validated at
+  startup — invalid values raise clear errors rather than falling back to
+  unsafe defaults.  The ``S2GenerateRequest`` streaming multipart params
+  now explicitly include ``low_latency``, ``stream_decode_stride_frames``,
+  ``stream_holdback_frames``, and ``stream_start_buffer_ms``.  The
+  buffered generation path is unchanged.
+  Audited ``Settings.from_env()``: ``S2_MAX_NEW_TOKENS``, ``S2_TEMPERATURE``,
+  ``S2_TOP_P``, ``S2_TOP_K``, ``S2_CHUNKED``, ``S2_OUTPUT_FORMAT``,
+  ``S2_MODEL``, ``S2_GPU_INDEX``, ``S2_GPU_LAYERS``, ``S2_CODEC_CPU``,
+  ``BARGE_IN_FRIENDLY``, ``CANCEL_ON_CLIENT_DISCONNECT``,
+  ``CANCEL_ON_NEW_REQUEST``, and ``MAX_QUEUE_SIZE`` are now parseable
+  from environment variables with strict validation.
+  Extended streaming ``backend_start`` observability with all tuning
+  parameters: ``low_latency``, ``stream_decode_stride_frames``,
+  ``stream_holdback_frames``, ``stream_start_buffer_ms``,
+  ``codec_decode_context_frames``, ``segment_sentences``, and ``model``.
+  Added ``scripts/benchmark_realtime_tuning.py`` — an opt-in,
+  dry-run-safe Python benchmark harness that sweeps stride values
+  against a real s2.cpp backend, measures RTF/time-to-first-PCM/total
+  synthesis, saves PCM artifacts, and produces JSON + Markdown summaries.
+  Added ``scripts/run_realtime_tuning_unraid.sh`` — a one-command Unraid
+  host orchestration script (default: safe benchmark-only; ``--apply``
+  requires ``--yes`` with rollback support).
+  Updated Unraid wrapper template with all new tuning variables and
+  clear descriptions.  80 new tests (config validation, request contract,
+  benchmark math, dry-run safety, env audit, shell syntax).  Full suite:
+  **540/540 passing**.  No backend image change required.  The benchmark harness contacts
+  the s2.cpp backend directly and works immediately against the running
+  backend container — no wrapper rebuild is needed for benchmarking.
+  However, for Home Assistant / Wyoming to use the new stride tuning
+  environment variables, a NEW WRAPPER IMAGE must be built and deployed;
+  the current production wrapper (sha-9c134cc) does not support them.
+  Live RTX 3080 benchmarks completed (strides 1-24) — Q6_K model RTF 1.13 at stride 4;
+  stride 4 is the preferred Q6_K latency/throughput compromise. Quant comparison pending.
+
+
 - Phase 8B2 production backend promotion: promoted the Phase 8B1.1-proven
   backend cancellation patch from diagnostic image `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-b8e54f9`
   into the production backend build.  Final live retry artifacts under

@@ -1,1 +1,0 @@
-s2-pro-q6_k.gguf

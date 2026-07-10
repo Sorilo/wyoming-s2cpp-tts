@@ -1,4 +1,0 @@
-[Metrics] Init: tokenizer=294.701223 ms, model=140.981262 ms, codec=8766.956549 ms (CUDA0), total=9560.001092 ms, max_rss=3982.003906 MB
-[Metrics] Generate: prefill=85.1896 ms, loop=28091.7 ms, total=28183.1 ms, avg=58.7692 ms/frame
-[Metrics] Streaming: frames=478, audio_s=22.198277, ref_encode=0.000000 ms, kv_init=2.089317 ms, stride=4 frames, holdback=0 frames, decode_context=24 frames, generate=28183.151390 ms, stream_decode=8537.585707 ms, stream_batches=120, ar_only=19645.565683 ms, total=28293.513816 ms, total_avg=59.191451 ms/frame, decode_avg=17.861058 ms/frame, ar_avg=41.099510 ms/frame, total_rtf=1.274582, max_rss=3982.003906 MB
-[Metrics] Generate: prefill=63.7861 ms, loop=27510.7 ms, total=27579.7 ms, avg=58.4091 ms/frame

@@ -1,3 +1,0 @@
-cleanup_status=ok
-containers_removed=true
-exit_code=1

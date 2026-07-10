@@ -906,12 +906,13 @@ class TestSynthesisTimeout:
             def __init__(self):
                 self.content_type = _REAL_PCM_CONTENT_TYPE
                 self.response_headers = dict(_REAL_PCM_HEADERS)
+                self._block = threading.Event()
             def __enter__(self): return self
-            def __exit__(self, *a): stream_closed.set(); return False
+            def __exit__(self, *a): self._block.set(); stream_closed.set(); return False
             def __iter__(self): return self
             def __next__(self):
-                import time as _t; _t.sleep(30); raise StopIteration
-            def cancel(self): stream_closed.set()
+                self._block.wait(timeout=30); raise StopIteration
+            def cancel(self): self._block.set(); stream_closed.set()
 
         class _BlockClient:
             def __init__(self):
@@ -951,15 +952,16 @@ class TestSynthesisTimeout:
                 self.content_type = _REAL_PCM_CONTENT_TYPE
                 self.response_headers = dict(_REAL_PCM_HEADERS)
                 self._state = 0
+                self._block = threading.Event()
             def __enter__(self): return self
-            def __exit__(self, *a): stream_closed.set(); return False
+            def __exit__(self, *a): self._block.set(); stream_closed.set(); return False
             def __iter__(self): return self
             def __next__(self):
                 if self._state == 0:
                     self._state = 1
                     return pcm[:400]
-                import time as _t; _t.sleep(30); raise StopIteration
-            def cancel(self): stream_closed.set()
+                self._block.wait(timeout=30); raise StopIteration
+            def cancel(self): self._block.set(); stream_closed.set()
 
         class _SlowClient:
             def __init__(self):

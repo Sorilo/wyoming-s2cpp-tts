@@ -1,7 +1,0 @@
-timestamp,gpu_index,gpu_uuid,utilization_pct,memory_used_mib,memory_total_mib,temperature_c,power_w,sm_clock_mhz,mem_clock_mhz,pstate
-2026-07-10T00:29:44,0,GPU-AAA,0,0,0,0,0,0,0,P0
-2026-07-10T00:29:45,0,GPU-AAA,0,0,0,0,0,0,0,P0
-2026-07-10T00:29:46,0,GPU-AAA,0,0,0,0,0,0,0,P0
-2026-07-10T00:29:47,0,GPU-AAA,0,0,0,0,0,0,0,P0
-2026-07-10T00:29:48,0,GPU-AAA,0,0,0,0,0,0,0,P0
-2026-07-10T00:29:49,0,GPU-AAA,0,0,0,0,0,0,0,P0

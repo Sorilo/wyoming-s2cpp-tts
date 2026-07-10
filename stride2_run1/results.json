@@ -1,1 +1,0 @@
-{"endpoint":"x","text":"x","summaries":[{"stride":1,"runs":[{"run":1,"run_type":"measured","status":"success","rtf":0.9,"time_to_headers_ms":10,"time_to_first_pcm_ms":100,"total_wall_ms":500,"pcm_bytes":88200,"audio_duration_ms":1000,"pcm_path":"stride2_run1/stride2_run1.pcm"}]}]}

@@ -1,8 +1,0 @@
-[Metrics] Init: tokenizer=299.910280 ms, model=147.898313 ms, codec=8877.680520 ms (CUDA0), total=9688.799748 ms, max_rss=3984.203125 MB
-[Metrics] Generate: prefill=93.8521 ms, loop=40478.2 ms, total=40577.3 ms, avg=81.445 ms/frame
-[Metrics] Streaming: frames=497, audio_s=23.080635, ref_encode=0.000000 ms, kv_init=2.117171 ms, stride=4 frames, holdback=0 frames, decode_context=64 frames, generate=40577.351635 ms, stream_decode=20278.253308 ms, stream_batches=125, ar_only=20299.098327 ms, total=40778.637234 ms, total_avg=82.049572 ms/frame, decode_avg=40.801315 ms/frame, ar_avg=40.843256 ms/frame, total_rtf=1.766790, max_rss=3984.203125 MB
-[Metrics] Generate: prefill=61.3464 ms, loop=37918.1 ms, total=37984.4 ms, avg=81.1951 ms/frame
-[Metrics] Streaming: frames=467, audio_s=21.687438, ref_encode=0.000000 ms, kv_init=2.594197 ms, stride=4 frames, holdback=0 frames, decode_context=64 frames, generate=37984.389276 ms, stream_decode=18976.792281 ms, stream_batches=117, ar_only=19007.596995 ms, total=38188.526387 ms, total_avg=81.774146 ms/frame, decode_avg=40.635530 ms/frame, ar_avg=40.701492 ms/frame, total_rtf=1.760859, max_rss=3984.203125 MB
-[Metrics] Generate: prefill=64.1155 ms, loop=37104.2 ms, total=37173.8 ms, avg=81.0136 ms/frame
-[Metrics] Streaming: frames=458, audio_s=21.269478, ref_encode=0.000000 ms, kv_init=2.404726 ms, stride=4 frames, holdback=0 frames, decode_context=64 frames, generate=37173.857594 ms, stream_decode=18652.379067 ms, stream_batches=115, ar_only=18521.478527 ms, total=37373.534375 ms, total_avg=81.601603 ms/frame, decode_avg=40.725718 ms/frame, ar_avg=40.439909 ms/frame, total_rtf=1.757144, max_rss=3984.203125 MB
-[Metrics] Generate: prefill=61.3605 ms, loop=38831.3 ms, total=38897.7 ms, avg=81.237 ms/frame

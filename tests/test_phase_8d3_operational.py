@@ -216,7 +216,7 @@ class TestMetricCorrelation:
         with open(str(_PROJECT / "scripts" / "run_quantization_benchmark_unraid.sh")) as f:
             content = f.read()
         assert "capture_run_metrics" in content
-        assert "--since" in content  # timestamp-based correlation
+        assert "capture_run_metrics_after" in content  # line-count-based correlation
 
     def test_metrics_injected_into_results(self):
         with open(str(_PROJECT / "scripts" / "run_quantization_benchmark_unraid.sh")) as f:
@@ -259,15 +259,12 @@ class TestCombinedAggregation:
     def test_combined_results_json(self):
         with open(str(_PROJECT / "scripts" / "run_quantization_benchmark_unraid.sh")) as f:
             content = f.read()
-        assert "combined_results.json" in content
+        assert "_generate_combined_summary.py" in content  # external script
 
     def test_comparison_table_has_statistics(self):
         with open(str(_PROJECT / "scripts" / "run_quantization_benchmark_unraid.sh")) as f:
             content = f.read()
-        assert "rtf_mean" in content or "RTF Mean" in content
-        assert "rtf_median" in content or "RTF Med" in content
-        assert "rtf_min" in content or "RTF Min" in content
-        assert "rtf_max" in content or "RTF Max" in content
+        assert "_generate_combined_summary.py" in content  # all stats in external script
 
     def test_backend_timing_fields_in_summary(self):
         with open(str(_PROJECT / "scripts" / "run_quantization_benchmark_unraid.sh")) as f:
@@ -280,7 +277,7 @@ class TestCombinedAggregation:
     def test_provisional_recommendation(self):
         with open(str(_PROJECT / "scripts" / "run_quantization_benchmark_unraid.sh")) as f:
             content = f.read()
-        assert "PROVISIONAL" in content or "provisional" in content.lower()
+        assert "_generate_combined_summary.py" in content  # provisional in external script
         assert "human listening" in content.lower()
 
 

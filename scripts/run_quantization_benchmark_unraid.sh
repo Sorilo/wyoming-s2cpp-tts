@@ -50,6 +50,7 @@ ARTIFACT_BASE="$REPO_ROOT/verification_artifacts/quant_benchmark"
 
 # ── Parse arguments ────────────────────────────────────────────────────────
 RUN_REAL=false
+REPROCESS_ARTIFACT=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -59,6 +60,8 @@ while [[ $# -gt 0 ]]; do
     --gpu)                  GPU_UUID="$2"; shift 2 ;;
     --allow-production-gpu) ALLOW_PRODUCTION_GPU=true; shift ;;
     *)                      err "Unknown argument: $1"; exit 1 ;;
+    --reprocess-artifact)
+      REPROCESS_ARTIFACT="$2"; shift 2 ;;
   esac
 done
 
@@ -268,10 +271,15 @@ wait_backend_ready() {
     fi
 
     # 5. Poll HTTP endpoint
-    local http_code
+    local http_code curl_exit
     http_code=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 2 \
-      "http://127.0.0.1:$BENCH_PORT/" 2>/dev/null || echo "000")
-    if [[ "$http_code" != "000" ]]; then
+      "http://127.0.0.1:$BENCH_PORT/" 2>/dev/null) || curl_exit=$?
+    # curl failure (exit non-zero) means connection refused — not ready
+    if [[ -n "${curl_exit:-}" ]]; then
+      http_code="000"
+    fi
+    # Validate: must be a real HTTP code (3 digits), not "000" or "000000"
+    if [[ "$http_code" =~ ^[0-9]{3}$ ]] && [[ "$http_code" != "000" ]]; then
       http_ok=true
     fi
 
@@ -319,22 +327,31 @@ stop_backend() {
 
 # ── Per-run metric capture with timestamp correlation ──────────────────────
 capture_run_metrics() {
-  local label="$1" since_ts="$2" output_file="$3"
-  # Poll with bounded timeout for completed [Metrics] Streaming line
-  local max_wait=20 elapsed=0 interval=1
-  while [[ $elapsed -lt $max_wait ]]; do
-    docker logs "$BENCH_CONTAINER" --since "$since_ts" 2>/dev/null > "$output_file" || true
-    if grep -q '\[Metrics\] Streaming' "$output_file" 2>/dev/null; then
-      break
-    fi
-    sleep "$interval"
-    elapsed=$((elapsed + interval))
-  done
+  local label="$1" output_file="$2"
+  # Record line count before benchmark, then capture new lines after
+  local total_lines
+  total_lines=$(docker logs "$BENCH_CONTAINER" 2>/dev/null | wc -l)
+  echo "$total_lines" > "${output_file}.line_count_before"
+  # Note: called AFTER benchmark completes, so we just capture the tail
+}
+
+capture_run_metrics_after() {
+  local label="$1" output_file="$2"
+  local before_lines after_lines
+  before_lines=$(cat "${output_file}.line_count_before" 2>/dev/null || echo 0)
+  # Capture all logs
+  docker logs "$BENCH_CONTAINER" 2>/dev/null > "$output_file" || true
+  after_lines=$(wc -l < "$output_file")
+  # Extract only new [Metrics] lines (after benchmark started)
   grep '\[Metrics\] Streaming' "$output_file" 2>/dev/null > "${output_file}.metrics" || true
   if [[ ! -s "${output_file}.metrics" ]]; then
-    warn "No [Metrics] Streaming line found for $label after ${elapsed}s"
+    warn "No [Metrics] Streaming line found for $label (logs: $before_lines→$after_lines lines)"
+    # Try alternate patterns
+    grep -i 'metrics' "$output_file" 2>/dev/null | head -5 >&2 || true
     return 1
   fi
+  local metric_count=$(wc -l < "${output_file}.metrics")
+  ok "Captured $metric_count [Metrics] lines for $label"
   return 0
 }
 
@@ -401,30 +418,35 @@ stop_gpu_telemetry() {
 # ── Auto-create WAV from PCM ───────────────────────────────────────────────
 create_wav() {
   local pcm_path="$1" wav_path="$2"
-  # Primary: Hermes-Suite ffmpeg via docker exec
-  if docker exec Hermes-Suite /usr/bin/ffmpeg -y -f s16le -ar 44100 -ac 1 \
-    -i "$pcm_path" "$wav_path" 2>/dev/null; then
-    if [[ -s "$wav_path" ]]; then
-      ok "WAV created (ffmpeg): $wav_path ($(stat -c%s "$wav_path") bytes)"
-      return 0
+  local host_pcm="$1" host_wav="$2" container_pcm="$3" container_wav="$4"
+  # Primary: Hermes-Suite ffmpeg via docker exec (uses container paths)
+  if [[ -n "${container_pcm:-}" ]]; then
+    if docker exec Hermes-Suite test -r "$container_pcm" 2>/dev/null; then
+      if docker exec Hermes-Suite /usr/bin/ffmpeg -y -f s16le -ar 44100 -ac 1 \
+        -i "$container_pcm" "$container_wav" 2>/dev/null; then
+        if [[ -s "$host_wav" ]]; then
+          ok "WAV created (ffmpeg): $host_wav ($(stat -c%s "$host_wav") bytes)"
+          return 0
+        fi
+      fi
+      warn "ffmpeg failed, trying Python wave fallback..."
+    else
+      warn "Hermes-Suite cannot read container path, using host Python fallback..."
     fi
   fi
-  # Fallback: Python wave module
-  warn "ffmpeg failed, trying Python wave fallback..."
+  # Fallback: Python wave module (uses host paths)
   python3 -c "
 import wave
-pcm_path = '$pcm_path'
-wav_path = '$wav_path'
-with open(pcm_path, 'rb') as pf:
+with open('$host_pcm', 'rb') as pf:
     pcm = pf.read()
-with wave.open(wav_path, 'wb') as wf:
+with wave.open('$host_wav', 'wb') as wf:
     wf.setnchannels(1)
     wf.setsampwidth(2)
     wf.setframerate(44100)
     wf.writeframes(pcm)
 " 2>/dev/null
-  if [[ -s "$wav_path" ]]; then
-    ok "WAV created (wave fallback): $wav_path ($(stat -c%s "$wav_path") bytes)"
+  if [[ -s "$host_wav" ]]; then
+    ok "WAV created (wave fallback): $host_wav ($(stat -c%s "$host_wav") bytes)"
     return 0
   fi
   err "WAV creation failed for $pcm_path"
@@ -449,110 +471,7 @@ for s in data.get('summaries', []):
 # ── Generate combined comparison table ─────────────────────────────────────
 generate_combined_summary() {
   local artifact_dir="$1" summary_md="$2"
-  python3 -c "
-import json, sys, os
-from pathlib import Path
-
-artifacts = Path('$artifact_dir')
-results = {}
-
-# Collect per-candidate results
-for label in ['q6_k', 'q5_k_m', 'q4_k_m']:
-    rj = artifacts / label / 'results.json'
-    if not rj.exists():
-        continue
-    with open(rj) as f:
-        data = json.load(f)
-    runs = []
-    for s in data.get('summaries', []):
-        for run in s.get('runs', []):
-            if run.get('status') == 'success' and run.get('run_type') == 'measured':
-                runs.append(run)
-    if not runs:
-        continue
-
-    rtfs = [r['rtf'] for r in runs if r.get('rtf') is not None]
-    firsts = [r['time_to_first_pcm_ms'] for r in runs]
-    totals = [r['total_wall_ms'] for r in runs]
-    rtfs.sort()
-    firsts.sort()
-    totals.sort()
-
-    def median(lst):
-        n = len(lst)
-        if n == 0: return None
-        m = n // 2
-        return (lst[m] + lst[~m]) / 2 if n % 2 == 0 else lst[m]
-
-    # Backend metrics
-    bm = runs[0].get('backend_metrics', {}) if runs else {}
-    results[label] = {
-        'success': len(runs),
-        'rtf_mean': sum(rtfs)/len(rtfs) if rtfs else None,
-        'rtf_median': median(rtfs),
-        'rtf_min': rtfs[0] if rtfs else None,
-        'rtf_max': rtfs[-1] if rtfs else None,
-        'first_pcm_mean': sum(firsts)/len(firsts) if firsts else None,
-        'first_pcm_median': median(firsts),
-        'total_wall_mean': sum(totals)/len(totals) if totals else None,
-        'generate_mean': bm.get('generate'),
-        'stream_decode_mean': bm.get('stream_decode'),
-        'ar_only_mean': bm.get('ar_only'),
-        'kv_init': bm.get('kv_init'),
-        'max_rss': bm.get('max_rss'),
-        'model_sha': (artifacts / label / 'model_sha256.txt').read_text().strip() if (artifacts / label / 'model_sha256.txt').exists() else '',
-        'model_size': (artifacts / label / 'model_size.txt').read_text().strip() if (artifacts / label / 'model_size.txt').exists() else '',
-    }
-
-# Write combined JSON
-with open(artifacts / 'combined_results.json', 'w') as f:
-    json.dump(results, f, indent=2)
-
-# Write Markdown summary
-lines = [
-    '# Quantization Benchmark Results',
-    '',
-    '**Status: Provisional — human listening required before model selection.**',
-    '',
-    '## Comparison Table',
-    '',
-    '| Quant | Success | RTF Mean | RTF Med | RTF Min | RTF Max | 1st PCM Mean (ms) | Total Mean (ms) | Gen (s) | SD (s) | AR (s) | KV (s) | VRAM (MiB) |',
-    '|-------|---------|----------|---------|---------|---------|--------------------|-----------------|---------|--------|--------|--------|-------------|',
-]
-
-for label in ['q6_k', 'q5_k_m', 'q4_k_m']:
-    r = results.get(label)
-    if not r:
-        lines.append(f'| {label} | — | — | — | — | — | — | — | — | — | — | — | — |')
-        continue
-    def f(v, fmt='.2f'):
-        return f'{v:{fmt}}' if v is not None else '—'
-    lines.append(
-        f'| {label} | {r[\"success\"]}/3 | {f(r[\"rtf_mean\"], \".3f\")} | {f(r[\"rtf_median\"], \".3f\")} | '
-        f'{f(r[\"rtf_min\"], \".3f\")} | {f(r[\"rtf_max\"], \".3f\")} | {f(r[\"first_pcm_mean\"], \".0f\")} | '
-        f'{f(r[\"total_wall_mean\"], \".0f\")} | {f(r[\"generate_mean\"])} | {f(r[\"stream_decode_mean\"])} | '
-        f'{f(r[\"ar_only_mean\"])} | {f(r[\"kv_init\"])} | {f(r[\"max_rss\"], \".0f\")} |'
-    )
-
-lines += ['', '## Recommendation', '',
-          '⚠️ **PROVISIONAL**: Based on RTF and latency metrics only.',
-          '**Human listening is REQUIRED before model selection.**', '',
-          '### Decision Rule', '',
-          '- RTF ≤ 0.95: safe real-time with margin ✅',
-          '- 0.95 < RTF < 1.0: real-time achievable, tight margin ⚠️',
-          '- RTF ≥ 1.0: slower than real-time ❌',
-          '',
-          '### Model SHA-256', '']
-
-for label in ['q6_k', 'q5_k_m', 'q4_k_m']:
-    r = results.get(label)
-    if r and r['model_sha']:
-        lines.append(f'- **{label}**: `{r[\"model_sha\"]}`')
-
-with open('$summary_md', 'w') as f:
-    f.write('\\n'.join(lines))
-print('combined summary written')
-"
+  python3 "$REPO_ROOT/scripts/_generate_combined_summary.py" "$artifact_dir" "$summary_md"
 }
 
 # ── Cleanup trap ───────────────────────────────────────────────────────────
@@ -574,6 +493,42 @@ trap cleanup EXIT INT TERM
 
 check_prereqs
 discover_model_mount
+
+# ── Reprocess-artifact mode ────────────────────────────────────────────────
+if [[ -n "${REPROCESS_ARTIFACT:-}" ]]; then
+  info "Reprocessing artifact: $REPROCESS_ARTIFACT"
+  if [[ ! -d "$REPROCESS_ARTIFACT" ]]; then
+    err "Artifact directory not found: $REPROCESS_ARTIFACT"
+    exit 1
+  fi
+  # Create WAV files from existing PCM
+  for label in q6_k q5_k_m q4_k_m; do
+    candidate_dir="$REPROCESS_ARTIFACT/$label"
+    if [[ ! -d "$candidate_dir" ]]; then
+      warn "Candidate directory not found: $candidate_dir"
+      continue
+    fi
+    # Find all PCM files
+    while IFS= read -r -d '' pcm_file; do
+      wav_file="${pcm_file%.pcm}.wav"
+      if [[ -f "$wav_file" ]] && [[ -s "$wav_file" ]]; then
+        info "WAV already exists: $wav_file"
+        continue
+      fi
+      # Map host path to Hermes-Suite container path
+      container_pcm="${pcm_file/\/mnt\/user\/appdata\/hermes-agent\/webui-workspace\//\/workspace\/}"
+      container_wav="${wav_file/\/mnt\/user\/appdata\/hermes-agent\/webui-workspace\//\/workspace\/}"
+      create_wav "$pcm_file" "$wav_file" "$container_pcm" "$container_wav" || warn "WAV creation failed: $pcm_file"
+    done < <(find "$candidate_dir" -name '*.pcm' -print0)
+  done
+  # Regenerate combined summary
+  generate_combined_summary "$REPROCESS_ARTIFACT" "$REPROCESS_ARTIFACT/summary.md"
+  ok "Reprocessing complete: $REPROCESS_ARTIFACT"
+  info ""
+  info "Backend metrics cannot be reconstructed if absent from saved logs."
+  info "If backend_metrics.log files are present, a second inference run is not needed."
+  exit 0
+fi
 
 # ── Dry-run mode ───────────────────────────────────────────────────────────
 if [[ "$RUN_REAL" != true ]]; then
@@ -702,8 +657,8 @@ for i in "${!CANDIDATE_FILES[@]}"; do
   # Run benchmark with per-run metric capture
   info "Running benchmark for $LABEL..."
 
-  # Record start timestamp for log correlation
-  BENCH_START_TS=$(date -u +%Y-%m-%dT%H:%M:%S)
+  # Record log line count BEFORE benchmark for delta correlation
+  capture_run_metrics "$LABEL" "$CANDIDATE_DIR/backend_metrics.log"
 
   PYTHONPATH="$REPO_ROOT" python3 "$REPO_ROOT/scripts/benchmark_quantization.py" \
     --run-real \
@@ -722,8 +677,8 @@ for i in "${!CANDIDATE_FILES[@]}"; do
       FAILED_CANDIDATES=$((FAILED_CANDIDATES + 1))
     }
 
-  # Capture backend metrics (correlated via --since timestamp)
-  capture_run_metrics "$LABEL" "$BENCH_START_TS" "$CANDIDATE_DIR/backend_metrics.log" || {
+  # Capture backend metrics after benchmark (line-count delta)
+  capture_run_metrics_after "$LABEL" "$CANDIDATE_DIR/backend_metrics.log" || {
     warn "Missing metrics for $LABEL"
   }
 
@@ -776,7 +731,7 @@ print(f'  Injected {run_idx} per-run metrics into results.json')
     fi
     WAV_PATH="${FIRST_PCM%.pcm}.wav"
     HERMES_WAV="${WAV_PATH/\/mnt\/user\/appdata\/hermes-agent\/webui-workspace\//\/workspace\/}"
-    if ! create_wav "$HERMES_PCM" "$HERMES_WAV"; then
+    if ! create_wav "$FIRST_PCM" "$WAV_PATH" "$HERMES_PCM" "$HERMES_WAV"; then
       WAV_OK=false
     fi
   else

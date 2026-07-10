@@ -203,11 +203,13 @@ measured runs               = 3
 
 ### If Benchmark Cannot Run From Hermes
 
-Run this exact command on the Unraid host:
+See the **Host-Side Live Benchmark Runbook** below for the complete step-by-step
+sequence.  All commands use the existing ``scripts/benchmark_quantization.py``
+harness directly — no separate orchestration script is needed.
 
 ```bash
 cd /mnt/user/appdata/hermes-agent/webui-workspace/wyoming-s2cpp-tts
-bash scripts/run_quant_benchmark_unraid.sh
+# Start at Step 1 of the runbook below
 ```
 
 ---
@@ -304,20 +306,142 @@ Each artifact directory contains:
 
 ---
 
-## Recommended Next Action
+## Host-Side Live Benchmark Runbook
 
-1. **Download missing candidate models** (Q5_K_M, Q4_K_M) from verified upstream
-   S2 Pro GGUF source.
-2. **Run `scripts/benchmark_quantization.py`** with all three models at
-   stride 4 against a temporary benchmark backend container.
-3. **Convert PCM to WAV** and perform human listening evaluation using the
-   checklist above.
-4. **Selection decision**:
-   - If a lower quant achieves RTF < 0.95 with no quality regression →
-     recommend as production model.
-   - If no quant reaches RTF < 1.0 → no production change; proceed to
-     Phase 8E (non-fork runtime tuning).
-   - If a quant has minor quality regression but RTF < 0.95 → user judgment
-     call on quality vs. performance.
-5. **DO NOT automatically promote** a winning model to production — the user
-   must explicitly apply the change after listening evaluation.
+> **Important**: `/models` is the path *inside* the backend container, not on the
+> Unraid host.  You must discover the host source directory mapped to `/models`
+> before downloading or inspecting model files.
+
+### Step 1: Pull the latest commit
+
+```bash
+cd /mnt/user/appdata/hermes-agent/webui-workspace/wyoming-s2cpp-tts
+git fetch origin
+git checkout perf/realtime-stride-tuning
+git pull origin perf/realtime-stride-tuning
+git log --oneline -1  # should show the Phase 8D.1 cleanup commit
+```
+
+### Step 2: Discover the `/models` host mount
+
+```bash
+docker inspect s2cpp-backend   --format '{{range .Mounts}}{{println .Source "->" .Destination}}{{end}}'
+```
+
+This prints the host source path mapped to each container destination.  Look for
+the line ending in `-> /models`.  Use that host source path for all model file
+operations below.  The examples use `HOST_MODELS` as a placeholder — replace it
+with the actual discovered path.
+
+### Step 3: List existing GGUF files and calculate required storage
+
+```bash
+HOST_MODELS="/mnt/user/appdata/s2cpp/models"  # ← REPLACE with discovered path
+ls -lh "$HOST_MODELS"/s2-pro-q*.gguf 2>/dev/null || echo "No existing GGUF files found"
+```
+
+### Step 4: Download missing candidate models
+
+Required models (from verified upstream S2 Pro GGUF source):
+
+| Model          | Filename                | ~Size  | Status   |
+|----------------|-------------------------|--------|----------|
+| Q6_K (baseline)| s2-pro-q6_k.gguf       | 3.2 GB | Existing |
+| Q5_K_M         | s2-pro-q5_k_m.gguf     | 2.9 GB | Download |
+| Q4_K_M         | s2-pro-q4_k_m.gguf     | 2.6 GB | Download |
+
+Download using resumable downloads (curl -C -).  Example:
+
+```bash
+# Replace MODEL_URL with the actual upstream download URL for each quant
+curl -C - -L -o "$HOST_MODELS/s2-pro-q5_k_m.gguf" "MODEL_URL"
+curl -C - -L -o "$HOST_MODELS/s2-pro-q4_k_m.gguf" "MODEL_URL"
+```
+
+After download, record checksums:
+
+```bash
+sha256sum "$HOST_MODELS"/s2-pro-q*.gguf
+```
+
+### Step 5: Dry-run the quant benchmark (safe, no network)
+
+```bash
+cd /mnt/user/appdata/hermes-agent/webui-workspace/wyoming-s2cpp-tts
+python3 scripts/benchmark_quantization.py   --models "$HOST_MODELS/s2-pro-q6_k.gguf,$HOST_MODELS/s2-pro-q5_k_m.gguf,$HOST_MODELS/s2-pro-q4_k_m.gguf"   --stride 4
+```
+
+This prints what models exist and what would be benchmarked without contacting
+the backend.
+
+### Step 6: Spin up a temporary benchmark backend container
+
+```bash
+# Stop any previous benchmark container
+docker rm -f s2cpp-backend-bench 2>/dev/null || true
+
+# Start a temporary backend with a distinct port and read-only model mount
+docker run -d --name s2cpp-backend-bench   --gpus '"device=GPU-65b9a886-d157-27fa-09d1-8894bc5cc135"'   --network sorilonet   -p 3033:3030   -v "$HOST_MODELS:/models:ro"   ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-edf89bd
+
+# Wait for backend readiness
+sleep 15
+curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3033/
+# Expect: 404 (normal — /generate is the working endpoint)
+```
+
+### Step 7: Run the real quant benchmark
+
+```bash
+python3 scripts/benchmark_quantization.py --run-real   --endpoint 127.0.0.1:3033   --models "$HOST_MODELS/s2-pro-q6_k.gguf,$HOST_MODELS/s2-pro-q5_k_m.gguf,$HOST_MODELS/s2-pro-q4_k_m.gguf"   --stride 4 --warmup-runs 1 --measured-runs 3   --voice ""  # Use default voice
+```
+
+Benchmark runs sequentially: Q6_K → Q5_K_M → Q4_K_M.  Each gets 1 warmup + 3
+measured runs.  Raw PCM artifacts are saved in
+`verification_artifacts/quant_benchmark/<timestamp>/`.
+
+### Step 8: Identify the timestamped artifact directory
+
+```bash
+ls -d verification_artifacts/quant_benchmark/*/ | tail -1
+```
+
+### Step 9: Convert representative PCM to WAV for listening
+
+Use ffmpeg from Hermes Suite (`/usr/bin/ffmpeg`):
+
+```bash
+ARTIFACT_DIR="verification_artifacts/quant_benchmark/<timestamp>"  # ← fill in
+for quant in q6_k q5_k_m q4_k_m; do
+  ffmpeg -f s16le -ar 44100 -ac 1     -i "$ARTIFACT_DIR/quant_${quant}_run1/quant_${quant}_run1.pcm"     "$ARTIFACT_DIR/quant_${quant}_run1.wav"
+done
+```
+
+### Step 10: View the aggregate report
+
+```bash
+cat "$ARTIFACT_DIR/summary.md"
+cat "$ARTIFACT_DIR/results.json" | python3 -m json.tool | head -80
+```
+
+### Step 11: Human listening evaluation
+
+Use the Listening Checklist in this document to evaluate each quant's WAV file.
+Rank quants by perceived quality and note any artifacts.
+
+### Step 12: Clean up the benchmark container
+
+```bash
+docker rm -f s2cpp-backend-bench
+```
+
+### Step 13: Selection decision
+
+- If a lower quant achieves **RTF < 0.95** with **no quality regression** →
+  recommend as production model.
+- If no quant reaches RTF < 1.0 → **no production change**; proceed to Phase 8E.
+- If a quant has **minor quality regression** but RTF < 0.95 → user judgment
+  call on quality vs. performance.
+
+**DO NOT automatically promote** a winning model to production.  The user
+must explicitly apply the change by updating the production backend container's
+model path after listening evaluation.

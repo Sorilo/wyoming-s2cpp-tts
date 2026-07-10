@@ -91,13 +91,16 @@ Implemented configurable streaming decode stride, holdback, start-buffer,
 and low-latency settings with strict validation, explicit multipart
 request parameters, enhanced observability, an opt-in Python benchmark
 harness, and a one-command Unraid orchestration script. 80 new tests,
-540/540 passing. No backend image change; live RTX 3080 benchmarks completed (strides 1-24, see verification_artifacts/realtime_tuning/)
-was measured — stride 4 is a candidate only. See ``CHANGELOG.md`` and
+540/540 passing. No backend image change; live RTX 3080 benchmarks completed (strides 1-24, see verification_artifacts/realtime_tuning/).
+Stride 4 is the current preferred Q6_K latency/throughput compromise (RTF 1.13, first PCM ~251 ms). See ``CHANGELOG.md`` and
 ``scripts/benchmark_realtime_tuning.py`` for the benchmark workflow.
 
-### Phase 8D: controlled quantized-model performance and quality benchmark 🔄
+### Phase 8D: controlled quantized-model performance and quality benchmark 🔧 (tooling complete; live quant pending)
 
 Select a single preferred runtime quantization by benchmarking candidate Q6_K, Q5_K_M, and Q4_K_M GGUF models against the RTX 3080 at fixed stride 4, holding all other variables constant.  The phase delivers: (a) hardened benchmark tooling with reliable metric correlation, port discovery, and WAV conversion; (b) a controlled quant comparison under identical conditions (same GPU, backend build, container environment, voice, and text); (c) human listening evaluation of audio quality across quants; and (d) a single recommended runtime model.
+
+**Status**: Tooling complete (benchmark harness, metric correlation, model provenance, docs, 574 tests).
+Live Q5_K_M and Q4_K_M quant benchmark + human listening still pending.
 
 This phase does NOT implement dynamic model switching, multi-worker routing, or multi-GPU scheduling.  Those remain in post-v0.1.  A conditional Phase 8E placeholder exists for non-fork runtime tuning if no quant achieves safe real-time performance.
 

@@ -111,8 +111,10 @@ CUDA launches per second of audio, each re-decoding 4 context frames.
 Stride 4 reduces this to ~2,756 launches (4x reduction) with the same
 context re-decode cost per stride step.
 
-⚠️ Stride 4 is a **candidate only** — real RTX 3080 benchmarks are required
-to confirm actual RTF improvement.  Streaming s2.cpp repeatedly re-decodes
+✅ Real RTX 3080 stride benchmarks completed (strides 1-24, Q6_K model).
+Stride 4 is the preferred Q6_K compromise (RTF ~1.13, first PCM ~251 ms).
+Quant comparison (Q5_K_M, Q4_K_M) and human listening still pending.
+Streaming s2.cpp repeatedly re-decodes
 codec context and is not yet fully stateful/incremental.
 
 ### Benchmarking

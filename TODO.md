@@ -171,7 +171,9 @@
 - Benchmark harness now records model SHA-256 and file size per run.
 - Added ``--model`` CLI argument for explicit model path recording.
 - Benchmark scripts ready for controlled Q6_K/Q5_K_M/Q4_K_M comparison at fixed stride 4.
-- Full suite: to be reported after Phase 8D commit.
+
+**Status**: Phase 8D tooling complete. Live Q5_K_M/Q4_K_M quant benchmark and human listening still pending.
+- Full suite: 574/574 passing (25 Phase 8D-specific tests included).
 
 ## Phase 8C results: realtime stride tuning infrastructure
 

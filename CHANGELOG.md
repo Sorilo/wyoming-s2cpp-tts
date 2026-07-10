@@ -19,8 +19,8 @@
   ``docs/STREAMING_STRIDE_AND_QUANT_BENCHMARKS.md`` documenting stride
   tuning principles, live RTX 3080 results, quantization methodology,
   and benchmark limitations.  Clarified post-v0.1 roadmap items (dynamic
-  model switching, multi-GPU scheduling).  See roadmap and benchmark doc
-  for full details.
+  model switching, multi-GPU scheduling).  **Status**: Tooling complete. Live Q5_K_M/Q4_K_M quant benchmark and
+  human listening still pending. See roadmap and benchmark doc for details.
 
 - Phase 8C: real-time stride tuning infrastructure for RTX 3080 performance
   optimisation.  Added four new environment-backed wrapper settings:
@@ -59,8 +59,8 @@
   However, for Home Assistant / Wyoming to use the new stride tuning
   environment variables, a NEW WRAPPER IMAGE must be built and deployed;
   the current production wrapper (sha-9c134cc) does not support them.
-  Live RTX 3080 benchmarks completed (strides 1-24) — Q6_K model RTF 1.13 at stride 4; stride 4 preferred for TTFA/throughput balance
-  a candidate only.
+  Live RTX 3080 benchmarks completed (strides 1-24) — Q6_K model RTF 1.13 at stride 4;
+  stride 4 is the preferred Q6_K latency/throughput compromise. Quant comparison pending.
 
 
 - Phase 8B2 production backend promotion: promoted the Phase 8B1.1-proven

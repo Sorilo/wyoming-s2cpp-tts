@@ -67,6 +67,17 @@ discover_production_voice() {
 
   if [[ -n "$EFFECTIVE_VOICE" ]]; then
     info "Using user-supplied voice: $EFFECTIVE_VOICE"
+    # Verify the .s2voice file exists
+    local voice_host="${USER_VOICE_DIR:-$HOST_VOICES}"
+    local voice_file="$voice_host/${EFFECTIVE_VOICE}.s2voice"
+    if [[ -n "$voice_host" ]] && [[ ! -f "$voice_file" ]]; then
+      err "Voice profile not found: $voice_file"
+      err "Supply --voice-dir with the correct host source directory."
+      exit 1
+    fi
+    if [[ -f "$voice_file" ]]; then
+      ok "Voice profile verified: $voice_file"
+    fi
     return
   fi
 
@@ -337,11 +348,15 @@ if meta_ctx is not None and meta_ctx != eff['codec_context']:
     errors.append(f'codec_context mismatch: requested={eff["codec_context"]}, effective={meta_ctx}')
 
 if errors:
-    print(f'FAIL: $label: ' + '; '.join(errors))
-    # Don't exit here — let the caller handle it via RESULTS_OK tracking
+    print(f'VALIDATE_FAIL: $label: ' + '; '.join(errors), file=sys.stderr)
+    sys.exit(1)
 else:
-    print(f'OK: $label: settings validated')
+    print(f'VALIDATE_OK: $label')
 VERIFYEOF
+    if [[ $? -ne 0 ]]; then
+      warn "Settings validation failed for $label"
+      return 1
+    fi
   fi
 }
 
@@ -388,7 +403,9 @@ run_thread_sweep() {
     start_gpu_telemetry "$ARTIFACT_DIR/$label/gpu_telemetry.csv"
     start_cpu_telemetry "$ARTIFACT_DIR/$label/cpu_telemetry.csv"
     start_backend_q4 "$t" "" "$label" || { stop_gpu_telemetry; stop_cpu_telemetry; FAILED=$((FAILED+1)); continue; }
-    run_q4_benchmark "$label" "$t" "" "$CODEC_CONTEXT" "$HOLDBACK" "$START_BUFFER" "$LOW_LATENCY"
+    if ! run_q4_benchmark "$label" "$t" "" "$CODEC_CONTEXT" "$HOLDBACK" "$START_BUFFER" "$LOW_LATENCY"; then
+      warn "Benchmark/validation failed for $label"
+    fi
     capture_metrics_q4 "$label" "$ARTIFACT_DIR/$label"
     docker logs "$BENCH_CONTAINER" 2>/dev/null > "$ARTIFACT_DIR/$label/startup.log" || true
     stop_gpu_telemetry; stop_cpu_telemetry; stop_backend
@@ -414,7 +431,9 @@ run_affinity_sweep() {
     start_gpu_telemetry "$ARTIFACT_DIR/$label/gpu_telemetry.csv"
     start_cpu_telemetry "$ARTIFACT_DIR/$label/cpu_telemetry.csv"
     start_backend_q4 "$best_t" "$cpus" "$label" || { stop_gpu_telemetry; stop_cpu_telemetry; FAILED=$((FAILED+1)); continue; }
-    run_q4_benchmark "$label" "$best_t" "$cpus" "$CODEC_CONTEXT" "$HOLDBACK" "$START_BUFFER" "$LOW_LATENCY"
+    if ! run_q4_benchmark "$label" "$best_t" "$cpus" "$CODEC_CONTEXT" "$HOLDBACK" "$START_BUFFER" "$LOW_LATENCY"; then
+      warn "Benchmark/validation failed for $label"
+    fi
     capture_metrics_q4 "$label" "$ARTIFACT_DIR/$label"
     docker logs "$BENCH_CONTAINER" 2>/dev/null > "$ARTIFACT_DIR/$label/startup.log" || true
     stop_gpu_telemetry; stop_cpu_telemetry; stop_backend
@@ -429,7 +448,9 @@ run_blipping_diagnostic() {
     ensure_dir "$ARTIFACT_DIR/$label"; ATTEMPTED=$((ATTEMPTED+1))
     start_gpu_telemetry "$ARTIFACT_DIR/$label/gpu_telemetry.csv"
     start_backend_q4 "$best_t" "" "$label" || { stop_gpu_telemetry; FAILED=$((FAILED+1)); continue; }
-    run_q4_benchmark "$label" "$best_t" "" "$ctx" "$hb" "$START_BUFFER" "$LOW_LATENCY"
+    if ! run_q4_benchmark "$label" "$best_t" "" "$ctx" "$hb" "$START_BUFFER" "$LOW_LATENCY"; then
+      warn "Benchmark/validation failed for $label"
+    fi
     capture_metrics_q4 "$label" "$ARTIFACT_DIR/$label"
     docker logs "$BENCH_CONTAINER" 2>/dev/null > "$ARTIFACT_DIR/$label/startup.log" || true
     stop_gpu_telemetry; stop_backend
@@ -513,23 +534,23 @@ if [[ "$SMOKE_TEST" == true ]]; then
     err "Smoke synthesis failed"; SMOKE_FAILED=true
   fi
   # Verify results
-  local srj="$ARTIFACT_DIR/smoke_test/results.json"
+  srj="$ARTIFACT_DIR/smoke_test/results.json"
   if [[ -f "$srj" ]]; then
-    local measured=$(python3 -c "import json; d=json.load(open('$srj')); measured=[r for s in d['summaries'] for r in s['runs'] if r.get('run_type')=='measured' and r.get('status')=='success']; print(len(measured))" 2>/dev/null || echo 0)
+    measured=$(python3 -c "import json; d=json.load(open('$srj')); measured=[r for s in d['summaries'] for r in s['runs'] if r.get('run_type')=='measured' and r.get('status')=='success']; print(len(measured))" 2>/dev/null || echo 0)
     if [[ "$measured" -ge 1 ]]; then ok "$measured measured run(s) succeeded"; else err "No measured runs succeeded"; SMOKE_FAILED=true; fi
   else
     err "results.json missing"; SMOKE_FAILED=true
   fi
   # Verify PCM
-  local pcm_count=$(find "$ARTIFACT_DIR/smoke_test" -name '*.pcm' -size +0c 2>/dev/null | wc -l)
+  pcm_count=$(find "$ARTIFACT_DIR/smoke_test" -name '*.pcm' -size +0c 2>/dev/null | wc -l)
   if [[ "$pcm_count" -ge 1 ]]; then ok "$pcm_count non-empty PCM file(s)"; else err "No non-empty PCM files"; SMOKE_FAILED=true; fi
   # Create and verify WAV
-  local wav_ok=false
+  wav_ok=false
   find "$ARTIFACT_DIR/smoke_test" -name '*.pcm' -print0 2>/dev/null | while IFS= read -r -d '' pcm; do
     if create_host_wav "$pcm" "${pcm%.pcm}.wav"; then ok "Smoke WAV: ${pcm%.pcm}.wav"; wav_ok=true; fi
   done
   # Re-check outside subshell
-  local wav_count=$(find "$ARTIFACT_DIR/smoke_test" -name '*.wav' -size +0c 2>/dev/null | wc -l)
+  wav_count=$(find "$ARTIFACT_DIR/smoke_test" -name '*.wav' -size +0c 2>/dev/null | wc -l)
   if [[ "$wav_count" -ge 1 ]]; then ok "$wav_count valid WAV file(s)"; else err "No valid WAV files"; SMOKE_FAILED=true; fi
   stop_backend
   if [[ "$SMOKE_FAILED" == true ]]; then

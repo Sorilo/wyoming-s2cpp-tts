@@ -1,14 +1,4 @@
-"""Phase 9: Queue, Backend-Busy Retry, and Synthesis Timeout Tests.
-
-Tests-first approach: these tests exercise the NEW interfaces expected from
-Phase 9.  Because the implementation does not exist yet, many tests will fail
-with ``ImportError``, ``AttributeError``, or assertion failures — this is
-intentional and expected in a TDD workflow.
-
-Once the implementation is complete, all 22+ tests should pass when run with::
-
-    PYTHONPATH=. .venv/bin/pytest tests/test_phase_9_queue_busy_timeouts.py -v -o 'addopts='
-"""
+"""Phase 9: Queue, Backend-Busy Retry, and Synthesis Timeout Tests."""
 
 from __future__ import annotations
 
@@ -41,18 +31,7 @@ from app.s2_client import (
     S2StreamResult,
 )
 
-# Phase 9 new exception class - will fail with ImportError until implemented.
-try:
-    from app.s2_client import S2BackendBusyError
-except ImportError:
-    class S2BackendBusyError(S2ClientError):
-        """Raised when the s2.cpp backend returns HTTP 503 Service Unavailable.
-
-        Placeholder for tests-first approach.  The real implementation should
-        be a subclass of ``S2ClientError`` with ``status_code=503``.
-        """
-        def __init__(self, message: str = "Backend busy", status_code: int = 503) -> None:
-            super().__init__(message, status_code=status_code)
+from app.s2_client import S2BackendBusyError
 
 
 # -- wyoming_server imports ------------------------------------------------
@@ -276,7 +255,7 @@ class _ControllableMockStream:
             self._backend.recorder.record(
                 event="stream_blocked", stream_id=id(self),
             )
-            if not self._behavior.block_event.wait(timeout=30):
+            if not self._behavior.block_event.wait(timeout=5):
                 raise S2ClientError("mock stream blocked timeout")
             self._backend.recorder.record(
                 event="stream_released", stream_id=id(self),
@@ -536,7 +515,7 @@ class TestQueueBasicOperation:
         )
         await asyncio.sleep(0.2)
 
-        with pytest.raises(RuntimeError, match="queue is full"):
+        with pytest.raises(RuntimeError, match="Queue full"):
             await queue.run(lambda: asyncio.sleep(0),
                             synthesis_id="syn-3", connection_id="conn-3")
 
@@ -603,7 +582,7 @@ class TestQueueTimeoutAndCancel:
         )
         await asyncio.sleep(0.2)
 
-        cancelled = queue.cancel_waiting("conn-b")
+        cancelled = await queue.cancel_waiting("conn-b")
         assert cancelled == 1, f"Expected 1 cancelled, got {cancelled}"
 
         release_blocker.set()

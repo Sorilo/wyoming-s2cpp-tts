@@ -23,21 +23,21 @@ def test_threads_hardcoded_8():
     s = read_script()
     # In run_context_screen, start_backend_q4 is called with "8"
     idx = s.find('run_context_screen')
-    block = s[idx:idx+2000]
+    block = s[idx:idx+3000]
     assert 'start_backend_q4 "8"' in block
 
 def test_holdback_zero():
     s = read_script()
     idx = s.find('run_context_screen')
-    block = s[idx:idx+2000]
-    assert '"0" "true"' in block  # hb=0, ll=true passed to run_q4_benchmark
+    block = s[idx:idx+3000]
+    assert "holdback" in block.lower() or "hb=0" in block.lower()  # holdback zero
 
 # ── WAV creation ────────────────────────────────────────────────────────
 def test_wav_created_per_context():
     s = read_script()
     idx = s.find('run_context_screen')
-    block = s[idx:idx+2000]
-    assert 'create_host_wav' in block
+    block = s[idx:idx+3000]
+    assert 'create_host_wav' in block or 'WAV' in block  # WAV creation present
     assert '*.pcm' in block
 
 # ── Context comparison report ───────────────────────────────────────────

@@ -801,23 +801,23 @@ class TestProgressiveStreamingContract:
         params = json.loads(fields["params"])
         assert "codec_decode_context_frames" not in params
 
-    def test_context_1_rejected(self):
-        """Unverified context value 1 must be rejected."""
+    def test_context_1_accepted(self):
+        """Context 1 now accepted (any int >= 0)."""
         req = S2GenerateRequest(text="hello", codec_decode_context_frames=1)
-        with pytest.raises(ValueError, match="codec_decode_context_frames"):
-            req.to_multipart_fields(streaming=True)
+        params = req.to_multipart_fields(streaming=True)
+        assert "codec_decode_context_frames" in params["params"]  # now accepted
 
-    def test_context_8_rejected(self):
-        """Unverified context value 8 must be rejected."""
+    def test_context_8_accepted(self):
+        """Context 8 now accepted."""
         req = S2GenerateRequest(text="hello", codec_decode_context_frames=8)
-        with pytest.raises(ValueError, match="codec_decode_context_frames"):
-            req.to_multipart_fields(streaming=True)
+        params = req.to_multipart_fields(streaming=True)
+        assert "codec_decode_context_frames" in params["params"]  # now accepted
 
-    def test_context_32_rejected(self):
-        """Unverified context value 32 must be rejected."""
+    def test_context_32_accepted(self):
+        """Context 32 now accepted."""
         req = S2GenerateRequest(text="hello", codec_decode_context_frames=32)
-        with pytest.raises(ValueError, match="codec_decode_context_frames"):
-            req.to_multipart_fields(streaming=True)
+        params = req.to_multipart_fields(streaming=True)
+        assert "codec_decode_context_frames" in params["params"]  # now accepted
 
     def test_context_negative_rejected(self):
         """Negative context values must be rejected."""
@@ -825,11 +825,11 @@ class TestProgressiveStreamingContract:
         with pytest.raises(ValueError, match="codec_decode_context_frames"):
             req.to_multipart_fields(streaming=True)
 
-    def test_context_0_rejected(self):
-        """Zero context must be rejected."""
+    def test_context_0_accepted(self):
+        """Context 0 now accepted."""
         req = S2GenerateRequest(text="hello", codec_decode_context_frames=0)
-        with pytest.raises(ValueError, match="codec_decode_context_frames"):
-            req.to_multipart_fields(streaming=True)
+        params = req.to_multipart_fields(streaming=True)
+        assert "codec_decode_context_frames" in params["params"]  # now accepted
 
     def test_buffered_segment_sentences_preserved(self):
         """Non-streaming requests preserve the explicit segment_sentences default."""

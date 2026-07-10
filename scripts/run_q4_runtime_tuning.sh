@@ -510,38 +510,82 @@ run_blipping_diagnostic() {
   done
 }
 
-# ── Context screening ──────────────────────────────────────────────────────
+# ── Context screening (1 warmup, 1 measured, preflighted, resumable) ────────
 run_context_screen() {
   local contexts=(4 8 12 16 24 32 48 64)
-  info "Context screen: ${contexts[*]} (threads=8, stride=4, hb=0, ll=true)"
+  info "Context screen: ${contexts[*]} (threads=8, stride=4, hb=0, ll=true, 1+1 runs)"
+
+  # Preflight: validate each context can be serialized
+  info "Preflight: validating context values..."
+  for ctx in "${contexts[@]}"; do
+    python3 -c "
+from app.s2_client import S2GenerateRequest
+try:
+    r = S2GenerateRequest(text='test', codec_decode_context_frames=$ctx)
+    params = r.to_multipart_fields(streaming=True)
+    print(f'OK: context=$ctx serialized')
+except Exception as e:
+    print(f'FAIL: context=$ctx — {e}')
+    exit(1)
+" 2>/dev/null || { err "Preflight failed for context=$ctx"; return 1; }
+  done
+  ok "Preflight passed for all ${#contexts[@]} contexts"
 
   for ctx in "${contexts[@]}"; do
-    local label="context_${ctx}"; ensure_dir "$ARTIFACT_DIR/$label"
+    local label="context_${ctx}"
+
+    # Resume: skip if valid results already exist
+    local rj="$ARTIFACT_DIR/$label/results.json"
+    if [[ -n "${RESUME_ARTIFACT:-}" ]] && [[ -f "$rj" ]]; then
+      local measured_ok=$(python3 -c "
+import json
+with open('$rj') as f: d = json.load(f)
+measured = [r for s in d['summaries'] for r in s['runs'] if r.get('run_type')=='measured' and r.get('status')=='success']
+print(len(measured))
+" 2>/dev/null || echo 0)
+      local has_pcm=$(find "$ARTIFACT_DIR/$label" -name '*.pcm' -size +0c 2>/dev/null | wc -l)
+      if [[ "$measured_ok" -ge 1 ]] && [[ "$has_pcm" -ge 1 ]]; then
+        ok "Resume: $label already complete ($measured_ok measured, $has_pcm PCM) — skipping"
+        continue
+      fi
+    fi
+
+    ensure_dir "$ARTIFACT_DIR/$label"
     ATTEMPTED=$((ATTEMPTED + 1))
     info "Context=$ctx..."
+    local config_failed=false
 
     start_gpu_telemetry "$ARTIFACT_DIR/$label/gpu_telemetry.csv"
     start_cpu_telemetry "$ARTIFACT_DIR/$label/cpu_telemetry.csv"
     if ! start_backend_q4 "8" "" "$label"; then
       stop_gpu_telemetry; stop_cpu_telemetry; FAILED=$((FAILED+1)); continue
     fi
-    if ! run_q4_benchmark "$label" "8" "" "$ctx" "0" "0" "true"; then
-      warn "Benchmark/validation failed for $label"
-    fi
+
+    # Run with explicit 1 warmup + 1 measured
+    PYTHONPATH="$REPO_ROOT" python3 "$REPO_ROOT/scripts/benchmark_quantization.py"       --run-real --endpoint "127.0.0.1:$BENCH_PORT" --models "$HOST_MODELS/$MODEL_FILE"       --stride "$STRIDE" --codec-context "$ctx" --holdback "0" --start-buffer-ms "0"       --warmup-runs 1 --measured-runs 1       --output-dir "$ARTIFACT_DIR" --candidate-dir "$label"       --text "$BENCHMARK_TEXT" --timeout "$TIMEOUT"       ${EFFECTIVE_VOICE:+--voice "$EFFECTIVE_VOICE"}       ${CONTAINER_VOICE_DIR:+--voice-dir "$CONTAINER_VOICE_DIR"}       || { warn "Benchmark failed for $label"; config_failed=true; }
+
     capture_metrics_q4 "$label" "$ARTIFACT_DIR/$label"
     docker logs "$BENCH_CONTAINER" 2>/dev/null > "$ARTIFACT_DIR/$label/startup.log" || true
     stop_gpu_telemetry; stop_cpu_telemetry; stop_backend
 
-    # Create WAV for listening
+    if [[ "$config_failed" == true ]]; then
+      FAILED=$((FAILED+1)); continue
+    fi
+
+    # Create WAV
     local wok=true
     while IFS= read -r -d '' pcm; do create_host_wav "$pcm" "${pcm%.pcm}.wav" || wok=false; done < <(find "$ARTIFACT_DIR/$label" -name '*.pcm' -print0 2>/dev/null || true)
     [[ "$wok" != true ]] && WAV_FAILURES=$((WAV_FAILURES+1))
 
-    local rj="$ARTIFACT_DIR/$label/results.json"
     if [[ -f "$rj" ]]; then
       local rtf=$(python3 -c "import json; d=json.load(open('$rj')); s=d['summaries'][0]; print(s['avg_rtf'])" 2>/dev/null || echo "999")
-      info "  ctx=$ctx: RTF=$rtf"
-      SUCCESSFUL=$((SUCCESSFUL+1))
+      local ok_count=$(python3 -c "import json; d=json.load(open('$rj')); measured=[r for s in d['summaries'] for r in s['runs'] if r.get('run_type')=='measured' and r.get('status')=='success']; print(len(measured))" 2>/dev/null || echo 0)
+      if [[ "$ok_count" -ge 1 ]]; then
+        info "  ctx=$ctx: RTF=$rtf, measured=$ok_count"
+        SUCCESSFUL=$((SUCCESSFUL+1))
+      else
+        warn "  ctx=$ctx: 0 measured runs succeeded"; FAILED=$((FAILED+1))
+      fi
     else
       MISSING_RESULTS=$((MISSING_RESULTS+1)); FAILED=$((FAILED+1))
     fi

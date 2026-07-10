@@ -235,12 +235,15 @@ class S2GenerateRequest:
             if self.stream_start_buffer_ms >= 0:
                 params["stream_start_buffer_ms"] = self.stream_start_buffer_ms
 
-        _VALID_CONTEXTS = frozenset({4, 64, 160})
         if self.codec_decode_context_frames is not None:
-            if self.codec_decode_context_frames not in _VALID_CONTEXTS:
+            if not isinstance(self.codec_decode_context_frames, int) or isinstance(self.codec_decode_context_frames, bool):
                 raise ValueError(
-                    f"codec_decode_context_frames must be one of "
-                    f"{sorted(_VALID_CONTEXTS)} or None, got "
+                    f"codec_decode_context_frames must be an integer, got "
+                    f"{type(self.codec_decode_context_frames).__name__}: {self.codec_decode_context_frames}"
+                )
+            if self.codec_decode_context_frames < 0:
+                raise ValueError(
+                    f"codec_decode_context_frames must be >= 0, got "
                     f"{self.codec_decode_context_frames}"
                 )
             params["codec_decode_context_frames"] = self.codec_decode_context_frames

@@ -538,6 +538,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Output JSON results to stdout",
     )
     parser.add_argument(
+        "--run-label",
+        default="",
+        help="Label for this run (used in artifact filenames)",
+    )
+    parser.add_argument(
         "--timeout",
         type=float,
         default=DEFAULT_TIMEOUT,

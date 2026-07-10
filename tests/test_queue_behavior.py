@@ -27,7 +27,7 @@ def test_single_worker_queue_rejects_when_capacity_is_full():
         first = asyncio.create_task(queue.run(blocker))
         await blocker_started.wait()
 
-        with pytest.raises(RuntimeError, match="queue is full"):
+        with pytest.raises(RuntimeError, match="Queue full"):
             await queue.run(lambda: asyncio.sleep(0))
 
         release_blocker.set()

@@ -10,6 +10,7 @@ use CUDA/GPU resources directly.
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Protocol
 from urllib.parse import urlparse
@@ -451,185 +452,286 @@ async def synthesize_s2cpp_streaming_tts_events(
             segment_sentences=request.segment_sentences,
             model=settings.s2_model)
 
-    try:
-        with client.generate_stream(request) as stream:
-            stream_content_type = getattr(stream, "content_type", None)
-            stream_headers = getattr(stream, "response_headers", None)
+    retry_count = 0
+    max_total_attempts = settings.s2_backend_busy_max_retries + 1
+    synthesis_deadline = time.monotonic() + settings.s2_synthesis_timeout_sec
 
-            headers_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
+    while True:
+        remaining = synthesis_deadline - time.monotonic()
+        if remaining <= 0:
+            raise asyncio.TimeoutError("Synthesis deadline passed before connection")
 
-            if stream_content_type is not None or stream_headers is not None:
-                pcm_format = parse_declared_pcm_s16le_format(
-                    content_type=stream_content_type or "",
-                    headers=stream_headers or {},
-                )
-                audio_config = FakeTtsConfig(
-                    sample_rate=pcm_format.sample_rate,
-                    duration_ms=config.duration_ms,
-                    chunk_ms=config.chunk_ms,
-                    width=pcm_format.width,
-                    channels=pcm_format.channels,
-                )
+        try:
+                with client.generate_stream(request) as stream:
+                    stream_content_type = getattr(stream, "content_type", None)
+                    stream_headers = getattr(stream, "response_headers", None)
 
-                obs_log("backend_stream_headers",
-                        connection_id=_ctx.connection_id,
-                        synthesis_id=_ctx.synthesis_id,
-                        text_fp=fp,
-                        content_type=stream_content_type,
-                        sample_rate=pcm_format.sample_rate,
-                        channels=pcm_format.channels,
-                        elapsed_ms=headers_elapsed_ms)
+                    headers_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
 
-            rechunker = StreamingPCMRechunker(
-                sample_rate=audio_config.sample_rate,
-                chunk_ms=audio_config.chunk_ms,
-                width=audio_config.width,
-                channels=audio_config.channels,
-            )
+                    if stream_content_type is not None or stream_headers is not None:
+                        pcm_format = parse_declared_pcm_s16le_format(
+                            content_type=stream_content_type or "",
+                            headers=stream_headers or {},
+                        )
+                        audio_config = FakeTtsConfig(
+                            sample_rate=pcm_format.sample_rate,
+                            duration_ms=config.duration_ms,
+                            chunk_ms=config.chunk_ms,
+                            width=pcm_format.width,
+                            channels=pcm_format.channels,
+                        )
 
-            # ── Compute initial buffer target ───────────────────────────
-            frame_size = audio_config.width * audio_config.channels
-            bytes_per_ms = audio_config.sample_rate * frame_size / 1000.0
-
-            estimated_long_form = False
-            buffer_policy = "zero"
-
-            if settings.s2_long_form_threshold_chars > 0 and len(request.text) >= settings.s2_long_form_threshold_chars:
-                estimated_long_form = True
-                buffer_target_ms = settings.s2_long_form_buffer_ms
-                buffer_policy = "long_form"
-            else:
-                buffer_target_ms = settings.s2_initial_buffer_ms
-
-            max_buffer_ms = settings.s2_max_initial_buffer_ms
-            if max_buffer_ms <= 0:
-                # Zero/negative max: buffering disabled (safe default)
-                buffer_target_ms = 0
-                buffer_target_bytes = 0
-            elif buffer_target_ms > max_buffer_ms:
-                buffer_target_ms = max_buffer_ms
-
-            if buffer_target_ms > 0:
-                buffer_target_bytes = int(buffer_target_ms * bytes_per_ms)
-                if buffer_target_bytes % frame_size != 0:
-                    buffer_target_bytes -= buffer_target_bytes % frame_size
-            else:
-                buffer_target_bytes = 0
-
-            max_buffer_bytes = int(max_buffer_ms * bytes_per_ms) if max_buffer_ms > 0 else 0
-            if max_buffer_bytes > 0:
-                if max_buffer_bytes % frame_size != 0:
-                    max_buffer_bytes -= max_buffer_bytes % frame_size
-
-            obs_log("buffer_policy",
-                    connection_id=_ctx.connection_id,
-                    synthesis_id=_ctx.synthesis_id,
-                    text_fp=fp,
-                    buffer_policy=buffer_policy,
-                    initial_buffer_target_ms=buffer_target_ms,
-                    initial_buffer_target_bytes=buffer_target_bytes,
-                    estimated_long_form=estimated_long_form,
-                    text_len=len(request.text))
-
-            # ── Buffering phase ──────────────────────────────────────────
-            buffered_pcm = bytearray()
-            backend_completed_before_buffer_target = False
-            audio_start_emitted = False
-
-            buffering_elapsed_ms = 0  # set when AudioStart is emitted
-            carryover = b""          # excess bytes from oversized chunk (Fix 4)
-
-            if buffer_target_bytes <= 0:
-                # Zero-buffer: emit AudioStart immediately (preserves current behavior)
-                buffering_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
-                obs_log("playback_emission_started",
-                        connection_id=_ctx.connection_id,
-                        synthesis_id=_ctx.synthesis_id,
-                        text_fp=fp,
-                        buffer_policy=buffer_policy,
-                        buffering_elapsed_ms=buffering_elapsed_ms,
-                        initial_buffer_target_ms=buffer_target_ms,
-                        initial_buffer_target_bytes=buffer_target_bytes,
-                        initial_buffered_audio_ms=0,
-                        backend_completed_before_buffer_target=False)
-
-                yield AudioStart(
-                    rate=audio_config.sample_rate,
-                    width=audio_config.width,
-                    channels=audio_config.channels,
-                ).event()
-                audio_start_emitted = True
-            else:
-                # Accumulate PCM until target reached, stream ends, or cap hit
-                while True:
-                    try:
-                        chunk = await asyncio.to_thread(_read_stream_chunk, stream)
-                    except S2ClientError:
-                        raise
-                    if chunk is _STREAM_EOF:
-                        backend_completed_before_buffer_target = True
-                        break
-
-                    if not backend_data_observed and chunk:
-                        metrics.record_first_backend_data()
-                        backend_data_observed = True
-                        first_audio_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
-                        obs_log("backend_stream_first_audio",
+                        obs_log("backend_stream_headers",
                                 connection_id=_ctx.connection_id,
                                 synthesis_id=_ctx.synthesis_id,
                                 text_fp=fp,
-                                elapsed_ms=first_audio_elapsed_ms)
+                                content_type=stream_content_type,
+                                sample_rate=pcm_format.sample_rate,
+                                channels=pcm_format.channels,
+                                elapsed_ms=headers_elapsed_ms)
 
-                    # ── Fix 4: bound oversized chunk at frame-aligned cap ──
-                    space_left = max_buffer_bytes - len(buffered_pcm)
-                    if len(chunk) > space_left:
-                        # Chunk would exceed cap — take only what fits (frame-aligned)
-                        take = space_left - (space_left % frame_size) if space_left % frame_size != 0 else space_left
-                        if take > 0:
-                            buffered_pcm.extend(chunk[:take])
-                        carryover = chunk[take:]
-                        break
+                    rechunker = StreamingPCMRechunker(
+                        sample_rate=audio_config.sample_rate,
+                        chunk_ms=audio_config.chunk_ms,
+                        width=audio_config.width,
+                        channels=audio_config.channels,
+                    )
+
+                    # ── Compute initial buffer target ───────────────────────────
+                    frame_size = audio_config.width * audio_config.channels
+                    bytes_per_ms = audio_config.sample_rate * frame_size / 1000.0
+
+                    estimated_long_form = False
+                    buffer_policy = "zero"
+
+                    if settings.s2_long_form_threshold_chars > 0 and len(request.text) >= settings.s2_long_form_threshold_chars:
+                        estimated_long_form = True
+                        buffer_target_ms = settings.s2_long_form_buffer_ms
+                        buffer_policy = "long_form"
                     else:
-                        buffered_pcm.extend(chunk)
+                        buffer_target_ms = settings.s2_initial_buffer_ms
 
-                    if len(buffered_pcm) >= max_buffer_bytes:
-                        break
-                    if len(buffered_pcm) >= buffer_target_bytes:
-                        break
+                    max_buffer_ms = settings.s2_max_initial_buffer_ms
+                    if max_buffer_ms <= 0:
+                        # Zero/negative max: buffering disabled (safe default)
+                        buffer_target_ms = 0
+                        buffer_target_bytes = 0
+                    elif buffer_target_ms > max_buffer_ms:
+                        buffer_target_ms = max_buffer_ms
 
-                if len(buffered_pcm) > 0:
-                    buffering_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
-                    buffered_audio_ms = int(len(buffered_pcm) * 1000 / (audio_config.sample_rate * frame_size))
-                    obs_log("initial_buffer_ready",
-                            connection_id=_ctx.connection_id,
-                            synthesis_id=_ctx.synthesis_id,
-                            text_fp=fp,
-                            initial_buffered_pcm_bytes=len(buffered_pcm),
-                            initial_buffered_audio_ms=buffered_audio_ms,
-                            initial_buffer_target_ms=buffer_target_ms,
-                            initial_buffer_target_bytes=buffer_target_bytes,
-                            max_buffer_reached=(len(buffered_pcm) >= max_buffer_bytes),
-                            backend_completed_before_buffer_target=backend_completed_before_buffer_target)
+                    if buffer_target_ms > 0:
+                        buffer_target_bytes = int(buffer_target_ms * bytes_per_ms)
+                        if buffer_target_bytes % frame_size != 0:
+                            buffer_target_bytes -= buffer_target_bytes % frame_size
+                    else:
+                        buffer_target_bytes = 0
 
-                    obs_log("playback_emission_started",
+                    max_buffer_bytes = int(max_buffer_ms * bytes_per_ms) if max_buffer_ms > 0 else 0
+                    if max_buffer_bytes > 0:
+                        if max_buffer_bytes % frame_size != 0:
+                            max_buffer_bytes -= max_buffer_bytes % frame_size
+
+                    obs_log("buffer_policy",
                             connection_id=_ctx.connection_id,
                             synthesis_id=_ctx.synthesis_id,
                             text_fp=fp,
                             buffer_policy=buffer_policy,
-                            buffering_elapsed_ms=buffering_elapsed_ms,
                             initial_buffer_target_ms=buffer_target_ms,
                             initial_buffer_target_bytes=buffer_target_bytes,
-                            initial_buffered_audio_ms=buffered_audio_ms,
-                            backend_completed_before_buffer_target=backend_completed_before_buffer_target)
+                            estimated_long_form=estimated_long_form,
+                            text_len=len(request.text))
 
-                    yield AudioStart(
-                        rate=audio_config.sample_rate,
-                        width=audio_config.width,
-                        channels=audio_config.channels,
-                    ).event()
-                    audio_start_emitted = True
+                    # ── Buffering phase ──────────────────────────────────────────
+                    buffered_pcm = bytearray()
+                    backend_completed_before_buffer_target = False
+                    audio_start_emitted = False
 
-                    for audio_bytes, timestamp_ms in rechunker.feed(bytes(buffered_pcm)):
+                    buffering_elapsed_ms = 0  # set when AudioStart is emitted
+                    carryover = b""          # excess bytes from oversized chunk (Fix 4)
+
+                    if buffer_target_bytes <= 0:
+                        # Zero-buffer: emit AudioStart immediately (preserves current behavior)
+                        buffering_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
+                        obs_log("playback_emission_started",
+                                connection_id=_ctx.connection_id,
+                                synthesis_id=_ctx.synthesis_id,
+                                text_fp=fp,
+                                buffer_policy=buffer_policy,
+                                buffering_elapsed_ms=buffering_elapsed_ms,
+                                initial_buffer_target_ms=buffer_target_ms,
+                                initial_buffer_target_bytes=buffer_target_bytes,
+                                initial_buffered_audio_ms=0,
+                                backend_completed_before_buffer_target=False)
+
+                        yield AudioStart(
+                            rate=audio_config.sample_rate,
+                            width=audio_config.width,
+                            channels=audio_config.channels,
+                        ).event()
+                        audio_start_emitted = True
+                    else:
+                        # Accumulate PCM until target reached, stream ends, or cap hit
+                        while True:
+                            try:
+                                chunk = await asyncio.to_thread(_read_stream_chunk, stream)
+                            except S2ClientError:
+                                raise
+                            if chunk is _STREAM_EOF:
+                                backend_completed_before_buffer_target = True
+                                break
+
+                            if not backend_data_observed and chunk:
+                                metrics.record_first_backend_data()
+                                backend_data_observed = True
+                                first_audio_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
+                                obs_log("backend_stream_first_audio",
+                                        connection_id=_ctx.connection_id,
+                                        synthesis_id=_ctx.synthesis_id,
+                                        text_fp=fp,
+                                        elapsed_ms=first_audio_elapsed_ms)
+
+                            # ── Fix 4: bound oversized chunk at frame-aligned cap ──
+                            space_left = max_buffer_bytes - len(buffered_pcm)
+                            if len(chunk) > space_left:
+                                # Chunk would exceed cap — take only what fits (frame-aligned)
+                                take = space_left - (space_left % frame_size) if space_left % frame_size != 0 else space_left
+                                if take > 0:
+                                    buffered_pcm.extend(chunk[:take])
+                                carryover = chunk[take:]
+                                break
+                            else:
+                                buffered_pcm.extend(chunk)
+
+                            if len(buffered_pcm) >= max_buffer_bytes:
+                                break
+                            if len(buffered_pcm) >= buffer_target_bytes:
+                                break
+
+                        if len(buffered_pcm) > 0:
+                            buffering_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
+                            buffered_audio_ms = int(len(buffered_pcm) * 1000 / (audio_config.sample_rate * frame_size))
+                            obs_log("initial_buffer_ready",
+                                    connection_id=_ctx.connection_id,
+                                    synthesis_id=_ctx.synthesis_id,
+                                    text_fp=fp,
+                                    initial_buffered_pcm_bytes=len(buffered_pcm),
+                                    initial_buffered_audio_ms=buffered_audio_ms,
+                                    initial_buffer_target_ms=buffer_target_ms,
+                                    initial_buffer_target_bytes=buffer_target_bytes,
+                                    max_buffer_reached=(len(buffered_pcm) >= max_buffer_bytes),
+                                    backend_completed_before_buffer_target=backend_completed_before_buffer_target)
+
+                            obs_log("playback_emission_started",
+                                    connection_id=_ctx.connection_id,
+                                    synthesis_id=_ctx.synthesis_id,
+                                    text_fp=fp,
+                                    buffer_policy=buffer_policy,
+                                    buffering_elapsed_ms=buffering_elapsed_ms,
+                                    initial_buffer_target_ms=buffer_target_ms,
+                                    initial_buffer_target_bytes=buffer_target_bytes,
+                                    initial_buffered_audio_ms=buffered_audio_ms,
+                                    backend_completed_before_buffer_target=backend_completed_before_buffer_target)
+
+                            yield AudioStart(
+                                rate=audio_config.sample_rate,
+                                width=audio_config.width,
+                                channels=audio_config.channels,
+                            ).event()
+                            audio_start_emitted = True
+
+                            for audio_bytes, timestamp_ms in rechunker.feed(bytes(buffered_pcm)):
+                                metrics.record_first_audio_chunk()
+                                if not first_audio_emitted:
+                                    first_audio_emitted = True
+                                    wyoming_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
+                                    obs_log("first_wyoming_audio",
+                                            connection_id=_ctx.connection_id,
+                                            synthesis_id=_ctx.synthesis_id,
+                                            text_fp=fp,
+                                            elapsed_ms=wyoming_elapsed_ms,
+                                            time_to_first_backend_audio_ms=first_audio_elapsed_ms if backend_data_observed else 0,
+                                            wrapper_first_audio_forwarding_overhead_ms=wyoming_elapsed_ms - first_audio_elapsed_ms if backend_data_observed else 0)
+                                yield AudioChunk(
+                                    rate=audio_config.sample_rate,
+                                    width=audio_config.width,
+                                    channels=audio_config.channels,
+                                    audio=audio_bytes,
+                                    timestamp=timestamp_ms,
+                                ).event()
+                                metrics.record_emitted_chunk(len(audio_bytes))
+
+                            buffered_pcm = bytearray()
+
+                    # ── Progressive streaming phase ──────────────────────────────
+                    if carryover and not backend_completed_before_buffer_target:
+                        # Process excess from oversized buffered chunk
+                        for audio_bytes, timestamp_ms in rechunker.feed(carryover):
+                            metrics.record_first_audio_chunk()
+                            if not first_audio_emitted:
+                                first_audio_emitted = True
+                                wyoming_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
+                                obs_log("first_wyoming_audio",
+                                        connection_id=_ctx.connection_id,
+                                        synthesis_id=_ctx.synthesis_id,
+                                        text_fp=fp,
+                                        elapsed_ms=wyoming_elapsed_ms,
+                                        time_to_first_backend_audio_ms=first_audio_elapsed_ms if backend_data_observed else 0,
+                                        wrapper_first_audio_forwarding_overhead_ms=wyoming_elapsed_ms - first_audio_elapsed_ms if backend_data_observed else 0)
+                            yield AudioChunk(
+                                rate=audio_config.sample_rate,
+                                width=audio_config.width,
+                                channels=audio_config.channels,
+                                audio=audio_bytes,
+                                timestamp=timestamp_ms,
+                            ).event()
+                            metrics.record_emitted_chunk(len(audio_bytes))
+                        carryover = b""
+
+                    if not backend_completed_before_buffer_target:
+                        while True:
+                            if time.monotonic() >= synthesis_deadline:
+                                raise asyncio.TimeoutError("Synthesis timeout exceeded")
+                            try:
+                                chunk = await asyncio.to_thread(_read_stream_chunk, stream)
+                            except S2ClientError:
+                                raise
+                            if chunk is _STREAM_EOF:
+                                break
+
+                            if not backend_data_observed and chunk:
+                                metrics.record_first_backend_data()
+                                backend_data_observed = True
+                                first_audio_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
+                                obs_log("backend_stream_first_audio",
+                                        connection_id=_ctx.connection_id,
+                                        synthesis_id=_ctx.synthesis_id,
+                                        text_fp=fp,
+                                        elapsed_ms=first_audio_elapsed_ms)
+
+                            for audio_bytes, timestamp_ms in rechunker.feed(chunk):
+                                metrics.record_first_audio_chunk()
+                                if not first_audio_emitted:
+                                    first_audio_emitted = True
+                                    wyoming_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
+                                    obs_log("first_wyoming_audio",
+                                            connection_id=_ctx.connection_id,
+                                            synthesis_id=_ctx.synthesis_id,
+                                            text_fp=fp,
+                                            elapsed_ms=wyoming_elapsed_ms,
+                                            time_to_first_backend_audio_ms=first_audio_elapsed_ms,
+                                            wrapper_first_audio_forwarding_overhead_ms=wyoming_elapsed_ms - first_audio_elapsed_ms)
+                                yield AudioChunk(
+                                    rate=audio_config.sample_rate,
+                                    width=audio_config.width,
+                                    channels=audio_config.channels,
+                                    audio=audio_bytes,
+                                    timestamp=timestamp_ms,
+                                ).event()
+                                metrics.record_emitted_chunk(len(audio_bytes))
+
+                    # ── Flush remaining frames and emit AudioStop ────────────────
+                    flush_chunks = []
+                    for audio_bytes, timestamp_ms in rechunker.flush():
                         metrics.record_first_audio_chunk()
                         if not first_audio_emitted:
                             first_audio_emitted = True
@@ -649,208 +751,142 @@ async def synthesize_s2cpp_streaming_tts_events(
                             timestamp=timestamp_ms,
                         ).event()
                         metrics.record_emitted_chunk(len(audio_bytes))
+                        flush_chunks.append(len(audio_bytes))
 
-                    buffered_pcm = bytearray()
-
-            # ── Progressive streaming phase ──────────────────────────────
-            if carryover and not backend_completed_before_buffer_target:
-                # Process excess from oversized buffered chunk
-                for audio_bytes, timestamp_ms in rechunker.feed(carryover):
-                    metrics.record_first_audio_chunk()
-                    if not first_audio_emitted:
-                        first_audio_emitted = True
-                        wyoming_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
-                        obs_log("first_wyoming_audio",
-                                connection_id=_ctx.connection_id,
-                                synthesis_id=_ctx.synthesis_id,
-                                text_fp=fp,
-                                elapsed_ms=wyoming_elapsed_ms,
-                                time_to_first_backend_audio_ms=first_audio_elapsed_ms if backend_data_observed else 0,
-                                wrapper_first_audio_forwarding_overhead_ms=wyoming_elapsed_ms - first_audio_elapsed_ms if backend_data_observed else 0)
-                    yield AudioChunk(
-                        rate=audio_config.sample_rate,
-                        width=audio_config.width,
-                        channels=audio_config.channels,
-                        audio=audio_bytes,
-                        timestamp=timestamp_ms,
-                    ).event()
-                    metrics.record_emitted_chunk(len(audio_bytes))
-                carryover = b""
-
-            if not backend_completed_before_buffer_target:
-                while True:
-                    if time.monotonic() >= synthesis_deadline:
-                        raise asyncio.TimeoutError("Synthesis timeout exceeded")
-                    try:
-                        chunk = await asyncio.to_thread(_read_stream_chunk, stream)
-                    except S2ClientError:
-                        raise
-                    if chunk is _STREAM_EOF:
-                        break
-
-                    if not backend_data_observed and chunk:
-                        metrics.record_first_backend_data()
-                        backend_data_observed = True
-                        first_audio_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
-                        obs_log("backend_stream_first_audio",
-                                connection_id=_ctx.connection_id,
-                                synthesis_id=_ctx.synthesis_id,
-                                text_fp=fp,
-                                elapsed_ms=first_audio_elapsed_ms)
-
-                    for audio_bytes, timestamp_ms in rechunker.feed(chunk):
-                        metrics.record_first_audio_chunk()
-                        if not first_audio_emitted:
-                            first_audio_emitted = True
-                            wyoming_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
-                            obs_log("first_wyoming_audio",
-                                    connection_id=_ctx.connection_id,
-                                    synthesis_id=_ctx.synthesis_id,
-                                    text_fp=fp,
-                                    elapsed_ms=wyoming_elapsed_ms,
-                                    time_to_first_backend_audio_ms=first_audio_elapsed_ms,
-                                    wrapper_first_audio_forwarding_overhead_ms=wyoming_elapsed_ms - first_audio_elapsed_ms)
-                        yield AudioChunk(
-                            rate=audio_config.sample_rate,
-                            width=audio_config.width,
-                            channels=audio_config.channels,
-                            audio=audio_bytes,
-                            timestamp=timestamp_ms,
+                    if audio_start_emitted:
+                        yield AudioStop(
+                            timestamp=int(
+                                rechunker.cumulative_frames * 1000 / audio_config.sample_rate
+                            )
                         ).event()
-                        metrics.record_emitted_chunk(len(audio_bytes))
 
-            # ── Flush remaining frames and emit AudioStop ────────────────
-            flush_chunks = []
-            for audio_bytes, timestamp_ms in rechunker.flush():
-                metrics.record_first_audio_chunk()
-                if not first_audio_emitted:
-                    first_audio_emitted = True
-                    wyoming_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
-                    obs_log("first_wyoming_audio",
+                    total_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
+                    obs_log("backend_stream_done",
                             connection_id=_ctx.connection_id,
                             synthesis_id=_ctx.synthesis_id,
                             text_fp=fp,
-                            elapsed_ms=wyoming_elapsed_ms,
-                            time_to_first_backend_audio_ms=first_audio_elapsed_ms if backend_data_observed else 0,
-                            wrapper_first_audio_forwarding_overhead_ms=wyoming_elapsed_ms - first_audio_elapsed_ms if backend_data_observed else 0)
-                yield AudioChunk(
-                    rate=audio_config.sample_rate,
-                    width=audio_config.width,
-                    channels=audio_config.channels,
-                    audio=audio_bytes,
-                    timestamp=timestamp_ms,
-                ).event()
-                metrics.record_emitted_chunk(len(audio_bytes))
-                flush_chunks.append(len(audio_bytes))
+                            total_backend_stream_ms=total_elapsed_ms,
+                            total_pcm_bytes=metrics.total_emitted_bytes,
+                            chunk_count=metrics.emitted_chunk_count,
+                            status="ok")
 
-            if audio_start_emitted:
-                yield AudioStop(
-                    timestamp=int(
-                        rechunker.cumulative_frames * 1000 / audio_config.sample_rate
-                    )
-                ).event()
+                    obs_log("audio_out",
+                            connection_id=_ctx.connection_id,
+                            synthesis_id=_ctx.synthesis_id,
+                            text_fp=fp,
+                            audio_start=audio_start_emitted,
+                            chunk_count=metrics.emitted_chunk_count,
+                            pcm_bytes=metrics.total_emitted_bytes,
+                            audio_stop=audio_start_emitted,
+                            mode="streaming",
+                            buffer_policy=buffer_policy,
+                            status="ok")
 
+                metrics.finalize("success")
+                break  # exit retry loop on success
+
+        except S2BackendBusyError as exc:
+            retry_count += 1
+            obs_log("backend_busy",
+                    connection_id=_ctx.connection_id,
+                    synthesis_id=_ctx.synthesis_id,
+                    text_fp=fp,
+                    attempt=retry_count + 1,
+                    max_attempts=max_total_attempts,
+                    pcm_observed=backend_data_observed,
+                    audio_start_emitted=first_audio_emitted)
+            if not backend_data_observed and not first_audio_emitted                 and retry_count < max_total_attempts:
+                obs_log("backend_busy_retry",
+                        connection_id=_ctx.connection_id,
+                        synthesis_id=_ctx.synthesis_id,
+                        text_fp=fp,
+                        retry_count=retry_count,
+                        max_total_attempts=max_total_attempts,
+                        delay_ms=settings.s2_backend_busy_retry_delay_ms)
+                await asyncio.sleep(
+                    settings.s2_backend_busy_retry_delay_ms / 1000.0)
+                continue
+            obs_log("backend_busy_exhausted",
+                    connection_id=_ctx.connection_id,
+                    synthesis_id=_ctx.synthesis_id,
+                    text_fp=fp,
+                    retry_count=retry_count,
+                    max_total_attempts=max_total_attempts,
+                    pcm_observed=backend_data_observed,
+                    audio_start_emitted=first_audio_emitted)
+            metrics.finalize("error", "backend_busy_exhausted")
+            raise
+        except asyncio.TimeoutError:
+            obs_log("synthesis_timeout",
+                    connection_id=_ctx.connection_id,
+                    synthesis_id=_ctx.synthesis_id,
+                    text_fp=fp,
+                    elapsed_ms=int((time.monotonic() - stream_start) * 1000),
+                    pcm_bytes_received=metrics.total_emitted_bytes,
+                    chunk_count=metrics.emitted_chunk_count,
+                    audio_start_emitted=first_audio_emitted)
+            metrics.finalize("error", "synthesis_timeout")
+            raise
+        except (GeneratorExit, asyncio.CancelledError) as exc:
+            total_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
+            # Explicitly close the backend stream so any blocked
+            # asyncio.to_thread(read) is unblocked promptly.
+            try:
+                stream.cancel()  # type: ignore[possibly-unbound]
+            except Exception:
+                pass
+            obs_log("synthesis_cancelled",
+                    connection_id=_ctx.connection_id,
+                    synthesis_id=_ctx.synthesis_id,
+                    text_fp=fp,
+                    reason=type(exc).__name__,
+                    elapsed_ms=total_elapsed_ms,
+                    pcm_bytes_received=metrics.total_emitted_bytes,
+                    chunk_count=metrics.emitted_chunk_count,
+                    audio_start_emitted=first_audio_emitted)
+            # The ``with`` block's ``__exit__`` also cleans up the stream.
+            metrics.finalize("cancelled")
+            raise
+        except S2ClientError:
             total_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
             obs_log("backend_stream_done",
                     connection_id=_ctx.connection_id,
                     synthesis_id=_ctx.synthesis_id,
                     text_fp=fp,
-                    total_backend_stream_ms=total_elapsed_ms,
-                    total_pcm_bytes=metrics.total_emitted_bytes,
-                    chunk_count=metrics.emitted_chunk_count,
-                    status="ok")
-
-            obs_log("audio_out",
+                    total_elapsed_ms=total_elapsed_ms,
+                    status="error",
+                    error="S2ClientError")
+            metrics.finalize("error", "S2ClientError")
+            raise
+        except Exception:
+            total_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
+            exc_name = type(sys.exc_info()[1]).__name__
+            obs_log("backend_stream_done",
                     connection_id=_ctx.connection_id,
                     synthesis_id=_ctx.synthesis_id,
                     text_fp=fp,
-                    audio_start=audio_start_emitted,
-                    chunk_count=metrics.emitted_chunk_count,
-                    pcm_bytes=metrics.total_emitted_bytes,
-                    audio_stop=audio_start_emitted,
-                    mode="streaming",
-                    buffer_policy=buffer_policy,
-                    status="ok")
-
-        metrics.finalize("success")
-
-    except S2BackendBusyError:
-        obs_log("backend_stream_done",
-                connection_id=_ctx.connection_id,
-                synthesis_id=_ctx.synthesis_id,
-                text_fp=fp,
-                total_elapsed_ms=int((time.monotonic() - stream_start) * 1000),
-                status="error",
-                error="backend_busy",
-                audio_start_emitted=first_audio_emitted)
-        metrics.finalize("error", "backend_busy")
-        raise
-    except asyncio.TimeoutError:
-        obs_log("synthesis_timeout",
-                connection_id=_ctx.connection_id,
-                synthesis_id=_ctx.synthesis_id,
-                text_fp=fp,
-                elapsed_ms=int((time.monotonic() - stream_start) * 1000),
-                pcm_bytes_received=metrics.total_emitted_bytes,
-                chunk_count=metrics.emitted_chunk_count,
-                audio_start_emitted=first_audio_emitted)
-        metrics.finalize("error", "synthesis_timeout")
-        raise
-    except (GeneratorExit, asyncio.CancelledError) as exc:
-        total_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
-        # Explicitly close the backend stream so any blocked
-        # asyncio.to_thread(read) is unblocked promptly.
-        try:
-            stream.cancel()  # type: ignore[possibly-unbound]
-        except Exception:
-            pass
-        obs_log("synthesis_cancelled",
-                connection_id=_ctx.connection_id,
-                synthesis_id=_ctx.synthesis_id,
-                text_fp=fp,
-                reason=type(exc).__name__,
-                elapsed_ms=total_elapsed_ms,
-                pcm_bytes_received=metrics.total_emitted_bytes,
-                chunk_count=metrics.emitted_chunk_count,
-                audio_start_emitted=first_audio_emitted)
-        # The ``with`` block's ``__exit__`` also cleans up the stream.
-        metrics.finalize("cancelled")
-        raise
-    except S2ClientError:
-        total_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
-        obs_log("backend_stream_done",
-                connection_id=_ctx.connection_id,
-                synthesis_id=_ctx.synthesis_id,
-                text_fp=fp,
-                total_elapsed_ms=total_elapsed_ms,
-                status="error",
-                error="S2ClientError")
-        metrics.finalize("error", "S2ClientError")
-        raise
-    except Exception:
-        total_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
-        exc_name = type(sys.exc_info()[1]).__name__
-        obs_log("backend_stream_done",
-                connection_id=_ctx.connection_id,
-                synthesis_id=_ctx.synthesis_id,
-                text_fp=fp,
-                total_elapsed_ms=total_elapsed_ms,
-                status="error",
-                error=exc_name)
-        metrics.finalize("error", exc_name)
-        raise
+                    total_elapsed_ms=total_elapsed_ms,
+                    status="error",
+                    error=exc_name)
+            metrics.finalize("error", exc_name)
+            raise
 
 
 class QueueFullError(RuntimeError):
     """Raised when the synthesis queue is at capacity."""
 
+
 class QueueTimeoutError(asyncio.TimeoutError):
     """Raised when a waiting request exceeds the queue wait timeout."""
 
-class SingleWorkerSynthesisQueue:
-    """Bounded FIFO queue gate ensuring one active backend synthesis at a time.
 
-    Semantics: ``max_size`` INCLUDES the active synthesis.
+class SingleWorkerSynthesisQueue:
+    """Bounded FIFO queue gate with explicit ownership handoff.
+
+    Uses a :class:`collections.deque` of waiter futures for
+    deterministic FIFO activation.  Ownership is transferred by
+    resolving the next waiter's future — no :class:`asyncio.Semaphore`
+    is used for FIFO guarantees.
     """
 
     worker_count = 1
@@ -860,14 +896,13 @@ class SingleWorkerSynthesisQueue:
             raise ValueError("max_size must be positive")
         self.max_size = max_size
         self.wait_timeout_sec = wait_timeout_sec
-        self._semaphore = asyncio.Semaphore(1)
-        self._pending = 0
-        self._depth = 0
         self._lock = asyncio.Lock()
+        self._active = False
+        self._depth = 0
+        self._pending = 0
+        self._waiters: deque = deque()
         self._active_synthesis_id: str | None = None
         self._active_task: asyncio.Task | None = None
-        self._waiting: dict[str, asyncio.Event] = {}
-        self._waiting_connections: dict[str, set[str]] = {}
 
     @property
     def pending(self) -> int:
@@ -877,81 +912,113 @@ class SingleWorkerSynthesisQueue:
     def depth(self) -> int:
         return self._depth
 
-    async def run(self, operation, synthesis_id="", connection_id="") -> None:
-        obs_log("queue_request_received", synthesis_id=synthesis_id,
-                connection_id=connection_id, queue_depth=self._depth,
-                max_queue_size=self.max_size)
+    async def run(self, operation,
+                  synthesis_id: str = "", connection_id: str = "") -> None:
+        obs_log("queue_request_received",
+                synthesis_id=synthesis_id, connection_id=connection_id,
+                queue_depth=self._depth, max_queue_size=self.max_size)
+        future = None
+        acquired = False
         async with self._lock:
             if self._depth >= self.max_size:
                 obs_log("queue_rejected", synthesis_id=synthesis_id,
                         connection_id=connection_id, queue_depth=self._depth,
                         max_queue_size=self.max_size, reason="queue_full")
                 raise QueueFullError(
-                    f"Synthesis queue is full (depth={self._depth}, max={self.max_size})")
-            self._depth += 1; self._pending += 1
+                    f"Queue full (depth={self._depth}, max={self.max_size})")
+            self._depth += 1
+            self._pending += 1
             obs_log("queue_admitted", synthesis_id=synthesis_id,
                     connection_id=connection_id, queue_depth=self._depth,
                     max_queue_size=self.max_size)
-        cancel_event = asyncio.Event()
-        if synthesis_id: self._waiting[synthesis_id] = cancel_event
-        if connection_id and synthesis_id:
-            self._waiting_connections.setdefault(connection_id, set()).add(synthesis_id)
-        def _release():
-            if synthesis_id: self._waiting.pop(synthesis_id, None)
-            if connection_id and synthesis_id:
-                cs = self._waiting_connections.get(connection_id)
-                if cs: cs.discard(synthesis_id)
-                if not cs: self._waiting_connections.pop(connection_id, None)
-        try:
-            obs_log("queue_wait_started", synthesis_id=synthesis_id,
-                    connection_id=connection_id, queue_depth=self._depth)
-            if self.wait_timeout_sec > 0:
-                try:
-                    await asyncio.wait_for(self._semaphore.acquire(),
-                                           timeout=self.wait_timeout_sec)
-                except asyncio.TimeoutError:
-                    obs_log("queue_wait_timeout", synthesis_id=synthesis_id,
-                            connection_id=connection_id, queue_depth=self._depth,
-                            wait_timeout_sec=self.wait_timeout_sec)
-                    raise QueueTimeoutError(f"Queue wait timeout after {self.wait_timeout_sec}s")
+            if not self._active:
+                self._active = True
+                self._active_synthesis_id = synthesis_id
+                self._active_task = asyncio.current_task()
+                acquired = True
             else:
-                await self._semaphore.acquire()
-            if cancel_event.is_set():
+                future = asyncio.get_running_loop().create_future()
+                self._waiters.append((synthesis_id, future, connection_id))
+                obs_log("queue_wait_started", synthesis_id=synthesis_id,
+                        connection_id=connection_id,
+                        queue_depth=self._depth)
+
+        if not acquired:
+            try:
+                await asyncio.wait_for(future, timeout=self.wait_timeout_sec)
+            except asyncio.TimeoutError:
+                async with self._lock:
+                    for j, (_sid, fut, _cid) in enumerate(self._waiters):
+                        if fut is future:
+                            del self._waiters[j]
+                            break
+                    self._depth -= 1
+                    self._pending -= 1
+                obs_log("queue_wait_timeout", synthesis_id=synthesis_id,
+                        connection_id=connection_id,
+                        queue_depth=self._depth,
+                        wait_timeout_sec=self.wait_timeout_sec)
+                raise QueueTimeoutError(
+                    f"Queue wait timeout after {self.wait_timeout_sec}s")
+            except asyncio.CancelledError:
+                async with self._lock:
+                    for j, (_sid, fut, _cid) in enumerate(self._waiters):
+                        if fut is future:
+                            del self._waiters[j]
+                            break
+                    self._depth -= 1
+                    self._pending -= 1
                 obs_log("queue_cancelled", synthesis_id=synthesis_id,
-                        connection_id=connection_id, reason="cancelled_while_waiting")
-                self._semaphore.release()
-                raise asyncio.CancelledError("Request cancelled while waiting")
-            self._active_synthesis_id = synthesis_id
-            self._active_task = asyncio.current_task()
-            obs_log("queue_started", synthesis_id=synthesis_id,
-                    connection_id=connection_id, queue_depth=self._depth)
+                        connection_id=connection_id,
+                        reason="cancelled_while_waiting")
+                raise
+
+        obs_log("queue_started", synthesis_id=synthesis_id,
+                connection_id=connection_id, queue_depth=self._depth)
+
+        try:
             await operation()
         except (asyncio.CancelledError, QueueTimeoutError):
             raise
         finally:
-            _release()
-            try: self._semaphore.release()
-            except RuntimeError: pass
             async with self._lock:
-                self._pending -= 1; self._depth -= 1
+                self._depth -= 1
+                self._pending -= 1
                 if self._active_synthesis_id == synthesis_id:
-                    self._active_synthesis_id = None; self._active_task = None
+                    self._active_synthesis_id = None
+                    self._active_task = None
+                if self._waiters:
+                    nsid, nfut, _nc = self._waiters.popleft()
+                    self._active_synthesis_id = nsid
+                    nfut.set_result(None)
+                else:
+                    self._active = False
             obs_log("queue_depth_changed", synthesis_id=synthesis_id,
                     connection_id=connection_id, queue_depth=self._depth)
 
-    def cancel_waiting(self, connection_id: str) -> int:
-        sids = self._waiting_connections.get(connection_id, set()).copy()
-        count = 0
-        for sid in sids:
-            ev = self._waiting.get(sid)
-            if ev is not None: ev.set(); count += 1
-        self._waiting_connections.pop(connection_id, None)
-        return count
+    async def cancel_waiting(self, connection_id: str) -> int:
+        cancelled = 0
+        async with self._lock:
+            keep = []
+            for sid, fut, cid in self._waiters:
+                if cid == connection_id:
+                    fut.cancel()
+                    self._depth -= 1
+                    self._pending -= 1
+                    cancelled += 1
+                else:
+                    keep.append((sid, fut, cid))
+            self._waiters = deque(keep)
+        return cancelled
 
     def cancel_active_if_matches(self, synthesis_id: str) -> bool:
-        if self._active_synthesis_id == synthesis_id and self._active_task is not None:
-            self._active_task.cancel(); return True
+        if (self._active_synthesis_id == synthesis_id
+                and self._active_task is not None):
+            self._active_task.cancel()
+            return True
         return False
+
+
 
 
 def _resolve_voice_from_synthesize(

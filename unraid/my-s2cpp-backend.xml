@@ -34,7 +34,8 @@ CUDA base: nvidia/cuda:12.4.1-runtime-ubuntu22.04
   <WebUI>http://[IP]:[PORT:3031]/</WebUI>
   <TemplateURL>https://raw.githubusercontent.com/sorilo/wyoming-s2cpp-tts/main/unraid/my-s2cpp-backend.xml</TemplateURL>
   <Icon>https://raw.githubusercontent.com/sorilo/wyoming-s2cpp-tts/main/unraid/s2cpp-icon.png</Icon>
-  <ExtraParams>--cpuset-cpus=0-15 <!-- i9-13900K P-cores: remove on different hardware --> --runtime=nvidia</ExtraParams>
+  <!-- i9-13900K-specific P-core pin; remove on different hardware -->
+  <ExtraParams>--runtime=nvidia --cpuset-cpus=0-15</ExtraParams>
 
   <!-- GPU configuration -->
   <Config Name="NVIDIA_VISIBLE_DEVICES" Target="NVIDIA_VISIBLE_DEVICES" Default="" Mode="" Description="GPU UUID or index. Leave empty for all GPUs, or set a specific UUID from nvidia-smi. Example: GPU-abc123-def456. Use nvidia-smi on the host to list available GPUs." Type="Variable" Display="always" Required="false" Mask="false"></Config>
@@ -56,7 +57,7 @@ CUDA base: nvidia/cuda:12.4.1-runtime-ubuntu22.04
 
   <!-- Performance tuning -->
   <Config Name="GPU Layers" Target="S2_GPU_LAYERS" Default="-1" Mode="" Description="Number of transformer layers to offload to GPU. -1 = all 36 layers (auto). For limited VRAM, try 18, 10, or fewer. 0 = CPU only." Type="Variable" Display="always" Required="false" Mask="false">-1</Config>
-  <Config Name="CPU Threads" Target="S2_THREADS" Default="0" Mode="" Description="Number of CPU threads. 0 = auto-detect." Type="Variable" Display="advanced" Required="false" Mask="false">0</Config>
+  <Config Name="CPU Threads" Target="S2_THREADS" Default="8" Mode="" Description="Number of CPU threads. 0 = auto-detect." Type="Variable" Display="advanced" Required="false" Mask="false">8</Config>
   <Config Name="Codec on CPU" Target="S2_CODEC_CPU" Default="false" Mode="" Description="Keep the audio codec on CPU instead of GPU. Enable if VRAM is tight (saves ~0.4 GB VRAM)." Type="Variable" Display="advanced" Required="false" Mask="false">false</Config>
   <Config Name="Voice Directory" Target="S2_VOICE_DIR" Default="/voices" Mode="" Description="Directory for saved .s2voice profiles inside the container." Type="Variable" Display="advanced" Required="false" Mask="false">/voices</Config>
   <Config Name="Log Level" Target="S2_LOG_LEVEL" Default="info" Mode="" Description="Runtime verbosity: error, warn, info, or debug." Type="Variable" Display="advanced" Required="false" Mask="false">info</Config>

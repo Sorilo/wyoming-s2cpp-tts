@@ -60,7 +60,7 @@ docker inspect s2cpp-backend --format "{{.Config.Image}} {{.Image}}"
 docker inspect wyoming-s2cpp-tts --format "{{.Config.Image}} {{.Image}}"
 
 # Verify environment
-docker inspect wyoming-s2cpp-tts --format "{{range .Config.Env}}{{println .}}{{end}}" | grep -E "S2_CODEC|S2_STRIDE|S2_LOW|S2_VOICE"
+docker inspect wyoming-s2cpp-tts --format "{{range .Config.Env}}{{println .}}{{end}}" | grep -E "S2_STREAM|S2_CODEC|S2_STRIDE|S2_INITIAL_BUFFER|S2_LOW_LATENCY|S2_DEFAULT_VOICE"
 ```
 
 ```bash
@@ -71,8 +71,8 @@ docker logs s2cpp-backend 2>&1 | grep "Launching:"
 docker logs wyoming-s2cpp-tts 2>&1 | grep "backend_start"
 
 # Wyoming discovery
-# TCP connectivity check (Wyoming is not HTTP — use docker inspect instead)
-docker inspect wyoming-s2cpp-tts --format "{{.Config.Image}} {{.Image}}"
+# TCP connectivity check (Wyoming protocol, not HTTP)
+nc -vz 192.168.1.45 10200 || bash -c "echo > /dev/tcp/192.168.1.45/10200" 2>/dev/null && echo "Port 10200 reachable" || echo "Port 10200 NOT reachable"
 ```
 
 ## Listening Test

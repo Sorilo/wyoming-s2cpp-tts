@@ -349,3 +349,32 @@ def test_config_s2_stream_default_is_true() -> None:
     assert "S2_STREAM = True" in content, (
         "S2_STREAM must default to True"
     )
+
+
+def test_wrapper_context_is_32():
+    content = _read(UNRAID_TEMPLATE)
+    assert 'S2_CODEC_CONTEXT_FRAMES" Default="32"' in content
+    assert 'S2_CODEC_CONTEXT_FRAMES" Default="32"' in content  # attribute
+    # '>32<' is the expected element value
+    import re
+    m = re.search(r'S2_CODEC_CONTEXT_FRAMES"[^>]*>([^<]+)<', content)
+    assert m and m.group(1) == '32', f'Element value is {m.group(1) if m else "??"}'
+
+def test_wrapper_stride_is_32():
+    content = _read(UNRAID_TEMPLATE)
+    import re
+    m = re.search(r'S2_STREAM_DECODE_STRIDE_FRAMES"[^>]*>([^<]+)<', content)
+    assert m and m.group(1) == '32'
+
+def test_wrapper_voice_is_cmu_bdl_male_us():
+    content = _read(UNRAID_TEMPLATE)
+    import re
+    m = re.search(r'S2_DEFAULT_VOICE"[^>]*>([^<]+)<', content)
+    assert m and m.group(1) == 'cmu_bdl_male_us'
+
+def test_wrapper_initial_buffer_is_0():
+    content = _read(UNRAID_TEMPLATE)
+    assert 'S2_INITIAL_BUFFER_MS' in content
+    import re
+    m = re.search(r'S2_INITIAL_BUFFER_MS"[^>]*>([^<]+)<', content)
+    assert m and m.group(1) == '0'

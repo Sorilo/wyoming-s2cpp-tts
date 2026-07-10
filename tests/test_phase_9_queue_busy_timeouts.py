@@ -255,8 +255,10 @@ class _ControllableMockStream:
             self._backend.recorder.record(
                 event="stream_blocked", stream_id=id(self),
             )
-            if not self._behavior.block_event.wait(timeout=5):
-                raise S2ClientError("mock stream blocked timeout")
+            self._behavior.block_event.wait(timeout=30)
+            # Check cancelled/closed after waking
+            if self._cancelled or self._closed:
+                raise S2ClientError("mock stream cancelled")
             self._backend.recorder.record(
                 event="stream_released", stream_id=id(self),
             )
@@ -313,7 +315,8 @@ class MockStreamingClient:
         with self.backend._counter_lock:
             idx = self.backend._request_counter
             self.backend._request_counter += 1
-        self.backend.set_behavior(idx)
+        # Do NOT call set_behavior — use behavior already configured
+        # by the test via backend.set_behavior(idx, ...)
         return self.backend.make_stream(idx)
 
 

@@ -411,10 +411,9 @@ def _read_stream_chunk(stream):
 async def _read_stream_with_deadline(stream, deadline: float):
     """Read one chunk from *stream* enforcing *deadline*.
 
-    Starts :func:`asyncio.to_thread` to read, awaits with
-    ``asyncio.wait_for`` using the remaining time.  On timeout,
-    cancels the stream and reaps the read task to prevent orphan
-    threads.
+    Creates a task for the blocking read, waits with the remaining
+    time, and on timeout: calls ``stream.cancel()``, awaits the task
+    for a short cleanup period, then cancels as a final fallback.
     """
     remaining = deadline - time.monotonic()
     if remaining <= 0:
@@ -422,19 +421,31 @@ async def _read_stream_with_deadline(stream, deadline: float):
     read_task = asyncio.create_task(
         asyncio.to_thread(_read_stream_chunk, stream))
     try:
-        return await asyncio.wait_for(read_task, timeout=remaining)
-    except asyncio.TimeoutError:
-        try:
-            stream.cancel()
-        except Exception:
-            pass
-        # Reap the read task
-        if not read_task.done():
+        done, _pending = await asyncio.wait(
+            [read_task], timeout=remaining)
+        if not done:
+            # Timeout — unblock the thread
             try:
-                await asyncio.wait_for(read_task, timeout=2.0)
+                stream.cancel()
+            except Exception:
+                pass
+            try:
+                return await asyncio.wait_for(read_task, timeout=2.0)
             except (asyncio.TimeoutError, asyncio.CancelledError):
                 read_task.cancel()
-        raise asyncio.TimeoutError("Synthesis timeout during read")
+                try:
+                    await read_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+            raise asyncio.TimeoutError("Synthesis timeout during read")
+        return await read_task
+    except asyncio.CancelledError:
+        read_task.cancel()
+        try:
+            await read_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        raise
 
 
 
@@ -590,25 +601,77 @@ async def synthesize_s2cpp_streaming_tts_events(
                     carryover = b""          # excess bytes from oversized chunk (Fix 4)
 
                     if buffer_target_bytes <= 0:
-                        # Zero-buffer: emit AudioStart immediately (preserves current behavior)
-                        buffering_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
-                        obs_log("playback_emission_started",
-                                connection_id=_ctx.connection_id,
-                                synthesis_id=_ctx.synthesis_id,
-                                text_fp=fp,
-                                buffer_policy=buffer_policy,
-                                buffering_elapsed_ms=buffering_elapsed_ms,
-                                initial_buffer_target_ms=buffer_target_ms,
-                                initial_buffer_target_bytes=buffer_target_bytes,
-                                initial_buffered_audio_ms=0,
-                                backend_completed_before_buffer_target=False)
+                        # Protocol-safe prefetch: read at least enough PCM
+                        # to produce the first valid AudioChunk before
+                        # committing to AudioStart.  This lets 503 retries
+                        # gate correctly on audio_start_emitted.
+                        while True:
+                            try:
+                                chunk = await _read_stream_with_deadline(
+                                    stream, synthesis_deadline)
+                            except S2ClientError:
+                                raise
+                            if chunk is _STREAM_EOF:
+                                backend_completed_before_buffer_target = True
+                                break
+                            if not backend_data_observed and chunk:
+                                metrics.record_first_backend_data()
+                                backend_data_observed = True
+                                first_audio_elapsed_ms = int(
+                                    (time.monotonic() - stream_start) * 1000)
+                                obs_log("backend_stream_first_audio",
+                                        connection_id=_ctx.connection_id,
+                                        synthesis_id=_ctx.synthesis_id,
+                                        text_fp=fp,
+                                        elapsed_ms=first_audio_elapsed_ms)
 
-                        yield AudioStart(
-                            rate=audio_config.sample_rate,
-                            width=audio_config.width,
-                            channels=audio_config.channels,
-                        ).event()
-                        audio_start_emitted = True
+                            for audio_bytes, timestamp_ms in rechunker.feed(chunk):
+                                metrics.record_first_audio_chunk()
+                                if not first_audio_emitted:
+                                    first_audio_emitted = True
+
+                                if not audio_start_emitted:
+                                    buffering_elapsed_ms = int(
+                                        (time.monotonic() - stream_start) * 1000)
+                                    obs_log("playback_emission_started",
+                                            connection_id=_ctx.connection_id,
+                                            synthesis_id=_ctx.synthesis_id,
+                                            text_fp=fp,
+                                            buffer_policy=buffer_policy,
+                                            buffering_elapsed_ms=buffering_elapsed_ms,
+                                            initial_buffer_target_ms=0,
+                                            initial_buffer_target_bytes=0,
+                                            initial_buffered_audio_ms=0,
+                                            backend_completed_before_buffer_target=False)
+
+                                    yield AudioStart(
+                                        rate=audio_config.sample_rate,
+                                        width=audio_config.width,
+                                        channels=audio_config.channels,
+                                    ).event()
+                                    audio_start_emitted = True
+
+                                    wyoming_elapsed_ms = int(
+                                        (time.monotonic() - stream_start) * 1000)
+                                    obs_log("first_wyoming_audio",
+                                            connection_id=_ctx.connection_id,
+                                            synthesis_id=_ctx.synthesis_id,
+                                            text_fp=fp,
+                                            elapsed_ms=wyoming_elapsed_ms,
+                                            time_to_first_backend_audio_ms=first_audio_elapsed_ms,
+                                            wrapper_first_audio_forwarding_overhead_ms=wyoming_elapsed_ms - first_audio_elapsed_ms)
+
+                                yield AudioChunk(
+                                    rate=audio_config.sample_rate,
+                                    width=audio_config.width,
+                                    channels=audio_config.channels,
+                                    audio=audio_bytes,
+                                    timestamp=timestamp_ms,
+                                ).event()
+                                metrics.record_emitted_chunk(len(audio_bytes))
+                            # Break after producing at least one chunk
+                            if audio_start_emitted:
+                                break
                     else:
                         # Accumulate PCM until target reached, stream ends, or cap hit
                         while True:
@@ -942,6 +1005,7 @@ class SingleWorkerSynthesisQueue:
         self._pending = 0
         self._waiters: deque = deque()
         self._active_synthesis_id: str | None = None
+        self._active_connection_id: str | None = None
         self._active_task: asyncio.Task | None = None
 
     @property
@@ -974,6 +1038,7 @@ class SingleWorkerSynthesisQueue:
             if not self._active:
                 self._active = True
                 self._active_synthesis_id = synthesis_id
+                self._active_connection_id = connection_id
                 self._active_task = asyncio.current_task()
                 acquired = True
             else:
@@ -1029,10 +1094,12 @@ class SingleWorkerSynthesisQueue:
                 self._pending -= 1
                 if self._active_synthesis_id == synthesis_id:
                     self._active_synthesis_id = None
+                    self._active_connection_id = None
                     self._active_task = None
                 if self._waiters:
-                    nsid, nfut, _nc = self._waiters.popleft()
+                    nsid, nfut, nc = self._waiters.popleft()
                     self._active_synthesis_id = nsid
+                    self._active_connection_id = nc
                     # _active_task is set by the waiter after it resumes
                     nfut.set_result(None)
                 else:
@@ -1061,6 +1128,14 @@ class SingleWorkerSynthesisQueue:
 
     def cancel_active_if_matches(self, synthesis_id: str) -> bool:
         if (self._active_synthesis_id == synthesis_id
+                and self._active_task is not None):
+            self._active_task.cancel()
+            return True
+        return False
+
+    def cancel_active_for_connection(self, connection_id: str) -> bool:
+        """Cancel the active synthesis if it belongs to *connection_id*."""
+        if (self._active_connection_id == connection_id
                 and self._active_task is not None):
             self._active_task.cancel()
             return True
@@ -1414,16 +1489,14 @@ class FakeTtsEventHandler(AsyncEventHandler):
         return True
 
     async def disconnect(self) -> None:
-        """Log connection close and cancel queue entries, then delegate."""
+        """Cancel queue entries and active synthesis, then delegate."""
         self._streaming_text_parts = []
         self._streaming_compat_text = ""
         self._streaming_compat_voice = None
         self._in_streaming_session = False
         if self.settings.cancel_on_client_disconnect:
             await self.queue.cancel_waiting(self._conn_id)
-            # Also cancel active if it belongs to this connection.
-            # Currently we don't track connection_id for active;
-            # cancel-waiting handles queued entries.
+            self.queue.cancel_active_for_connection(self._conn_id)
         obs_log("conn_close", connection_id=self._conn_id)
         await super().disconnect()
 

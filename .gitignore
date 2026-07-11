@@ -53,3 +53,7 @@ dist/
 .idea/
 .vscode/
 /smoke-output/
+/stride*_run*/
+/stride*_warmup*/
+/unknown/
+/verification_artifacts/

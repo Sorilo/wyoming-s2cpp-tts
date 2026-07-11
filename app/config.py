@@ -118,6 +118,11 @@ BARGE_IN_FRIENDLY = True
 CANCEL_ON_CLIENT_DISCONNECT = True
 CANCEL_ON_NEW_REQUEST = False
 MAX_QUEUE_SIZE = 3
+# ── Phase 9: queue / busy / timeout policy ────────────────────────────
+S2_BACKEND_BUSY_MAX_RETRIES = 10
+S2_BACKEND_BUSY_RETRY_DELAY_MS = 500
+S2_QUEUE_WAIT_TIMEOUT_SEC = 30
+S2_SYNTHESIS_TIMEOUT_SEC = 120
 FAKE_TTS_SAMPLE_RATE = 22050
 FAKE_TTS_DURATION_MS = 600
 FAKE_TTS_CHUNK_MS = 100
@@ -161,6 +166,11 @@ class Settings:
     cancel_on_client_disconnect: bool = CANCEL_ON_CLIENT_DISCONNECT
     cancel_on_new_request: bool = CANCEL_ON_NEW_REQUEST
     max_queue_size: int = MAX_QUEUE_SIZE
+    # ── Phase 9: queue / busy / timeout policy ────────────────────────
+    s2_backend_busy_max_retries: int = S2_BACKEND_BUSY_MAX_RETRIES
+    s2_backend_busy_retry_delay_ms: int = S2_BACKEND_BUSY_RETRY_DELAY_MS
+    s2_queue_wait_timeout_sec: float = S2_QUEUE_WAIT_TIMEOUT_SEC
+    s2_synthesis_timeout_sec: float = S2_SYNTHESIS_TIMEOUT_SEC
     fake_tts_sample_rate: int = FAKE_TTS_SAMPLE_RATE
     fake_tts_duration_ms: int = FAKE_TTS_DURATION_MS
     fake_tts_chunk_ms: int = FAKE_TTS_CHUNK_MS
@@ -298,6 +308,82 @@ class Settings:
         _cancel_new = _bool_or_error("CANCEL_ON_NEW_REQUEST", CANCEL_ON_NEW_REQUEST)
         _s2_low_latency = _bool_or_error("S2_LOW_LATENCY", S2_LOW_LATENCY)
 
+        # ── Phase 9: queue / busy / timeout settings ─────────────────
+        # Backend busy retries (positive, max 10)
+        try:
+            busy_retries = _parse_positive_int_env(
+                "S2_BACKEND_BUSY_MAX_RETRIES", S2_BACKEND_BUSY_MAX_RETRIES, 10
+            )
+        except ValueError as exc:
+            errors.append(str(exc))
+            busy_retries = S2_BACKEND_BUSY_MAX_RETRIES
+
+        # Backend busy retry delay (non-negative milliseconds, max 10000)
+        busy_delay_raw = os.getenv("S2_BACKEND_BUSY_RETRY_DELAY_MS", "").strip()
+        if busy_delay_raw:
+            try:
+                busy_delay_val = int(busy_delay_raw)
+                if busy_delay_val < 0:
+                    errors.append(
+                        f"S2_BACKEND_BUSY_RETRY_DELAY_MS must be non-negative, got {busy_delay_val}"
+                    )
+                elif busy_delay_val > 10000:
+                    errors.append(
+                        f"S2_BACKEND_BUSY_RETRY_DELAY_MS={busy_delay_val} exceeds maximum 10000"
+                    )
+                busy_delay = busy_delay_val
+            except (TypeError, ValueError):
+                errors.append(
+                    f"Invalid integer for S2_BACKEND_BUSY_RETRY_DELAY_MS: {busy_delay_raw!r}"
+                )
+                busy_delay = S2_BACKEND_BUSY_RETRY_DELAY_MS
+        else:
+            busy_delay = S2_BACKEND_BUSY_RETRY_DELAY_MS
+
+        # Queue wait timeout (non-negative float seconds, max 300)
+        queue_timeout_raw = os.getenv("S2_QUEUE_WAIT_TIMEOUT_SEC", "").strip()
+        if queue_timeout_raw:
+            try:
+                queue_timeout_val = float(queue_timeout_raw)
+            except (TypeError, ValueError):
+                errors.append(
+                    f"Invalid float for S2_QUEUE_WAIT_TIMEOUT_SEC: {queue_timeout_raw!r}"
+                )
+                queue_timeout_val = S2_QUEUE_WAIT_TIMEOUT_SEC
+            if queue_timeout_val < 0:
+                errors.append(
+                    f"S2_QUEUE_WAIT_TIMEOUT_SEC must be non-negative, got {queue_timeout_val}"
+                )
+            elif queue_timeout_val > 300:
+                errors.append(
+                    f"S2_QUEUE_WAIT_TIMEOUT_SEC={queue_timeout_val} exceeds maximum 300"
+                )
+            queue_timeout = queue_timeout_val
+        else:
+            queue_timeout = float(S2_QUEUE_WAIT_TIMEOUT_SEC)
+
+        # Synthesis timeout (positive float seconds, >= 0.1, max 600)
+        syn_timeout_raw = os.getenv("S2_SYNTHESIS_TIMEOUT_SEC", "").strip()
+        if syn_timeout_raw:
+            try:
+                syn_timeout_val = float(syn_timeout_raw)
+            except (TypeError, ValueError):
+                errors.append(
+                    f"Invalid float for S2_SYNTHESIS_TIMEOUT_SEC: {syn_timeout_raw!r}"
+                )
+                syn_timeout_val = S2_SYNTHESIS_TIMEOUT_SEC
+            if syn_timeout_val < 0.1:
+                errors.append(
+                    f"S2_SYNTHESIS_TIMEOUT_SEC must be >= 0.1, got {syn_timeout_val}"
+                )
+            elif syn_timeout_val > 600:
+                errors.append(
+                    f"S2_SYNTHESIS_TIMEOUT_SEC={syn_timeout_val} exceeds maximum 600"
+                )
+            syn_timeout = syn_timeout_val
+        else:
+            syn_timeout = float(S2_SYNTHESIS_TIMEOUT_SEC)
+
         # ── Collect all errors and raise at once ────────────────────
         if errors:
             raise ValueError(
@@ -334,6 +420,11 @@ class Settings:
             cancel_on_client_disconnect=_cancel_disc,
             cancel_on_new_request=_cancel_new,
             max_queue_size=int(os.getenv("MAX_QUEUE_SIZE", str(MAX_QUEUE_SIZE))),
+            # ── Phase 9 ───────────────────────────────────────────────
+            s2_backend_busy_max_retries=busy_retries,
+            s2_backend_busy_retry_delay_ms=busy_delay,
+            s2_queue_wait_timeout_sec=queue_timeout,
+            s2_synthesis_timeout_sec=syn_timeout,
             fake_tts_sample_rate=int(os.getenv("FAKE_TTS_SAMPLE_RATE", str(FAKE_TTS_SAMPLE_RATE))),
             fake_tts_duration_ms=int(os.getenv("FAKE_TTS_DURATION_MS", str(FAKE_TTS_DURATION_MS))),
             fake_tts_chunk_ms=int(os.getenv("FAKE_TTS_CHUNK_MS", str(FAKE_TTS_CHUNK_MS))),

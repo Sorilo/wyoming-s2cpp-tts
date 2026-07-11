@@ -92,6 +92,17 @@ def encode_multipart_form_data(
 class S2ClientError(RuntimeError):
     """Raised when the external s2.cpp HTTP backend cannot generate audio."""
 
+    def __init__(self, message: str = "", status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class S2BackendBusyError(S2ClientError):
+    """Raised when the s2.cpp backend returns HTTP 503 Service Unavailable."""
+
+    def __init__(self, message: str = "Backend busy", status_code: int = 503) -> None:
+        super().__init__(message, status_code=status_code)
+
 
 @dataclass(frozen=True)
 class S2Endpoint:
@@ -302,8 +313,14 @@ class S2StreamResult:
                 self._http_request, timeout=self._timeout_seconds
             )
         except urllib.error.URLError as exc:
+            status_code = _extract_status_code(exc)
+            if status_code == 503:
+                raise S2BackendBusyError(
+                    f"s2.cpp /generate streaming failed: {exc}"
+                ) from exc
             raise S2ClientError(
-                f"s2.cpp /generate streaming failed: {exc}"
+                f"s2.cpp /generate streaming failed: {exc}",
+                status_code=status_code,
             ) from exc
         return self
 
@@ -346,14 +363,26 @@ class S2StreamResult:
         try:
             chunk = self._response.read(4096)
         except Exception as exc:
+            # Check response.status before closing
+            resp_status = None
+            if self._response is not None:
+                try:
+                    resp_status = self._response.status
+                except Exception:
+                    pass
             self._closed = True
             try:
                 self._response.close()
             except Exception:
                 pass
             self._response = None
+            if resp_status == 503:
+                raise S2BackendBusyError(
+                    f"s2.cpp streaming read failed: {exc}"
+                ) from exc
             raise S2ClientError(
-                f"s2.cpp streaming read failed: {exc}"
+                f"s2.cpp streaming read failed: {exc}",
+                status_code=resp_status,
             ) from exc
 
         if not chunk:
@@ -391,6 +420,13 @@ class S2StreamResult:
         return {k.lower(): v for k, v in self._response.headers.items()}
 
 
+def _extract_status_code(exc: urllib.error.URLError) -> int | None:
+    """Extract HTTP status code from a URLError if available."""
+    if hasattr(exc, "code"):
+        return exc.code
+    return None
+
+
 class S2Client:
     """Small synchronous client for an already-running s2.cpp HTTP server."""
 
@@ -414,7 +450,15 @@ class S2Client:
                 )
                 response_headers = {k.lower(): v for k, v in response.headers.items()}
         except urllib.error.URLError as exc:
-            raise S2ClientError(f"s2.cpp /generate failed: {exc}") from exc
+            status_code = _extract_status_code(exc)
+            if status_code == 503:
+                raise S2BackendBusyError(
+                    f"s2.cpp /generate failed: {exc}"
+                ) from exc
+            raise S2ClientError(
+                f"s2.cpp /generate failed: {exc}",
+                status_code=status_code,
+            ) from exc
 
         return S2GenerateResult(
             audio=audio,

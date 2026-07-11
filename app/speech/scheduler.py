@@ -233,3 +233,14 @@ class SpeechScheduler:
             self._active_task.cancel()
             return True
         return False
+    async def cancel_new_request(self, connection_id: str) -> None:
+        """Cancel active and waiting work for *connection_id* (CANCEL_ON_NEW_REQUEST).
+
+        Public compatibility method — cancels the active synthesis if it
+        belongs to this connection and cancels all waiting requests.
+        """
+        snap = self.snapshot()
+        active_sid = snap.get("active_synthesis_id")
+        if active_sid:
+            self.cancel_synthesis(active_sid)
+        await self.cancel_connection(connection_id)

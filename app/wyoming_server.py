@@ -45,6 +45,8 @@ from app.observability import (
     obs_log,
     text_fingerprint,
 )
+from app.speech import SpeechScheduler, SpeechRequest, SpeechMetadata, QueueFullError, QueueTimeoutError
+
 from app.voice_discovery import discover_voices
 import sys
 import time
@@ -927,161 +929,46 @@ class QueueTimeoutError(asyncio.TimeoutError):
 
 
 class SingleWorkerSynthesisQueue:
-    """Bounded FIFO queue gate with explicit ownership handoff.
+    """Phase 9B backward-compatible wrapper around SpeechScheduler.
 
-    Uses a :class:`collections.deque` of waiter futures for
-    deterministic FIFO activation.  Ownership is transferred by
-    resolving the next waiter's future — no :class:`asyncio.Semaphore`
-    is used for FIFO guarantees.
+    Preserves the Phase 9 API for existing tests and callers.
+    Delegates all scheduling to an internal SpeechScheduler.
     """
 
     worker_count = 1
 
     def __init__(self, max_size: int, wait_timeout_sec: float = 30) -> None:
-        if max_size <= 0:
-            raise ValueError("max_size must be positive")
+        from app.speech.scheduler import SpeechScheduler as _Sched
+        self._scheduler = _Sched(max_size, wait_timeout_sec)
         self.max_size = max_size
         self.wait_timeout_sec = wait_timeout_sec
-        self._lock = asyncio.Lock()
-        self._active = False
-        self._depth = 0
-        self._pending = 0
-        self._waiters: deque = deque()
-        self._active_synthesis_id: str | None = None
-        self._active_connection_id: str | None = None
-        self._active_task: asyncio.Task | None = None
 
     @property
     def pending(self) -> int:
-        return self._pending
+        return self._scheduler.snapshot()["pending"]
 
     @property
     def depth(self) -> int:
-        return self._depth
+        return self._scheduler.snapshot()["depth"]
 
     async def run(self, operation,
                   synthesis_id: str = "", connection_id: str = "") -> None:
-        obs_log("queue_request_received",
-                synthesis_id=synthesis_id, connection_id=connection_id,
-                queue_depth=self._depth, max_queue_size=self.max_size)
-        future = None
-        acquired = False
-        async with self._lock:
-            if self._depth >= self.max_size:
-                obs_log("queue_rejected", synthesis_id=synthesis_id,
-                        connection_id=connection_id, queue_depth=self._depth,
-                        max_queue_size=self.max_size, reason="queue_full")
-                raise QueueFullError(
-                    f"Queue full (depth={self._depth}, max={self.max_size})")
-            self._depth += 1
-            self._pending += 1
-            obs_log("queue_admitted", synthesis_id=synthesis_id,
-                    connection_id=connection_id, queue_depth=self._depth,
-                    max_queue_size=self.max_size)
-            if not self._active:
-                self._active = True
-                self._active_synthesis_id = synthesis_id
-                self._active_connection_id = connection_id
-                self._active_task = asyncio.current_task()
-                acquired = True
-            else:
-                future = asyncio.get_running_loop().create_future()
-                self._waiters.append((synthesis_id, future, connection_id))
-                obs_log("queue_wait_started", synthesis_id=synthesis_id,
-                        connection_id=connection_id,
-                        queue_depth=self._depth)
-
-        if not acquired:
-            try:
-                await asyncio.wait_for(future, timeout=self.wait_timeout_sec)
-                # Successfully resumed — now we're the active worker
-                async with self._lock:
-                    self._active_task = asyncio.current_task()
-            except asyncio.TimeoutError:
-                async with self._lock:
-                    for j, (_sid, fut, _cid) in enumerate(self._waiters):
-                        if fut is future:
-                            del self._waiters[j]
-                            break
-                    self._depth -= 1
-                    self._pending -= 1
-                obs_log("queue_wait_timeout", synthesis_id=synthesis_id,
-                        connection_id=connection_id,
-                        queue_depth=self._depth,
-                        wait_timeout_sec=self.wait_timeout_sec)
-                raise QueueTimeoutError(
-                    f"Queue wait timeout after {self.wait_timeout_sec}s")
-            except asyncio.CancelledError:
-                async with self._lock:
-                    for j, (_sid, fut, _cid) in enumerate(self._waiters):
-                        if fut is future:
-                            del self._waiters[j]
-                            break
-                    self._depth -= 1
-                    self._pending -= 1
-                obs_log("queue_cancelled", synthesis_id=synthesis_id,
-                        connection_id=connection_id,
-                        reason="cancelled_while_waiting")
-                raise
-
-        obs_log("queue_started", synthesis_id=synthesis_id,
-                connection_id=connection_id, queue_depth=self._depth)
-
-        try:
-            await operation()
-        except (asyncio.CancelledError, QueueTimeoutError):
-            raise
-        finally:
-            async with self._lock:
-                self._depth -= 1
-                self._pending -= 1
-                if self._active_synthesis_id == synthesis_id:
-                    self._active_synthesis_id = None
-                    self._active_connection_id = None
-                    self._active_task = None
-                if self._waiters:
-                    nsid, nfut, nc = self._waiters.popleft()
-                    self._active_synthesis_id = nsid
-                    self._active_connection_id = nc
-                    nfut.set_result(None)
-                else:
-                    self._active = False
-            obs_log("queue_depth_changed", synthesis_id=synthesis_id,
-                    connection_id=connection_id, queue_depth=self._depth)
+        from app.speech import SpeechRequest
+        request = SpeechRequest(
+            synthesis_id=synthesis_id or "unknown",
+            connection_id=connection_id or "unknown",
+            text="",
+        )
+        await self._scheduler.run(request, operation)
 
     async def cancel_waiting(self, connection_id: str) -> int:
-        """Cancel all waiting requests for *connection_id*.  Returns count.
-
-        Counter decrements are handled by each waiter's ``run()``
-        cleanup path — this method only removes from the deque and
-        cancels the future.
-        """
-        cancelled = 0
-        async with self._lock:
-            keep = []
-            for sid, fut, cid in self._waiters:
-                if cid == connection_id:
-                    fut.cancel()
-                    cancelled += 1
-                else:
-                    keep.append((sid, fut, cid))
-            self._waiters = deque(keep)
-        return cancelled
+        return await self._scheduler.cancel_connection(connection_id)
 
     def cancel_active_if_matches(self, synthesis_id: str) -> bool:
-        if (self._active_synthesis_id == synthesis_id
-                and self._active_task is not None):
-            self._active_task.cancel()
-            return True
-        return False
+        return self._scheduler.cancel_synthesis(synthesis_id)
 
     def cancel_active_for_connection(self, connection_id: str) -> bool:
-        """Cancel the active synthesis if it belongs to *connection_id*."""
-        if (self._active_connection_id == connection_id
-                and self._active_task is not None):
-            self._active_task.cancel()
-            return True
-        return False
+        return self._scheduler.cancel_active_for_connection(connection_id)
 
 
 
@@ -1144,7 +1031,7 @@ class FakeTtsEventHandler(AsyncEventHandler):
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
         config: FakeTtsConfig,
-        queue: SingleWorkerSynthesisQueue,
+        queue: SpeechScheduler,  # Phase 9B: SpeechScheduler
         settings: Settings,
         s2_client_factory: S2ClientFactory,
     ) -> None:
@@ -1396,13 +1283,11 @@ class FakeTtsEventHandler(AsyncEventHandler):
                     raise
 
             if self.settings.cancel_on_new_request:
-                self.queue.cancel_active_if_matches(
-                    self.queue._active_synthesis_id or "")
-                await self.queue.cancel_waiting(self._conn_id)
+                await self.queue.cancel_new_request(self._conn_id)
                 await asyncio.sleep(0)
 
             syn_id = new_synthesis_id()
-            await self._run_operational(send_audio, synthesis_id=syn_id)
+            await self._run_operational(send_audio, synthesis_id=syn_id, trigger="legacy")
             return True
 
         # ── Streaming TTS: synthesize-start ──────────────────────────
@@ -1542,13 +1427,11 @@ class FakeTtsEventHandler(AsyncEventHandler):
                                 reason="task_cancelled")
                         raise
 
-                if self.settings.cancel_on_new_request and self.queue._depth > 0:
-                    self.queue.cancel_active_if_matches(
-                        self.queue._active_synthesis_id or "")
-                    await self.queue.cancel_waiting(self._conn_id)
+                if self.settings.cancel_on_new_request:
+                    await self.queue.cancel_new_request(self._conn_id)
                     await asyncio.sleep(0)
 
-                await self._run_operational(send_streaming_audio, synthesis_id=syn_id)
+                await self._run_operational(send_streaming_audio, synthesis_id=syn_id, trigger="streaming")
             else:
                 # No text accumulated — still signal end of streaming response.
                 syn_id = new_synthesis_id()
@@ -1568,11 +1451,17 @@ class FakeTtsEventHandler(AsyncEventHandler):
 
         return True
 
-    async def _run_operational(self, operation, synthesis_id: str) -> None:
+    async def _run_operational(self, operation, synthesis_id: str,
+                               trigger: str = "legacy") -> None:
         """Own expected runtime failures and terminate them on the wire."""
         try:
-            await self.queue.run(operation, synthesis_id=synthesis_id,
-                                 connection_id=self._conn_id)
+            request = SpeechRequest(
+                synthesis_id=synthesis_id,
+                connection_id=self._conn_id,
+                text="",  # text is captured by observability layer separately
+                metadata=SpeechMetadata(trigger=trigger),
+            )
+            await self.queue.run(request, operation)
             return
         except asyncio.CancelledError:
             # Queue cancellation is requested by disconnect/barge-in cleanup.
@@ -1609,7 +1498,7 @@ class FakeTtsEventHandler(AsyncEventHandler):
         self._streaming_compat_voice = None
         self._in_streaming_session = False
         if self.settings.cancel_on_client_disconnect:
-            await self.queue.cancel_waiting(self._conn_id)
+            await self.queue.cancel_connection(self._conn_id)
             self.queue.cancel_active_for_connection(self._conn_id)
         obs_log("conn_close", connection_id=self._conn_id)
         await super().disconnect()
@@ -1741,7 +1630,7 @@ async def start_fake_tts_server(
     """
     active_settings = settings or Settings()
     fake_config = config or FakeTtsConfig.from_settings(active_settings)
-    queue = SingleWorkerSynthesisQueue(
+    queue = SpeechScheduler(
         max_size=max_queue_size,
         wait_timeout_sec=active_settings.s2_queue_wait_timeout_sec,
     )

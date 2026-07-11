@@ -129,6 +129,13 @@ FAKE_TTS_CHUNK_MS = 100
 LOG_LEVEL = "info"
 # -- Phase 9C: graceful shutdown --------------------------------------------
 SHUTDOWN_GRACE_TIMEOUT_SEC = 30.0
+# -- Phase 9C: optional admin HTTP -------------------------------------------
+ADMIN_HTTP_ENABLED = False
+ADMIN_HTTP_HOST = "127.0.0.1"
+ADMIN_HTTP_PORT = 10201
+ADMIN_HTTP_READ_TIMEOUT_SEC = 5.0
+ADMIN_HTTP_MAX_HEADER_SIZE = 8192
+ADMIN_HTTP_MAX_BODY_SIZE = 65536
 # ── Phase 8C: streaming decode stride tuning ─────────────────────────
 S2_STREAM_DECODE_STRIDE_FRAMES = 4
 S2_STREAM_HOLDBACK_FRAMES = 0
@@ -184,6 +191,13 @@ class Settings:
     s2_low_latency: bool = S2_LOW_LATENCY
     # -- Phase 9C: graceful shutdown ----------------------------------------
     shutdown_grace_timeout_sec: float = SHUTDOWN_GRACE_TIMEOUT_SEC
+    # -- Phase 9C: optional admin HTTP ---------------------------------------
+    admin_http_enabled: bool = ADMIN_HTTP_ENABLED
+    admin_http_host: str = ADMIN_HTTP_HOST
+    admin_http_port: int = ADMIN_HTTP_PORT
+    admin_http_read_timeout_sec: float = ADMIN_HTTP_READ_TIMEOUT_SEC
+    admin_http_max_header_size: int = ADMIN_HTTP_MAX_HEADER_SIZE
+    admin_http_max_body_size: int = ADMIN_HTTP_MAX_BODY_SIZE
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -410,6 +424,84 @@ class Settings:
         else:
             shutdown_grace = float(SHUTDOWN_GRACE_TIMEOUT_SEC)
 
+        # -- Phase 9C: admin HTTP config ----------------------------------
+        admin_enabled = _bool_or_error("ADMIN_HTTP_ENABLED", False)
+        admin_host = os.getenv("ADMIN_HTTP_HOST", ADMIN_HTTP_HOST)
+        if not admin_host or not admin_host.strip():
+            errors.append("ADMIN_HTTP_HOST must not be empty")
+            admin_host = ADMIN_HTTP_HOST
+        admin_port_raw = os.getenv("ADMIN_HTTP_PORT", "").strip()
+        if admin_port_raw:
+            try:
+                admin_port_val = int(admin_port_raw)
+            except (TypeError, ValueError):
+                errors.append(
+                    f"Invalid integer for ADMIN_HTTP_PORT: {admin_port_raw!r}"
+                )
+                admin_port_val = ADMIN_HTTP_PORT
+            if admin_port_val < 1 or admin_port_val > 65535:
+                errors.append(
+                    f"ADMIN_HTTP_PORT={admin_port_val} out of range [1, 65535]"
+                )
+            admin_port = admin_port_val
+        else:
+            admin_port = ADMIN_HTTP_PORT
+
+        admin_read_timeout_raw = os.getenv("ADMIN_HTTP_READ_TIMEOUT_SEC", "").strip()
+        if admin_read_timeout_raw:
+            try:
+                admin_read_timeout_val = float(admin_read_timeout_raw)
+            except (TypeError, ValueError):
+                errors.append(
+                    f"Invalid float for ADMIN_HTTP_READ_TIMEOUT_SEC: {admin_read_timeout_raw!r}"
+                )
+                admin_read_timeout_val = ADMIN_HTTP_READ_TIMEOUT_SEC
+            if admin_read_timeout_val <= 0:
+                errors.append(
+                    f"ADMIN_HTTP_READ_TIMEOUT_SEC must be positive, got {admin_read_timeout_val}"
+                )
+            elif admin_read_timeout_val > 60:
+                errors.append(
+                    f"ADMIN_HTTP_READ_TIMEOUT_SEC={admin_read_timeout_val} exceeds maximum 60"
+                )
+            admin_read_timeout = admin_read_timeout_val
+        else:
+            admin_read_timeout = ADMIN_HTTP_READ_TIMEOUT_SEC
+
+        admin_max_header_raw = os.getenv("ADMIN_HTTP_MAX_HEADER_SIZE", "").strip()
+        if admin_max_header_raw:
+            try:
+                admin_max_header_val = int(admin_max_header_raw)
+            except (TypeError, ValueError):
+                errors.append(
+                    f"Invalid integer for ADMIN_HTTP_MAX_HEADER_SIZE: {admin_max_header_raw!r}"
+                )
+                admin_max_header_val = ADMIN_HTTP_MAX_HEADER_SIZE
+            if admin_max_header_val < 256 or admin_max_header_val > 65536:
+                errors.append(
+                    f"ADMIN_HTTP_MAX_HEADER_SIZE={admin_max_header_val} out of range [256, 65536]"
+                )
+            admin_max_header = admin_max_header_val
+        else:
+            admin_max_header = ADMIN_HTTP_MAX_HEADER_SIZE
+
+        admin_max_body_raw = os.getenv("ADMIN_HTTP_MAX_BODY_SIZE", "").strip()
+        if admin_max_body_raw:
+            try:
+                admin_max_body_val = int(admin_max_body_raw)
+            except (TypeError, ValueError):
+                errors.append(
+                    f"Invalid integer for ADMIN_HTTP_MAX_BODY_SIZE: {admin_max_body_raw!r}"
+                )
+                admin_max_body_val = ADMIN_HTTP_MAX_BODY_SIZE
+            if admin_max_body_val < 64 or admin_max_body_val > 1048576:
+                errors.append(
+                    f"ADMIN_HTTP_MAX_BODY_SIZE={admin_max_body_val} out of range [64, 1048576]"
+                )
+            admin_max_body = admin_max_body_val
+        else:
+            admin_max_body = ADMIN_HTTP_MAX_BODY_SIZE
+
         # ── Collect all errors and raise at once ────────────────────
         if errors:
             raise ValueError(
@@ -462,4 +554,10 @@ class Settings:
             s2_low_latency=_s2_low_latency,
             # -- Phase 9C --------------------------------------------------
             shutdown_grace_timeout_sec=shutdown_grace,
+            admin_http_enabled=admin_enabled,
+            admin_http_host=admin_host,
+            admin_http_port=admin_port,
+            admin_http_read_timeout_sec=admin_read_timeout,
+            admin_http_max_header_size=admin_max_header,
+            admin_http_max_body_size=admin_max_body,
         )

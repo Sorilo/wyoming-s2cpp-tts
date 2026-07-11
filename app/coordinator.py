@@ -22,6 +22,7 @@ from typing import Any
 from app.config import Settings
 from app.lifecycle import LifecycleState, ServiceLifecycle
 from app.speech.scheduler import SpeechScheduler
+from app.admin_http import AdminHttpServer
 from app.wyoming_server import (
     FakeTtsConfig,
     RunningFakeTtsServer,
@@ -58,6 +59,7 @@ class ServiceCoordinator:
         )
         self.server: RunningFakeTtsServer | None = None
         self.scheduler: SpeechScheduler | None = None
+        self.admin: AdminHttpServer | None = None
         self._shutdown_started = False
         self._shutdown_complete = asyncio.Event()
         self._shutdown_failure: Exception | None = None
@@ -114,6 +116,10 @@ class ServiceCoordinator:
             # The scheduler is created inside start_fake_tts_server; we
             # store a reference here so shutdown can drain it.
             self.scheduler = self.server.scheduler
+
+            # Optionally start admin HTTP server (errors logged, not fatal)
+            if self.settings.admin_http_enabled:
+                await self._start_admin()
 
             self.lifecycle.transition_to_running()
 
@@ -191,15 +197,22 @@ class ServiceCoordinator:
             # (or is force-cancelled) are closed here.
             await self._close_all_handlers()
 
-            # 5. Success
+            # 5. Stop admin HTTP server
+            await self._stop_admin()
+
+            # 6. Success
             self.lifecycle.transition_to_stopped()
         except Exception as exc:
             self.lifecycle.transition_to_failed()
             self._shutdown_failure = exc
-            # Attempt to close handlers even on failure, but don't let
+            # Attempt to close handlers and admin even on failure, but don't let
             # cleanup errors mask the original shutdown failure.
             try:
                 await self._close_all_handlers()
+            except Exception:
+                pass
+            try:
+                await self._stop_admin()
             except Exception:
                 pass
             raise
@@ -296,6 +309,33 @@ class ServiceCoordinator:
         else:
             # Already shutting down — wait for completion
             await self._shutdown_complete.wait()
+
+    # ── Admin HTTP server ──────────────────────────────────────────────
+
+    async def _start_admin(self) -> None:
+        """Start the optional admin HTTP server.  Bind failure is logged
+        but does not prevent service startup — admin is optional."""
+        try:
+            self.admin = AdminHttpServer(
+                settings=self.settings,
+                lifecycle=self.lifecycle,
+                get_scheduler_snapshot=(
+                    self.scheduler.snapshot if self.scheduler else lambda: None
+                ),
+                get_active_connection_count=lambda: self.active_connection_count,
+                version="0.1",
+            )
+            port = await self.admin.start()
+            print(f"Admin HTTP server listening on {self.settings.admin_http_host}:{port}")
+        except (OSError, OverflowError) as exc:
+            print(f"Warning: Admin HTTP server failed to bind: {exc}")
+            self.admin = None
+
+    async def _stop_admin(self) -> None:
+        """Stop the admin HTTP server if it was started."""
+        if self.admin is not None:
+            await self.admin.stop()
+            self.admin = None
 
     # ── Wait for completion ─────────────────────────────────────────
 

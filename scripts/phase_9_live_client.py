@@ -320,7 +320,7 @@ def prove_disconnect(events: list[dict], text: str, raw_text: str = "") -> tuple
         "final_depth_zero": depth_zero, "forbidden_warnings": warnings}
 
 
-async def run_tests(host: str, port: int, artifact_dir: str) -> dict:
+async def behavioral_tests(host: str, port: int, artifact_dir: str) -> dict:
     log_path = shadow_log_path()
     if not os.path.isfile(log_path) or not os.access(log_path, os.R_OK):
         raise RuntimeError(f"SHADOW_LOG_PATH must name a readable file: {log_path}")
@@ -443,7 +443,7 @@ async def run_tests(host: str, port: int, artifact_dir: str) -> dict:
                 if AudioStart.is_type(event.type): got_start = True
                 elif AudioChunk.is_type(event.type):
                     chunk = AudioChunk.from_event(event)
-                    got_chunk = bool(chunk.audio)
+                    got_chunk = got_start and bool(chunk.audio)
         await wait_for_identity(log_path, baseline, text, "client_disconnected", 30)
         await wait_for_event(log_path, baseline,
             lambda item: _event_name(item) in ("synthesis_cancelled", "synthesis_cancel_requested"), 30)
@@ -474,6 +474,58 @@ async def run_tests(host: str, port: int, artifact_dir: str) -> dict:
         json.dump(results, f, indent=2)
     print(f"\nClassification: {classification}")
     return results
+
+
+async def run_tests(host: str, port: int, artifact_dir: str) -> dict:
+    """Run a generation preflight, then the bounded behavioral suite.
+
+    Results are persisted even when preflight, assertions, or runtime code fail.
+    A failed preflight is classified backend_unavailable and no behavioral
+    request is attempted.
+    """
+    os.makedirs(artifact_dir, exist_ok=True)
+    result_path = os.path.join(artifact_dir, "results.json")
+    results: dict = {"classification": "FAIL", "tests": {}}
+    try:
+        try:
+            backend_preflight = await asyncio.wait_for(
+                synthesize("Phase nine isolated backend preflight.", host, port, timeout=45),
+                timeout=50,
+            )
+            results["tests"]["backend_preflight"] = backend_preflight.to_dict()
+            if not backend_preflight.valid:
+                results.update(failure_type="backend_unavailable",
+                               reason="backend preflight did not produce valid audio")
+                return results
+        except Exception as exc:
+            results["tests"]["backend_preflight"] = {
+                "status": "FAIL", "reason": f"{type(exc).__name__}: {exc}"}
+            results.update(failure_type="backend_unavailable",
+                           reason=f"backend preflight failed: {type(exc).__name__}: {exc}")
+            return results
+
+        try:
+            behavioral = await asyncio.wait_for(
+                behavioral_tests(host, port, artifact_dir), timeout=900)
+            # Preserve preflight plus all behavioral results.
+            preflight = results["tests"]["backend_preflight"]
+            results = behavioral
+            results.setdefault("tests", {})["backend_preflight"] = preflight
+        except asyncio.TimeoutError:
+            results.update(failure_type="runtime", section_failure="behavioral_suite",
+                           reason="behavioral suite exceeded 900 seconds")
+        except AssertionError as exc:
+            results.update(failure_type="assertion", section_failure="behavioral_suite",
+                           reason=f"AssertionError: {exc}")
+        except Exception as exc:
+            results.update(failure_type="runtime", section_failure="behavioral_suite",
+                           reason=f"{type(exc).__name__}: {exc}")
+        return results
+    finally:
+        # This is deliberately the sole unconditional writer; it retains all
+        # completed sections and exact exception reasons.
+        with open(result_path, "w") as stream:
+            json.dump(results, stream, indent=2)
 
 
 def main() -> None:

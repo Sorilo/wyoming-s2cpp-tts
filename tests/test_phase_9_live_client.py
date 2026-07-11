@@ -1,4 +1,5 @@
 import os, sys, json, pytest, asyncio, inspect
+from pathlib import Path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from scripts import phase_9_live_client as live
 from scripts.phase_9_live_client import RequestResult
@@ -179,7 +180,7 @@ class TestFileEventLog:
         assert list(inspect.signature(live.wait_for_event_count).parameters)[:5] == ["path", "baseline", "predicate", "count", "timeout"]
 
     def test_run_tests_wires_proofs_without_sleep_acceptance(self):
-        source = inspect.getsource(live.run_tests)
+        source = inspect.getsource(live.behavioral_tests)
         assert "prove_fifo(" in source
         assert "prove_queue_full(" in source
         assert "asyncio.sleep" not in source
@@ -239,3 +240,30 @@ def test_shell_contract():
     assert "docker.sock" not in shell
     assert 'kill "$LOG_FOLLOWER_PID"' in shell and 'wait "$LOG_FOLLOWER_PID"' in shell
     assert shell.index("EXPECTED_DIGEST") < shell.index('docker run -d --name "$SHADOW_NAME"')
+
+
+class TestPhase9IsolationAndFailureContract:
+    def test_shell_uses_isolated_backend_and_explicit_gpu(self):
+        shell = (Path(__file__).parents[1] / "scripts/validate_phase_9_live.sh").read_text()
+        assert "PHASE9_TEST_GPU_UUID" in shell
+        assert "PHASE9_BACKEND_IMAGE" in shell
+        assert 'TEST_BACKEND_NAME=' in shell
+        assert '--gpus "device=$PHASE9_TEST_GPU_UUID"' in shell
+        assert '-e "S2_HOST=$TEST_BACKEND_NAME"' in shell
+        assert '-e "S2_HOST=$BACKEND_HOST"' not in shell
+        assert 'production-comparison-test-backend.json' in shell
+        assert shell.index("trap cleanup EXIT INT TERM") < shell.index('PHASE9_TEST_GPU_UUID is required')
+        backend_port_line = next(line for line in shell.splitlines() if line.startswith("BACKEND_PORT=$(docker inspect"))
+        assert '"$BACKEND_NAME"' in backend_port_line
+        assert '"$PROD_NAME"' not in backend_port_line
+
+    def test_client_has_backend_preflight_and_finally_writer(self):
+        source = inspect.getsource(live.run_tests)
+        assert 'backend_preflight' in source
+        assert 'backend_unavailable' in source
+        assert 'finally:' in source
+        assert 'section_failure' in source
+
+    def test_disconnect_requires_start_before_nonempty_chunk(self):
+        source = inspect.getsource(live.behavioral_tests)
+        assert 'got_start and bool(chunk.audio)' in source

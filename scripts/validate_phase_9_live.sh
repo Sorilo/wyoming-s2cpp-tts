@@ -14,46 +14,76 @@ mkdir -p "$ARTIFACT_DIR"
 
 TEST_IMAGE="${PHASE9_TEST_IMAGE:-ghcr.io/sorilo/wyoming-s2cpp-tts:sha-5355048}"
 EXPECTED_DIGEST="${PHASE9_EXPECTED_DIGEST:-}"
-if ! [[ "$EXPECTED_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-    fail "PHASE9_EXPECTED_DIGEST must be sha256 followed by 64 lowercase hex characters"
-    exit 1
-fi
 SHADOW_NAME="wyoming-s2cpp-tts-phase9-smoke-${TIMESTAMP}"
 CLIENT_NAME="wyoming-s2cpp-tts-phase9-client-${TIMESTAMP}"
 SHADOW_PORT="10201"
 PROD_NAME="wyoming-s2cpp-tts"
 BACKEND_NAME="s2cpp-backend"
+TEST_BACKEND_NAME="s2cpp-backend-phase9-smoke-${TIMESTAMP}"
+PHASE9_TEST_GPU_UUID="${PHASE9_TEST_GPU_UUID:-}"
+BACKEND_IMAGE="${PHASE9_BACKEND_IMAGE:-}"
+BACKEND_DIGEST="${PHASE9_BACKEND_DIGEST:-}"
 CREATED_CONTAINERS=""
 USE_HELPER_CONTAINER="false"
+export PHASE9_FAILURE_TYPE="infrastructure"
+export PHASE9_FAILURE_REASON="harness prerequisite failed; see console output"
 
 cleanup() {
     local exit_code=$?
-    if [ -n "${LOG_FOLLOWER_PID:-}" ]; then
-        kill "$LOG_FOLLOWER_PID" 2>/dev/null || true
-        wait "$LOG_FOLLOWER_PID" 2>/dev/null || true
-        LOG_FOLLOWER_PID=""
+    trap - EXIT INT TERM
+    [ -n "${LOG_FOLLOWER_PID:-}" ] && kill "$LOG_FOLLOWER_PID" 2>/dev/null || true
+    [ -n "${LOG_FOLLOWER_PID:-}" ] && wait "$LOG_FOLLOWER_PID" 2>/dev/null || true
+    # Preserve evidence before exact removal, even on setup/client failure.
+    for pair in "$PROD_NAME production-after-wrapper.json" "$BACKEND_NAME production-after-backend.json"; do
+        set -- $pair; snapshot "$1" "$ARTIFACT_DIR/$2" 2>/dev/null || printf '{"error":"inspect unavailable"}\n' > "$ARTIFACT_DIR/$2"
+    done
+    if docker inspect "$TEST_BACKEND_NAME" >/dev/null 2>&1; then
+        docker inspect "$TEST_BACKEND_NAME" > "$ARTIFACT_DIR/test-backend-inspect-final.json" 2>&1 || true
+        docker logs "$TEST_BACKEND_NAME" > "$ARTIFACT_DIR/test-backend-logs.txt" 2>&1 || true
+    else
+        printf '{"state":"not_created"}\n' > "$ARTIFACT_DIR/test-backend-inspect-final.json"
+        printf 'test backend was not created\n' > "$ARTIFACT_DIR/test-backend-logs.txt"
     fi
-    info "Cleaning up temporary containers..."
-    local status="ok"
-    for c in $CREATED_CONTAINERS; do
-        docker stop "$c" 2>/dev/null || true
-        if docker rm "$c" 2>/dev/null; then
-            info "Removed: $c"
-        else
-            info "Failed to remove: $c"
-            status="partial"
-        fi
+    python3 - "$ARTIFACT_DIR" <<'PY_FINAL'
+import json, os, sys
+p=sys.argv[1]
+def load(name):
+ try: return json.load(open(os.path.join(p,name)))
+ except Exception as e: return {"error":f"{type(e).__name__}: {e}"}
+for name in ("wrapper","backend"):
+ b,a=load(f"production-before-{name}.json"),load(f"production-after-{name}.json")
+ out={"container":name,"unchanged":bool(b.get("id") and b.get("id")==a.get("id") and a.get("running")),"before":b,"after":a}
+ json.dump(out,open(os.path.join(p,f"production-comparison-{name}.json"),"w"),indent=2)
+prod=load("production-before-backend.json"); test=load("test-backend-inspect-final.json")
+test_id=test[0].get("Id") if isinstance(test,list) and test else None
+json.dump({"production_id":prod.get("id"),"test_backend_id":test_id,"distinct":bool(test_id and test_id != prod.get("id"))},open(os.path.join(p,"production-comparison-test-backend.json"),"w"),indent=2)
+rp=os.path.join(p,"results.json")
+if not os.path.exists(rp):
+ json.dump({"classification":"FAIL","failure_type":os.environ.get("PHASE9_FAILURE_TYPE","runtime"),"reason":os.environ.get("PHASE9_FAILURE_REASON","harness exited before client results; see console.log"),"tests":{}},open(rp,"w"),indent=2)
+r=load("results.json")
+with open(os.path.join(p,"summary.md"),"w") as f:
+ f.write("# Phase 9 Live Validation Report\n")
+ f.write(f"- **Classification:** {r.get('classification','FAIL')}\n- **Failure type:** {r.get('failure_type','none')}\n- **Reason:** {r.get('reason','none')}\n")
+PY_FINAL
+    local status="ok" c
+    # Reverse creation order; remove only exact names recorded by this run.
+    for c in $CLIENT_NAME $SHADOW_NAME $TEST_BACKEND_NAME; do
+        case " $CREATED_CONTAINERS " in *" $c "*) docker rm -f "$c" >/dev/null 2>&1 || status="cleanup_failure";; esac
     done
-    # Confirm nothing leaked
-    for c in $CREATED_CONTAINERS; do
-        if docker ps -a --filter "name=$c" --format '{{.Names}}' 2>/dev/null | grep -q .; then
-            status="leaked"
-        fi
-    done
+    for c in $CREATED_CONTAINERS; do docker inspect "$c" >/dev/null 2>&1 && status="cleanup_failure" || true; done
     echo "cleanup_status: $status" >> "$ARTIFACT_DIR/console.log" 2>/dev/null || true
-    exit $exit_code
+    [ "$status" = ok ] || { export PHASE9_FAILURE_TYPE="cleanup"; exit_code=1; }
+    exit "$exit_code"
 }
 trap cleanup EXIT INT TERM
+
+if ! [[ "$EXPECTED_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    fail "PHASE9_EXPECTED_DIGEST must be sha256 followed by 64 lowercase hex characters"
+    exit 1
+fi
+[ -n "$PHASE9_TEST_GPU_UUID" ] || { fail "PHASE9_TEST_GPU_UUID is required"; exit 1; }
+[ -n "$BACKEND_IMAGE" ] || { fail "PHASE9_BACKEND_IMAGE is required"; exit 1; }
+[[ "$BACKEND_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { fail "PHASE9_BACKEND_DIGEST must be an explicit sha256 digest"; exit 1; }
 
 echo "=== Phase 9 Live Validation ==="
 echo "Artifacts: $ARTIFACT_DIR"
@@ -113,13 +143,62 @@ elif [ -n "${PHASE9_SMOKE_NETWORK:-}" ]; then
 else fail "Multiple networks: $INTERSECTION. Set PHASE9_SMOKE_NETWORK."; exit 1; fi
 pass "Network: $SHARED_NET"
 
-# ── 4. Backend config ───────────────────────────────────────────
-info "Step 4: Backend"
-BACKEND_HOST=$(docker inspect -f '{{range .Config.Env}}{{if eq (index (split . "=") 0) "S2_HOST"}}{{index (split . "=") 1}}{{end}}{{end}}' "$PROD_NAME")
-BACKEND_PORT=$(docker inspect -f '{{range .Config.Env}}{{if eq (index (split . "=") 0) "S2_PORT"}}{{index (split . "=") 1}}{{end}}{{end}}' "$PROD_NAME")
+# ── 4. Isolated backend config/start ────────────────────────────
+info "Step 4: Starting isolated backend on benchmark GPU"
+export PHASE9_FAILURE_TYPE="backend"
+export PHASE9_FAILURE_REASON="isolated backend setup or readiness failed"
+PROD_GPU_IDS=$(python3 - "$BACKEND_NAME" <<'PY_GPU'
+import json, subprocess, sys
+x=json.loads(subprocess.check_output(["docker","inspect",sys.argv[1]]))[0]
+ids=[]
+for e in x.get("Config",{}).get("Env",[]) or []:
+ if e.startswith(("NVIDIA_VISIBLE_DEVICES=","CUDA_VISIBLE_DEVICES=")): ids += e.partition("=")[2].split(",")
+for req in x.get("HostConfig",{}).get("DeviceRequests",[]) or []: ids += req.get("DeviceIDs") or []
+print("\n".join(i.strip() for i in ids if i.strip() and i.strip() not in {"all","void","none"}))
+PY_GPU
+)
+if printf '%s\n' "$PROD_GPU_IDS" | grep -Fxq "$PHASE9_TEST_GPU_UUID"; then
+    fail "PHASE9_TEST_GPU_UUID is assigned to the production backend"; exit 1
+fi
+BACKEND_PORT=$(docker inspect -f '{{range .Config.Env}}{{if eq (index (split . "=") 0) "S2_PORT"}}{{index (split . "=") 1}}{{end}}{{end}}' "$BACKEND_NAME")
 BACKEND_PORT="${BACKEND_PORT:-3030}"
-[ -z "$BACKEND_HOST" ] && { fail "S2_HOST not set"; exit 1; }
-info "Backend: $BACKEND_HOST:$BACKEND_PORT"
+docker pull "$BACKEND_IMAGE" >/dev/null
+BACKEND_REPODIGESTS=$(docker image inspect "$BACKEND_IMAGE" --format '{{json .RepoDigests}}')
+echo "$BACKEND_REPODIGESTS" | grep -Fq "@$BACKEND_DIGEST" || { fail "Backend image digest mismatch"; exit 1; }
+# Clone only ordinary environment and filesystem mounts; never clone GPU/device,
+# network identity, ports, restart policy, privileges, or daemon control sockets.
+python3 - "$BACKEND_NAME" "$ARTIFACT_DIR/backend-clone.args" <<'PY_ARGS'
+import json, subprocess, sys
+name, output = sys.argv[1:]
+d = json.loads(subprocess.check_output(["docker", "inspect", name]))[0]
+args=[]
+for item in d.get("Config",{}).get("Env",[]) or []:
+    key=item.partition("=")[0]
+    if key not in {"NVIDIA_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES"}:
+        args += ["-e", item]
+for m in d.get("Mounts",[]) or []:
+    src, dst = m.get("Source"), m.get("Destination")
+    if src and dst and ("docker" + ".sock") not in src and ("docker" + ".sock") not in dst:
+        args += ["-v", f"{src}:{dst}:ro"]
+with open(output,"w") as f:
+    for arg in args: f.write(arg.replace("\\","\\\\").replace("\n","\\n")+"\n")
+PY_ARGS
+mapfile -t BACKEND_CLONE_ARGS < "$ARTIFACT_DIR/backend-clone.args"
+docker run -d --name "$TEST_BACKEND_NAME" \
+    --label com.sorilo.phase9-live-smoke=true --network "$SHARED_NET" \
+    --gpus "device=$PHASE9_TEST_GPU_UUID" \
+    "${BACKEND_CLONE_ARGS[@]}" "$BACKEND_IMAGE" >/dev/null
+CREATED_CONTAINERS="$TEST_BACKEND_NAME"
+docker inspect "$TEST_BACKEND_NAME" > "$ARTIFACT_DIR/test-backend-inspect-start.json"
+READY=0
+for _ in $(seq 1 60); do
+    docker inspect -f '{{.State.Running}}' "$TEST_BACKEND_NAME" 2>/dev/null | grep -qx true || break
+    docker exec "$TEST_BACKEND_NAME" python3 -c "import socket;s=socket.socket();s.settimeout(1);s.connect(('127.0.0.1',$BACKEND_PORT))" >/dev/null 2>&1 && READY=1 && break
+    sleep 2
+done
+[ "$READY" = 1 ] || { fail "isolated backend readiness failed"; exit 1; }
+BACKEND_HOST="$TEST_BACKEND_NAME"
+pass "Isolated backend ready: $TEST_BACKEND_NAME on GPU $PHASE9_TEST_GPU_UUID"
 
 # ── 5. Voice mount ──────────────────────────────────────────────
 info "Step 5: Voice mount"
@@ -157,7 +236,7 @@ docker run -d --name "$SHADOW_NAME" \
     --network "$SHARED_NET" \
     -p "127.0.0.1:$SHADOW_PORT:10200" \
     -e TTS_BACKEND=s2cpp \
-    -e "S2_HOST=$BACKEND_HOST" -e "S2_PORT=$BACKEND_PORT" \
+    -e "S2_HOST=$TEST_BACKEND_NAME" -e "S2_PORT=$BACKEND_PORT" \
     -e S2_MODEL=/models/s2-pro-q4_k_m.gguf \
     -e S2_GPU_LAYERS=-1 -e S2_CODEC_CPU=false \
     -e S2_STREAM=true -e S2_SEGMENT_SENTENCES=false \
@@ -171,7 +250,7 @@ docker run -d --name "$SHADOW_NAME" \
     -e S2_BACKEND_BUSY_MAX_RETRIES=10 -e S2_BACKEND_BUSY_RETRY_DELAY_MS=500 \
     -e S2_QUEUE_WAIT_TIMEOUT_SEC=30 -e S2_SYNTHESIS_TIMEOUT_SEC=120 \
     "${VOICE_MOUNT_ARGS[@]}" "$TEST_IMAGE" 2>&1
-CREATED_CONTAINERS="$SHADOW_NAME"
+CREATED_CONTAINERS="$CREATED_CONTAINERS $SHADOW_NAME"
 sleep 3
 docker ps --filter "name=$SHADOW_NAME" --format '{{.Status}}' | grep -q "Up" \
     || { fail "Shadow wrapper not running"; docker logs "$SHADOW_NAME" 2>&1 | tail -20; exit 1; }
@@ -198,6 +277,8 @@ sleep 2
 
 # ── 11. Select Python runtime ───────────────────────────────────
 info "Step 11: Python runtime"
+export PHASE9_FAILURE_TYPE="import"
+export PHASE9_FAILURE_REASON="no usable Python runtime with wyoming import"
 CLIENT_HOST="127.0.0.1"
 CLIENT_PORT="$SHADOW_PORT"
 PYTHON=""
@@ -217,6 +298,8 @@ elif try_python "$(which python3 2>/dev/null || echo python3)"; then
     info "Using $PYTHON"
 else
     info "No host Python with wyoming — using helper container"
+    export PHASE9_FAILURE_TYPE="helper"
+    export PHASE9_FAILURE_REASON="helper container startup or import failed"
     RUNNER="helper"
     USE_HELPER_CONTAINER="true"
     CLIENT_HOST="$SHADOW_NAME"
@@ -231,7 +314,7 @@ else
         -v "$ARTIFACT_DIR:/artifacts" \
         -e "SHADOW_CONTAINER=$SHADOW_NAME" \
         -e SHADOW_LOG_PATH=/artifacts/shadow-live.log \
-        -e "BACKEND_CONTAINER=$BACKEND_NAME" \
+        -e "BACKEND_CONTAINER=$TEST_BACKEND_NAME" \
         "$TEST_IMAGE" infinity 2>&1
 
     CREATED_CONTAINERS="$CREATED_CONTAINERS $CLIENT_NAME"
@@ -248,6 +331,8 @@ fi
 
 # ── 12. Run validation client ───────────────────────────────────
 info "Step 12: Running client ($RUNNER mode)"
+export PHASE9_FAILURE_TYPE="runtime"
+export PHASE9_FAILURE_REASON="validation client failed before writing results"
 [ -f "$ARTIFACT_DIR/shadow-live.log" ] && [ -r "$ARTIFACT_DIR/shadow-live.log" ] \
     || { fail "Shadow live log missing or unreadable"; exit 1; }
 
@@ -257,7 +342,7 @@ run_client() {
             /workspace/scripts/phase_9_live_client.py \
             "$CLIENT_HOST" "$CLIENT_PORT" /artifacts 2>&1
     else
-        SHADOW_CONTAINER="$SHADOW_NAME" BACKEND_CONTAINER="$BACKEND_NAME" \
+        SHADOW_CONTAINER="$SHADOW_NAME" BACKEND_CONTAINER="$TEST_BACKEND_NAME" \
             SHADOW_LOG_PATH="$ARTIFACT_DIR/shadow-live.log" "$PYTHON" "$REPO_DIR/scripts/phase_9_live_client.py" \
             "$CLIENT_HOST" "$CLIENT_PORT" "$ARTIFACT_DIR" 2>&1
     fi
@@ -278,8 +363,21 @@ fi
 
 # ── 14. Collect logs ────────────────────────────────────────────
 docker logs "$SHADOW_NAME" > "$ARTIFACT_DIR/shadow-wrapper-logs.txt" 2>&1
-docker logs "$BACKEND_NAME" --tail 100 > "$ARTIFACT_DIR/backend-log-excerpt.txt" 2>&1
+docker logs "$TEST_BACKEND_NAME" > "$ARTIFACT_DIR/test-backend-logs.txt" 2>&1
+docker inspect "$TEST_BACKEND_NAME" > "$ARTIFACT_DIR/test-backend-inspect-final.json" 2>&1
 [ "$RUNNER" = "helper" ] && docker logs "$CLIENT_NAME" > "$ARTIFACT_DIR/helper-logs.txt" 2>&1
+
+# Test-backend comparison proves it is distinct from production.
+python3 - "$ARTIFACT_DIR" <<'PY_COMPARE'
+import json, os, sys
+p=sys.argv[1]
+try:
+ prod=json.load(open(os.path.join(p,"production-before-backend.json")))
+ test=json.load(open(os.path.join(p,"test-backend-inspect-final.json")))[0]
+ out={"production_id":prod.get("id"),"test_backend_id":test.get("Id"),"distinct":prod.get("id") != test.get("Id")}
+except Exception as e: out={"distinct":False,"error":f"{type(e).__name__}: {e}"}
+json.dump(out,open(os.path.join(p,"production-comparison-test-backend.json"),"w"),indent=2)
+PY_COMPARE
 
 # ── 15. Production comparison ───────────────────────────────────
 snapshot "$PROD_NAME" "$ARTIFACT_DIR/production-after-wrapper.json" 2>/dev/null || true
@@ -304,16 +402,16 @@ if not os.path.exists(client_results_path):
     results = {
         'classification': 'FAIL',
         'failure_type': 'infrastructure',
-        'reason': 'Validation client did not produce results.json (ModuleNotFoundError or container failure)',
+        'reason': 'validation client exited without results.json; inspect console.log for exact stderr',
         'production_unchanged': prod_ok,
         'tests': {}
     }
     with open(f'{artifact}/results.json','w') as f: json.dump(results, f, indent=2)
     with open(f'{artifact}/summary.md','w') as f:
         f.write(f'# Phase 9 Live Validation — INFRASTRUCTURE FAILURE\n')
-        f.write(f'**Reason:** Client could not start (missing wyoming module)\n')
+        f.write(f'**Reason:** validation client exited without results.json; see console.log\n')
         f.write(f'**Production unchanged:** {prod_ok}\n')
-    print(f'Infrastructure failure — results.json fabricated')
+    print(f'Infrastructure failure — shell fallback results written')
     print(f'Classification: FAIL (infrastructure)')
     exit(0)
 

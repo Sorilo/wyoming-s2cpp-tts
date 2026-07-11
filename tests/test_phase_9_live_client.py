@@ -267,3 +267,101 @@ class TestPhase9IsolationAndFailureContract:
     def test_disconnect_requires_start_before_nonempty_chunk(self):
         source = inspect.getsource(live.behavioral_tests)
         assert 'got_start and bool(chunk.audio)' in source
+
+
+class TestPhase9ExternalProbeContract:
+    """Task 6: Readiness probe must be external — backend image has no tools."""
+
+    def test_shell_never_execs_python3_or_curl_in_backend(self):
+        shell = (Path(__file__).parents[1] / "scripts/validate_phase_9_live.sh").read_text()
+        after_trap = shell[shell.index("trap cleanup EXIT INT TERM"):]
+        for tool in ["python3", "curl ", "wget ", "nc ", "ncat "]:
+            lines = after_trap.splitlines()
+            bad = [l for l in lines if tool in l and l.strip() and not l.strip().startswith("#")]
+            bad = [l for l in bad if "TEST_BACKEND_NAME" in l and "exec" in l]
+            if bad:
+                pytest.fail(f"Tool {tool.strip()} used against TEST_BACKEND_NAME: {bad}")
+
+    def test_probe_container_name_var_exists(self):
+        shell = (Path(__file__).parents[1] / "scripts/validate_phase_9_live.sh").read_text()
+        assert "PROBE_NAME=" in shell
+
+    def test_probe_has_phase9_label(self):
+        shell = (Path(__file__).parents[1] / "scripts/validate_phase_9_live.sh").read_text()
+        # The probe container must carry the smoke-test label
+        # Find the probe docker run block (not the variable declaration)
+        idx = shell.index('docker run -d --name "$PROBE_NAME"')
+        region = shell[idx:idx+800]
+        assert "com.sorilo.phase9-live-smoke" in region
+
+    def test_probe_uses_wrapper_image_not_backend(self):
+        shell = (Path(__file__).parents[1] / "scripts/validate_phase_9_live.sh").read_text()
+        idx = shell.index('docker run -d --name "$PROBE_NAME"')
+        region = shell[idx:idx+800]
+        assert "$TEST_IMAGE" in region, "Probe must reference $TEST_IMAGE (wrapper candidate)"
+        assert "$BACKEND_IMAGE" not in region
+
+    def test_probe_uses_shared_network(self):
+        shell = (Path(__file__).parents[1] / "scripts/validate_phase_9_live.sh").read_text()
+        idx = shell.index('docker run -d --name "$PROBE_NAME"')
+        region = shell[idx:idx+800]
+        assert "--network" in region
+        assert "$SHARED_NET" in region
+
+    def test_probe_targets_test_backend_not_production(self):
+        shell = (Path(__file__).parents[1] / "scripts/validate_phase_9_live.sh").read_text()
+        idx = shell.index('docker run -d --name "$PROBE_NAME"')
+        region = shell[idx:idx+2000]
+        assert "$TEST_BACKEND_NAME" in region
+        # In the probe polling block, $PROD_NAME should NOT be used as target
+        poll_region = shell[idx:shell.index("pass \"Backend TCP ready at attempt")]
+        assert "$BACKEND_NAME" not in poll_region
+
+    def test_backend_exit_detected_in_polling(self):
+        shell = (Path(__file__).parents[1] / "scripts/validate_phase_9_live.sh").read_text()
+        # The polling loop must check State.Running
+        after_backend_run = shell[shell.index("docker run -d --name"):]
+        assert ".State.Running" in after_backend_run
+
+    def test_readiness_timeout_configurable(self):
+        shell = (Path(__file__).parents[1] / "scripts/validate_phase_9_live.sh").read_text()
+        assert "PHASE9_BACKEND_READY_TIMEOUT_SEC" in shell
+        assert ":-180" in shell  # default
+
+    def test_readiness_timeout_validated(self):
+        shell = (Path(__file__).parents[1] / "scripts/validate_phase_9_live.sh").read_text()
+        idx = shell.index("PHASE9_BACKEND_READY_TIMEOUT_SEC")
+        region = shell[idx:shell.index("PHASE9_BACKEND_READY_TIMEOUT_SEC")+400]
+        assert "grep -qE" in region or "[[" in region
+
+    def test_probe_added_to_created_containers(self):
+        shell = (Path(__file__).parents[1] / "scripts/validate_phase_9_live.sh").read_text()
+        idx = shell.index("PROBE_NAME=")
+        region = shell[idx:shell.index("PROBE_NAME=")+2500]
+        assert "CREATED_CONTAINERS" in region
+
+    def test_probe_cleaned_up(self):
+        shell = (Path(__file__).parents[1] / "scripts/validate_phase_9_live.sh").read_text()
+        # cleanup function (lines 38-84) should handle probe
+        cleanup = shell[shell.index("cleanup()"):shell.index("trap cleanup EXIT INT TERM")]
+        assert "$PROBE_NAME" in cleanup
+
+    def test_audio_preflight_after_tcp_readiness(self):
+        shell = (Path(__file__).parents[1] / "scripts/validate_phase_9_live.sh").read_text()
+        # TCP readiness must come before the Python validation client
+        # (which internally runs backend_preflight)
+        tcp_idx = shell.index("pass \"Backend TCP ready")
+        client_idx = shell.index("phase_9_live_client.py")
+        assert tcp_idx < client_idx, "TCP readiness must come before Python client (which runs audio preflight)"
+
+    def test_test_mounts_remain_read_only(self):
+        shell = (Path(__file__).parents[1] / "scripts/validate_phase_9_live.sh").read_text()
+        clone_idx = shell.index("backend-clone.args")
+        region = shell[clone_idx:clone_idx+2000]
+        assert ":ro" in region
+        assert ":rw" not in region
+
+    def test_backend_exited_failure_type_distinct(self):
+        shell = (Path(__file__).parents[1] / "scripts/validate_phase_9_live.sh").read_text()
+        assert "backend_start_timeout" in shell or "backend_exited" in shell
+        assert "backend_port_unreachable" in shell

@@ -20,6 +20,7 @@ SHADOW_PORT="10201"
 PROD_NAME="wyoming-s2cpp-tts"
 BACKEND_NAME="s2cpp-backend"
 TEST_BACKEND_NAME="s2cpp-backend-phase9-smoke-${TIMESTAMP}"
+PROBE_NAME="wyoming-s2cpp-tts-phase9-probe-${TIMESTAMP}"
 PHASE9_TEST_GPU_UUID="${PHASE9_TEST_GPU_UUID:-}"
 BACKEND_IMAGE="${PHASE9_BACKEND_IMAGE:-}"
 BACKEND_DIGEST="${PHASE9_BACKEND_DIGEST:-}"
@@ -37,6 +38,14 @@ cleanup() {
     for pair in "$PROD_NAME production-after-wrapper.json" "$BACKEND_NAME production-after-backend.json"; do
         set -- $pair; snapshot "$1" "$ARTIFACT_DIR/$2" 2>/dev/null || printf '{"error":"inspect unavailable"}\n' > "$ARTIFACT_DIR/$2"
     done
+    # Preserve probe evidence before removal
+    if docker inspect "$PROBE_NAME" >/dev/null 2>&1; then
+        docker inspect "$PROBE_NAME" > "$ARTIFACT_DIR/probe-inspect-final.json" 2>&1 || true
+        docker logs "$PROBE_NAME" > "$ARTIFACT_DIR/probe-logs.txt" 2>&1 || true
+    else
+        printf '{"state":"not_created"}\n' > "$ARTIFACT_DIR/probe-inspect-final.json"
+        printf 'probe was not created\n' > "$ARTIFACT_DIR/probe-logs.txt"
+    fi
     if docker inspect "$TEST_BACKEND_NAME" >/dev/null 2>&1; then
         docker inspect "$TEST_BACKEND_NAME" > "$ARTIFACT_DIR/test-backend-inspect-final.json" 2>&1 || true
         docker logs "$TEST_BACKEND_NAME" > "$ARTIFACT_DIR/test-backend-logs.txt" 2>&1 || true
@@ -67,7 +76,7 @@ with open(os.path.join(p,"summary.md"),"w") as f:
 PY_FINAL
     local status="ok" c
     # Reverse creation order; remove only exact names recorded by this run.
-    for c in $CLIENT_NAME $SHADOW_NAME $TEST_BACKEND_NAME; do
+    for c in $CLIENT_NAME $SHADOW_NAME $PROBE_NAME $TEST_BACKEND_NAME; do
         case " $CREATED_CONTAINERS " in *" $c "*) docker rm -f "$c" >/dev/null 2>&1 || status="cleanup_failure";; esac
     done
     for c in $CREATED_CONTAINERS; do docker inspect "$c" >/dev/null 2>&1 && status="cleanup_failure" || true; done
@@ -84,6 +93,12 @@ fi
 [ -n "$PHASE9_TEST_GPU_UUID" ] || { fail "PHASE9_TEST_GPU_UUID is required"; exit 1; }
 [ -n "$BACKEND_IMAGE" ] || { fail "PHASE9_BACKEND_IMAGE is required"; exit 1; }
 [[ "$BACKEND_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { fail "PHASE9_BACKEND_DIGEST must be an explicit sha256 digest"; exit 1; }
+# Readiness timeout (default 180s)
+READY_TIMEOUT="${PHASE9_BACKEND_READY_TIMEOUT_SEC:-180}"
+if ! echo "$READY_TIMEOUT" | grep -qE '^[1-9][0-9]*$'; then
+    fail "PHASE9_BACKEND_READY_TIMEOUT_SEC must be a positive integer"; exit 1
+fi
+
 
 echo "=== Phase 9 Live Validation ==="
 echo "Artifacts: $ARTIFACT_DIR"
@@ -190,15 +205,75 @@ docker run -d --name "$TEST_BACKEND_NAME" \
     "${BACKEND_CLONE_ARGS[@]}" "$BACKEND_IMAGE" >/dev/null
 CREATED_CONTAINERS="$TEST_BACKEND_NAME"
 docker inspect "$TEST_BACKEND_NAME" > "$ARTIFACT_DIR/test-backend-inspect-start.json"
+
+# ── 4a. Start external probe container (wrapper image has Python) ──
+info "Step 4a: Starting readiness probe container"
+docker run -d --name "$PROBE_NAME" \
+    --label com.sorilo.phase9-live-smoke=true \
+    --network "$SHARED_NET" \
+    --entrypoint sleep \
+    "$TEST_IMAGE" infinity >/dev/null
+CREATED_CONTAINERS="$CREATED_CONTAINERS $PROBE_NAME"
+sleep 1
+docker ps --filter "name=$PROBE_NAME" --format '{{.Status}}' | grep -q "Up" \
+    || { fail "Probe container not running"; docker logs "$PROBE_NAME" 2>&1 | tail -10; exit 1; }
+
+# ── 4b. External TCP readiness with exit detection ──
+info "Step 4b: Polling backend TCP readiness (timeout ${READY_TIMEOUT}s)"
 READY=0
-for _ in $(seq 1 60); do
-    docker inspect -f '{{.State.Running}}' "$TEST_BACKEND_NAME" 2>/dev/null | grep -qx true || break
-    docker exec "$TEST_BACKEND_NAME" python3 -c "import socket;s=socket.socket();s.settimeout(1);s.connect(('127.0.0.1',$BACKEND_PORT))" >/dev/null 2>&1 && READY=1 && break
+POLL_START=$(date +%s)
+ATTEMPT=0
+while true; do
+    ATTEMPT=$((ATTEMPT + 1))
+    ELAPSED=$(($(date +%s) - POLL_START))
+    [ "$ELAPSED" -gt "$READY_TIMEOUT" ] && break
+
+    # Exit detection: if backend stopped, stop polling immediately
+    if ! docker inspect -f '{{.State.Running}}' "$TEST_BACKEND_NAME" 2>/dev/null | grep -qx true; then
+        BACKEND_EXIT_CODE=$(docker inspect -f '{{.State.ExitCode}}' "$TEST_BACKEND_NAME" 2>/dev/null || echo "unknown")
+        BACKEND_ERROR=$(docker inspect -f '{{.State.Error}}' "$TEST_BACKEND_NAME" 2>/dev/null || echo "unknown")
+        export PHASE9_FAILURE_TYPE="backend_exited"
+        export PHASE9_FAILURE_REASON="backend exited during readiness polling (attempt $ATTEMPT, elapsed ${ELAPSED}s, exit_code $BACKEND_EXIT_CODE, error $BACKEND_ERROR)"
+        fail "Backend exited before TCP listener ready (ExitCode=${BACKEND_EXIT_CODE})"; exit 1
+    fi
+
+    # External TCP probe from tool-capable probe container
+    if docker exec "$PROBE_NAME" python3 -c "
+import socket
+try:
+    s = socket.create_connection(('$TEST_BACKEND_NAME', $BACKEND_PORT), timeout=2)
+    s.close()
+    print('ok')
+except Exception as e:
+    print(f'not-ready: {e}')
+" 2>/dev/null | grep -q ok; then
+        READY=1
+        break
+    fi
     sleep 2
 done
-[ "$READY" = 1 ] || { fail "isolated backend readiness failed"; exit 1; }
+
+if [ "$READY" != 1 ]; then
+    BACKEND_RUNNING=$(docker inspect -f '{{.State.Running}}' "$TEST_BACKEND_NAME" 2>/dev/null || echo "false")
+    BACKEND_EXIT_CODE=$(docker inspect -f '{{.State.ExitCode}}' "$TEST_BACKEND_NAME" 2>/dev/null || echo "unknown")
+    PROBE_RUNNING=$(docker inspect -f '{{.State.Running}}' "$PROBE_NAME" 2>/dev/null || echo "false")
+    ELAPSED=$(($(date +%s) - POLL_START))
+    if [ "$BACKEND_RUNNING" != "true" ]; then
+        export PHASE9_FAILURE_TYPE="backend_exited"
+        export PHASE9_FAILURE_REASON="backend exited during readiness (exit_code=$BACKEND_EXIT_CODE, elapsed=${ELAPSED}s)"
+    elif [ "$PROBE_RUNNING" != "true" ]; then
+        export PHASE9_FAILURE_TYPE="probe_container_failure"
+        export PHASE9_FAILURE_REASON="probe container stopped during readiness polling (elapsed=${ELAPSED}s)"
+    else
+        export PHASE9_FAILURE_TYPE="backend_port_unreachable"
+        export PHASE9_FAILURE_REASON="backend TCP port unreachable after ${ATTEMPT} attempts (${ELAPSED}s elapsed, timeout=${READY_TIMEOUT}s)"
+    fi
+    fail "Backend readiness failed: ${PHASE9_FAILURE_TYPE}"; exit 1
+fi
+
 BACKEND_HOST="$TEST_BACKEND_NAME"
-pass "Isolated backend ready: $TEST_BACKEND_NAME on GPU $PHASE9_TEST_GPU_UUID"
+ELAPSED=$(($(date +%s) - POLL_START))
+pass "Backend TCP ready at attempt $ATTEMPT (${ELAPSED}s)"
 
 # ── 5. Voice mount ──────────────────────────────────────────────
 info "Step 5: Voice mount"

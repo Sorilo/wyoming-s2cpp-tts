@@ -28,7 +28,7 @@ The architecture uses **two separate containers** on the `sorilonet` Docker netw
 
 ### s2cpp-backend (CUDA)
 
-- **Image:** `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-edf89bd`
+- **Image:** `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-6e629d0`
 - Requires NVIDIA runtime, CUDA, and GPU access
 - Runs `s2.cpp` in HTTP server mode on port 3030
 - Mounts `/models` for GGUF/tokenizer assets and `/voices` for saved `.s2voice` profiles
@@ -38,7 +38,7 @@ The architecture uses **two separate containers** on the `sorilonet` Docker netw
 
 ### wyoming-s2cpp-tts (CPU-only wrapper)
 
-- **Image:** `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-9c134cc`
+- **Image:** `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-7db26b7`
 - Does **not** require NVIDIA runtime, CUDA, or GPU
 - Runs the Python Wyoming TCP server on port 10200
 - Translates Wyoming TTS requests into HTTP multipart calls to the backend
@@ -129,12 +129,12 @@ bash scripts/run_realtime_tuning_unraid.sh --benchmark
 
 ### Deploying to Home Assistant / Wyoming
 
-**A new wrapper image must be built and deployed** before Home Assistant can
-use the stride tuning settings.  The current production wrapper
-(``ghcr.io/sorilo/wyoming-s2cpp-tts:sha-9c134cc``) does not understand
-``S2_STREAM_DECODE_STRIDE_FRAMES`` or the other new environment variables.
+The production wrapper
+(``ghcr.io/sorilo/wyoming-s2cpp-tts:sha-7db26b7``) supports the stride tuning
+environment variables. Preserve the validated production values when editing
+the Unraid template.
 
-After a new wrapper image is published:
+For controlled future tuning:
 
 ```bash
 # See what settings to apply (informational only):
@@ -178,7 +178,7 @@ The current implementation uses single-active-synthesis with a bounded queue (de
 - `CANCEL_ON_CLIENT_DISCONNECT=true` (runtime-verified through Phase 8B2 backend cancellation)
 - `CANCEL_ON_NEW_REQUEST=false`
 
-Client-disconnect and backend request cancellation are runtime-verified through Phase 8B2: abandoned requests are recorded once, generation exits promptly, final decode is skipped, and `server_busy` is released. Queue-busy/timeout policies and controlled Wyoming failure behavior remain Phase 9 responsibilities.
+Client-disconnect and backend request cancellation are runtime-verified: abandoned requests are recorded once, generation exits promptly, final decode is skipped, and `server_busy` is released. Phase 9 added deterministic bounded FIFO admission, backend-busy retries, queue/synthesis deadlines, and controlled Wyoming failures while preserving one active synthesis.
 
 ## Latency measurement ownership
 

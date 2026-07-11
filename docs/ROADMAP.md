@@ -17,8 +17,8 @@ implement later phases.
 - Backend generates `audio/L16; rate=44100; channels=1` raw s16le PCM.
 - `TTS_BACKEND=s2cpp` is the production Docker default.
 - Single active synthesis at a time, bounded queue (max 3).
-- `S2_STREAM` is parsed/configured and a progressive HTTP streaming helper exists,
-  but the production handler still uses buffered `generate_multipart()` until Phase 7.5.
+- `S2_STREAM=true` uses the production progressive HTTP streaming path; the
+  buffered `generate_multipart()` path remains available when disabled.
 
 ## Completed phases
 
@@ -128,8 +128,8 @@ GPU telemetry, stock-clock verification, and saved-voice verification included.
 build comparison, mild GPU overclock testing, final stride 5/6/8 comparison.
 Requires separate goal and controlled backend-image builds.
 
-### Phase 9: queue, busy handling, and timeout policy
-Define queue capacity behavior, busy responses, backend HTTP 503 handling, queue wait timeout, synthesis timeout, and controlled Wyoming failure behavior.
+### Phase 9: queue, busy handling, and timeout policy ✅
+Implemented deterministic bounded FIFO admission, backend HTTP 503 retry, queue-wait and synthesis deadlines, controlled Wyoming failure behavior, and disconnect recovery. PR #2 merged as `1a0b93f`; 876 tests and isolated Unraid validation passed. Validated images are deployed and passed per-container verification; only the compact direct/HA production smoke remains.
 
 ### Phase 9.5: progressive LLM text-to-TTS phrase pipeline
 

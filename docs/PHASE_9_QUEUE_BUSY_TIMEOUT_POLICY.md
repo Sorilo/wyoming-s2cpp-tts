@@ -26,8 +26,8 @@ Explicit FIFO deque of `asyncio.Future` objects — no `asyncio.Semaphore`.
 | `MAX_QUEUE_SIZE` | 3 | ≥ 1 | Queue capacity (includes active) |
 | `S2_QUEUE_WAIT_TIMEOUT_SEC` | 30 | ≥ 0, ≤ 300 | Max seconds waiting in queue |
 | `S2_SYNTHESIS_TIMEOUT_SEC` | 120 | ≥ 0.1, ≤ 600 | Max seconds for backend synthesis |
-| `S2_BACKEND_BUSY_MAX_RETRIES` | 3 | ≥ 1, ≤ 10 | Additional retries after initial attempt |
-| `S2_BACKEND_BUSY_RETRY_DELAY_MS` | 200 | ≥ 0, ≤ 10000 | Milliseconds between retries |
+| `S2_BACKEND_BUSY_MAX_RETRIES` | 3 (`10` in production) | ≥ 1, ≤ 10 | Additional retries after initial attempt |
+| `S2_BACKEND_BUSY_RETRY_DELAY_MS` | 200 (`500` in production) | ≥ 0, ≤ 10000 | Milliseconds between retries |
 | `CANCEL_ON_NEW_REQUEST` | false | bool | Cancel active + queued on new request |
 
 ## HTTP 503 Retry Semantics
@@ -94,9 +94,6 @@ REQUEST → [reject if depth >= max_size]
 Progressive LLM phrase synthesis only. All Phase 9 reliability work (queue,
 retries, timeouts, disconnect) is complete.
 
-## Rollback
+## Production and rollback
 
-```bash
-docker pull ghcr.io/sorilo/wyoming-s2cpp-tts:sha-22db725
-# Backend unchanged: ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-edf89bd
-```
+Production uses wrapper `sha-7db26b7`, backend `sha-6e629d0`, retry count `10`, and retry delay `500`. Rollback restores wrapper `sha-12f3bf8`, backend `sha-edf89bd`, retry count `3`, and retry delay `200`; preserve every other Unraid template field. See `PHASE_9_DEPLOYMENT_HANDOFF.md`.

@@ -4,68 +4,146 @@
 set -euo pipefail
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
-PASS=0; FAIL=0; TOTAL=0
-
-pass() { echo -e "${GREEN}PASS${NC} $*"; PASS=$((PASS+1)); TOTAL=$((TOTAL+1)); }
-fail() { echo -e "${RED}FAIL${NC} $*"; FAIL=$((FAIL+1)); TOTAL=$((TOTAL+1)); }
+pass() { echo -e "${GREEN}PASS${NC} $*"; }
+fail() { echo -e "${RED}FAIL${NC} $*"; }
 info() { echo -e "${YELLOW}INFO${NC} $*"; }
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-ARTIFACT_DIR="$REPO_DIR/verification_artifacts/phase_9_live_smoke/$(date -u +%Y%m%d_%H%M%S)"
+TIMESTAMP="$(date -u +%Y%m%d_%H%M%S)"
+ARTIFACT_DIR="$REPO_DIR/verification_artifacts/phase_9_live_smoke/$TIMESTAMP"
 mkdir -p "$ARTIFACT_DIR"
 
 TEST_IMAGE="ghcr.io/sorilo/wyoming-s2cpp-tts:sha-12f3bf8"
 TEST_DIGEST="ghcr.io/sorilo/wyoming-s2cpp-tts@sha256:1954a448a52cf6ebbbd4c09c231fb416b045d8d421d25b1c3e11acf82be28d9b"
-SHADOW_NAME="wyoming-s2cpp-tts-phase9-smoke"
+SHADOW_NAME="wyoming-s2cpp-tts-phase9-smoke-${TIMESTAMP}"
 SHADOW_PORT="10201"
-BACKEND_NAME="s2cpp-backend"
 PROD_NAME="wyoming-s2cpp-tts"
+BACKEND_NAME="s2cpp-backend"
+CREATED_CONTAINERS=""
+
+# ── Cleanup trap ────────────────────────────────────────────────
+cleanup() {
+    local exit_code=$?
+    info "Cleaning up temporary containers..."
+    for c in $CREATED_CONTAINERS; do
+        docker stop "$c" 2>/dev/null || true
+        docker rm "$c" 2>/dev/null || true
+        info "Removed: $c"
+    done
+    exit $exit_code
+}
+trap cleanup EXIT INT TERM
 
 echo "=== Phase 9 Live Validation ==="
 echo "Artifacts: $ARTIFACT_DIR"
 echo "Started: $(date -u -Iseconds)"
 echo ""
 
-# ── Step 1: Docker access ──────────────────────────────────────
+# ── 1. Docker access ────────────────────────────────────────────
 info "Step 1: Docker access"
-docker version > /dev/null 2>&1 && pass "Docker accessible" || { fail "Docker daemon unreachable"; exit 1; }
+docker version > /dev/null 2>&1 || { fail "Docker daemon unreachable"; exit 1; }
+pass "Docker accessible"
 
-# ── Step 2: Record production identity ─────────────────────────
+# ── 2. Production identity ──────────────────────────────────────
 info "Step 2: Production identity"
-for CONTAINER in "$PROD_NAME" "$BACKEND_NAME"; do
-    docker inspect "$CONTAINER" > "$ARTIFACT_DIR/${CONTAINER}-before.json" 2>/dev/null || \
-        { fail "Cannot inspect $CONTAINER"; exit 1; }
-    CID=$(docker inspect -f '{{.Id}}' "$CONTAINER" 2>/dev/null)
-    IMG=$(docker inspect -f '{{.Config.Image}}' "$CONTAINER" 2>/dev/null)
-    STATE=$(docker inspect -f '{{.State.Status}}' "$CONTAINER" 2>/dev/null)
-    echo "$CONTAINER: id=$CID image=$IMG state=$STATE" | tee -a "$ARTIFACT_DIR/production-before.txt"
+for c in "$PROD_NAME" "$BACKEND_NAME"; do
+    docker inspect "$c" > "$ARTIFACT_DIR/${c}-before.json" 2>/dev/null || {
+        fail "Cannot inspect $c"; exit 1; }
 done
+python3 -c "
+import json, subprocess
+for c in ['$PROD_NAME', '$BACKEND_NAME']:
+    data = json.loads(subprocess.check_output(['docker','inspect',c]))[0]
+    out = {
+        'id': data['Id'], 'image_ref': data['Config']['Image'],
+        'image_id': data['Image'], 'created': data['Created'],
+        'started': data['State']['StartedAt'],
+        'restart_count': data['RestartCount'],
+        'running': data['State']['Running'],
+        'networks': list((data.get('NetworkSettings',{}).get('Networks',{}) or {}).keys()),
+    }
+    with open('$ARTIFACT_DIR/production-before-'+c+'.json','w') as f: json.dump(out,f,indent=2)
+" 2>/dev/null
 pass "Production identity recorded"
 
-# ── Extract production config ──────────────────────────────────
-NETWORK=$(docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}' "$PROD_NAME")
-BACKEND_HOST=$(docker inspect -f '{{range .Config.Env}}{{if eq (index (split . "=") 0) "S2_HOST"}}{{index (split . "=") 1}}{{end}}{{end}}' "$PROD_NAME")
-VOICE_DIR=$(docker inspect -f '{{range .Config.Env}}{{if eq (index (split . "=") 0) "S2_VOICE_DIR"}}{{index (split . "=") 1}}{{end}}{{end}}' "$PROD_NAME")
-info "Network=$NETWORK BackendHost=$BACKEND_HOST VoiceDir=$VOICE_DIR"
+# ── 3. Shared network ───────────────────────────────────────────
+info "Step 3: Finding shared network"
+WRAPPER_NETS=$(docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$PROD_NAME" 2>/dev/null)
+BACKEND_NETS=$(docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$BACKEND_NAME" 2>/dev/null)
+info "Wrapper nets: $WRAPPER_NETS"
+info "Backend nets: $BACKEND_NETS"
 
-# ── Check port 10201 ──────────────────────────────────────────
-ss -tlnp 2>/dev/null | grep -q ":10201 " && { fail "Port 10201 in use"; exit 1; }
-pass "Port 10201 free"
+SHARED_NET=""
+for net in $WRAPPER_NETS; do
+    for bnet in $BACKEND_NETS; do
+        [ "$net" = "$bnet" ] && SHARED_NET="$net" && break
+    done
+    [ -n "$SHARED_NET" ] && break
+done
+[ -z "$SHARED_NET" ] && { fail "No shared Docker network found"; exit 1; }
+info "Selected network: $SHARED_NET"
+echo "{\"network\":\"$SHARED_NET\"}" > "$ARTIFACT_DIR/network.json"
 
-# ── Step 3: Pull image ────────────────────────────────────────
-info "Step 3: Pulling test image"
+# ── 4. Backend config ───────────────────────────────────────────
+info "Step 4: Backend configuration"
+# Extract backend endpoint from production wrapper
+BACKEND_HOST=""
+BACKEND_PORT="3030"
+# Try S2_HOST first
+BH=$(docker inspect -f '{{range .Config.Env}}{{if eq (index (split . "=") 0) "S2_HOST"}}{{index (split . "=") 1}}{{end}}{{end}}' "$PROD_NAME" 2>/dev/null)
+[ -n "$BH" ] && BACKEND_HOST="$BH"
+BP=$(docker inspect -f '{{range .Config.Env}}{{if eq (index (split . "=") 0) "S2_PORT"}}{{index (split . "=") 1}}{{end}}{{end}}' "$PROD_NAME" 2>/dev/null)
+[ -n "$BP" ] && BACKEND_PORT="$BP"
+info "Backend: $BACKEND_HOST:$BACKEND_PORT"
+
+# ── 5. Voice mount ──────────────────────────────────────────────
+info "Step 5: Voice mount"
+VOICE_DIR=$(docker inspect -f '{{range .Config.Env}}{{if eq (index (split . "=") 0) "S2_VOICE_DIR"}}{{index (split . "=") 1}}{{end}}{{end}}' "$PROD_NAME" 2>/dev/null)
+VOICE_DIR="${VOICE_DIR:-/voices}"
+VOICE_SRC=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "'$VOICE_DIR'"}}{{.Source}}{{end}}{{end}}' "$PROD_NAME" 2>/dev/null)
+
+VOICE_MOUNT=""
+if [ -n "$VOICE_SRC" ]; then
+    VOICE_MOUNT="-v $VOICE_SRC:$VOICE_DIR:ro"
+    info "Voice mount: $VOICE_SRC -> $VOICE_DIR"
+else
+    info "No voice mount found (may use built-in voices)"
+fi
+
+# ── 6. Build shadow env ─────────────────────────────────────────
+info "Step 6: Building shadow environment"
+# Collect production env and override with Phase 9 values
+PROD_ENV=$(docker inspect -f '{{range .Config.Env}}--env {{.}} {{end}}' "$PROD_NAME" 2>/dev/null || echo "")
+
+# ── 7. Port check ───────────────────────────────────────────────
+ss -tlnp 2>/dev/null | grep -q ":${SHADOW_PORT} " && { fail "Port $SHADOW_PORT in use"; exit 1; }
+pass "Port $SHADOW_PORT free"
+
+# ── 8. Pull and verify image ────────────────────────────────────
+info "Step 8: Pulling image"
 docker pull "$TEST_DIGEST" 2>&1 | tail -1
-docker image inspect "$TEST_IMAGE" --format 'Digest: {{index .RepoDigests 0}}' | tee -a "$ARTIFACT_DIR/shadow-wrapper-inspect.json"
-pass "Image pulled"
+DIGEST=$(docker image inspect "$TEST_IMAGE" --format '{{index .RepoDigests 0}}' 2>/dev/null)
+info "Image digest: $DIGEST"
+echo "$DIGEST" | grep -q "sha256:1954a448a52cf6ebbbd4c09c231fb416b045d8d421d25b1c3e11acf82be28d9b" \
+    && pass "Digest matches" || { fail "Digest mismatch: $DIGEST"; exit 1; }
 
-# ── Step 4: Create shadow wrapper ─────────────────────────────
-info "Step 4: Creating shadow wrapper"
+# ── 9. Wait for idle backend ─────────────────────────────────────
+info "Step 9: Checking backend idle state"
+ACTIVE=$(docker logs "$PROD_NAME" --tail 5 2>&1 | grep -c "queue_started\|syn_trigger" || echo 0)
+if [ "$ACTIVE" -gt 0 ]; then
+    info "Production wrapper has active synthesis — waiting 10s..."
+    sleep 10
+fi
+
+# ── 10. Start shadow wrapper ────────────────────────────────────
+info "Step 10: Starting shadow wrapper"
 docker run -d --name "$SHADOW_NAME" \
-    --network "$NETWORK" \
+    --label com.sorilo.phase9-live-smoke=true \
+    --network "$SHARED_NET" \
     -p "127.0.0.1:$SHADOW_PORT:10200" \
     -e TTS_BACKEND=s2cpp \
-    -e S2_HOST="$BACKEND_HOST" \
-    -e S2_PORT=3030 \
+    -e "S2_HOST=$BACKEND_HOST" \
+    -e "S2_PORT=$BACKEND_PORT" \
     -e S2_MODEL=/models/s2-pro-q4_k_m.gguf \
     -e S2_STREAM=true \
     -e S2_SEGMENT_SENTENCES=false \
@@ -78,7 +156,7 @@ docker run -d --name "$SHADOW_NAME" \
     -e S2_MAX_INITIAL_BUFFER_MS=0 \
     -e S2_LOW_LATENCY=true \
     -e S2_DEFAULT_VOICE=cmu_bdl_male_us \
-    -e S2_VOICE_DIR=/voices \
+    -e "S2_VOICE_DIR=$VOICE_DIR" \
     -e MAX_QUEUE_SIZE=3 \
     -e CANCEL_ON_NEW_REQUEST=false \
     -e CANCEL_ON_CLIENT_DISCONNECT=true \
@@ -86,266 +164,141 @@ docker run -d --name "$SHADOW_NAME" \
     -e S2_BACKEND_BUSY_RETRY_DELAY_MS=200 \
     -e S2_QUEUE_WAIT_TIMEOUT_SEC=30 \
     -e S2_SYNTHESIS_TIMEOUT_SEC=120 \
+    $VOICE_MOUNT \
     "$TEST_IMAGE" 2>&1
 
+CREATED_CONTAINERS="$SHADOW_NAME"
 sleep 3
-docker ps --filter "name=$SHADOW_NAME" --format '{{.Status}}' | grep -q "Up" && pass "Shadow wrapper running" || { fail "Shadow wrapper not running"; docker logs "$SHADOW_NAME" 2>&1 | tail -20; exit 1; }
 
-# ── Wait for backend health ───────────────────────────────────
-info "Waiting for backend..."
-for i in $(seq 1 15); do
-    docker exec "$SHADOW_NAME" python3 -c "
-import urllib.request
-try:
-    r = urllib.request.urlopen('http://${BACKEND_HOST}:3030/generate', data=b'{}', timeout=3)
-    print(r.status)
-except: print('waiting')
-" 2>/dev/null | grep -q "200\|400\|405" && break
-    sleep 2
-done
-pass "Backend reachable"
+docker ps --filter "name=$SHADOW_NAME" --format '{{.Status}}' | grep -q "Up" \
+    || { fail "Shadow wrapper not running"; docker logs "$SHADOW_NAME" 2>&1 | tail -20; exit 1; }
+pass "Shadow wrapper running"
+docker inspect "$SHADOW_NAME" > "$ARTIFACT_DIR/shadow-wrapper-inspect.json" 2>/dev/null
 
-# ── Wyoming test client ───────────────────────────────────────
-cd "$REPO_DIR"
-PYTHONPATH=. python3 -c "
-import asyncio, json, struct, time, wave
-from wyoming.client import AsyncTcpClient
-from wyoming.tts import Synthesize, SynthesizeVoice
-from wyoming.audio import AudioChunk, AudioStart, AudioStop
-
-async def synthesize(text, host='127.0.0.1', port=${SHADOW_PORT}, timeout=60):
-    events = []
-    pcm = bytearray()
-    async with AsyncTcpClient(host, port) as tcp:
-        await tcp.write_event(Synthesize(
-            text=text,
-            voice=SynthesizeVoice(name='cmu_bdl_male_us')
-        ).event())
-        start = time.monotonic()
-        while True:
-            try:
-                ev = await asyncio.wait_for(tcp.read_event(), timeout=timeout)
-            except asyncio.TimeoutError:
-                break
-            if ev is None:
-                break
-            events.append(ev)
-            if AudioChunk.is_type(ev.type):
-                c = AudioChunk.from_event(ev)
-                pcm.extend(c.audio)
-            if AudioStop.is_type(ev.type):
-                break
-    return events, bytes(pcm), time.monotonic() - start
-
-def save_wav(path, pcm, rate=44100):
-    with wave.open(path, 'w') as w:
-        w.setnchannels(1); w.setsampwidth(2); w.setframerate(rate)
-        w.writeframes(pcm)
-
-async def tests():
-    results = {}
-    
-    # Test A: short
-    events, pcm, dur = await synthesize('The weather is clear and sunny today.')
-    types = [e.type for e in events]
-    results['short'] = {
-        'text': 'The weather is clear and sunny today.',
-        'duration_s': round(dur, 3),
-        'pcm_bytes': len(pcm),
-        'events': types,
-        'audio_start': 'audio-start' in types,
-        'audio_chunks': sum(1 for t in types if 'audio-chunk' in t),
-        'audio_stop': 'audio-stop' in types,
-        'valid_pcm': len(pcm) > 0 and len(pcm) % 2 == 0
-    }
-    save_wav('$ARTIFACT_DIR/short.wav', pcm)
-    print('Test A - short:', json.dumps(results['short']))
-    
-    # Test B: long
-    events, pcm, dur = await synthesize(
-        'Good morning. Today we have a full schedule of activities planned. '
-        'First, we will review the quarterly results and discuss the upcoming projects. '
-        'Then we will break for lunch before continuing with the afternoon session.')
-    types = [e.type for e in events]
-    results['long'] = {
-        'duration_s': round(dur, 3),
-        'pcm_bytes': len(pcm),
-        'events': types,
-        'audio_start': 'audio-start' in types,
-        'audio_chunks': sum(1 for t in types if 'audio-chunk' in t),
-        'audio_stop': 'audio-stop' in types,
-        'valid_pcm': len(pcm) > 0 and len(pcm) % 2 == 0
-    }
-    save_wav('$ARTIFACT_DIR/long.wav', pcm)
-    print('Test B - long:', json.dumps(results['long']))
-    
-    # Test C: FIFO concurrency
-    async def synth_with_id(text, n, results_dict):
-        events, pcm, dur = await synthesize(text, timeout=120)
-        results_dict[str(n)] = {
-            'order': n, 'duration_s': round(dur, 3),
-            'pcm_bytes': len(pcm), 'valid_pcm': len(pcm) > 0
-        }
-    
-    fifo_results = {}
-    t1 = asyncio.create_task(synth_with_id('First request for FIFO testing.', 1, fifo_results))
-    await asyncio.sleep(0.1)
-    t2 = asyncio.create_task(synth_with_id('Second request should wait for first.', 2, fifo_results))
-    await asyncio.sleep(0.1)
-    t3 = asyncio.create_task(synth_with_id('Third and final FIFO test request.', 3, fifo_results))
-    await asyncio.gather(t1, t2, t3)
-    results['fifo'] = fifo_results
-    print('Test C - FIFO:', json.dumps(fifo_results))
-    
-    # Test D: queue-full
-    qf_results = {}
-    tf1 = asyncio.create_task(synth_with_id('Queue full test — active request one with enough text to keep it busy for a moment.', 1, qf_results))
-    await asyncio.sleep(0.2)
-    tf2 = asyncio.create_task(synth_with_id('Queue full waiting request two.', 2, qf_results))
-    await asyncio.sleep(0.1)
-    tf3 = asyncio.create_task(synth_with_id('Queue full waiting request three.', 3, qf_results))
-    await asyncio.sleep(0.1)
-    # Fourth request should be rejected
-    try:
-        events, _, _ = await synthesize('This should be rejected — queue at capacity.', timeout=10)
-        qf_results['4'] = {'rejected': False, 'events': [e.type for e in events]}
-    except Exception as e:
-        qf_results['4'] = {'rejected': True, 'error': str(e)[:100]}
-    await asyncio.gather(tf1, tf2, tf3)
-    results['queue_full'] = qf_results
-    print('Test D - queue-full:', json.dumps(qf_results))
-    
-    # Test E: disconnect + recovery
-    async with AsyncTcpClient('127.0.0.1', ${SHADOW_PORT}) as tcp:
-        await tcp.write_event(Synthesize(
-            text='Disconnect test — this is a long text that will be actively synthesizing when we close the connection.',
-            voice=SynthesizeVoice(name='cmu_bdl_male_us')
-        ).event())
-        # Read until first AudioChunk
-        chunk_received = False
-        while True:
-            ev = await asyncio.wait_for(tcp.read_event(), timeout=30)
-            if ev is None: break
-            if AudioChunk.is_type(ev.type):
-                chunk_received = True
-                break
-        # Intentionally close without reading more
-    await asyncio.sleep(1)
-    
-    # Recovery
-    events, pcm, dur = await synthesize('Recovery test after disconnect.', timeout=60)
-    types = [e.type for e in events]
-    results['disconnect'] = {
-        'chunk_before_disconnect': chunk_received,
-        'recovery_audio_start': 'audio-start' in types,
-        'recovery_audio_stop': 'audio-stop' in types,
-        'recovery_pcm_bytes': len(pcm),
-        'recovery_valid_pcm': len(pcm) > 0 and len(pcm) % 2 == 0
-    }
-    save_wav('$ARTIFACT_DIR/recovery.wav', pcm)
-    print('Test E - disconnect:', json.dumps(results['disconnect']))
-    
-    # Test F: 3-cycle recovery
-    cycle_results = []
-    for cycle in range(3):
-        async with AsyncTcpClient('127.0.0.1', ${SHADOW_PORT}) as tcp:
-            await tcp.write_event(Synthesize(
-                text=f'Recovery cycle {cycle+1} — this text will be interrupted mid-stream for disconnect testing.',
-                voice=SynthesizeVoice(name='cmu_bdl_male_us')
-            ).event())
-            while True:
-                ev = await asyncio.wait_for(tcp.read_event(), timeout=30)
-                if ev is None: break
-                if AudioChunk.is_type(ev.type): break
-        await asyncio.sleep(1)
-        events, pcm, _ = await synthesize(f'Recovery cycle {cycle+1} recovery request.', timeout=60)
-        cycle_results.append({
-            'cycle': cycle+1,
-            'recovery_pcm_bytes': len(pcm),
-            'valid_pcm': len(pcm) > 0 and len(pcm) % 2 == 0,
-            'audio_start': 'audio-start' in [e.type for e in events]
-        })
-    results['recovery_cycles'] = cycle_results
-    print('Test F - cycles:', json.dumps(cycle_results))
-    
-    with open('$ARTIFACT_DIR/results.json', 'w') as f:
-        json.dump(results, f, indent=2)
-    
-    # Summary
-    all_valid = all([
-        results['short']['valid_pcm'] and results['short']['audio_start'] and results['short']['audio_stop'],
-        results['long']['valid_pcm'] and results['long']['audio_start'] and results['long']['audio_stop'],
-        all(str(i) in results['fifo'] and results['fifo'][str(i)]['valid_pcm'] for i in [1,2,3]),
-        results['queue_full']['4'].get('rejected', False),
-        results['disconnect']['recovery_valid_pcm'],
-        all(c['valid_pcm'] for c in results['recovery_cycles'])
-    ])
-    print(f'\\n=== OVERALL: {\"PASS\" if all_valid else \"PARTIAL\"} ===')
-
-asyncio.run(tests())
-" 2>&1 | tee "$ARTIFACT_DIR/client-output.txt"
-
-# ── Collect logs ───────────────────────────────────────────────
-docker logs "$SHADOW_NAME" > "$ARTIFACT_DIR/shadow-wrapper-logs.txt" 2>&1
-docker logs "$BACKEND_NAME" --tail 50 > "$ARTIFACT_DIR/backend-log-excerpt.txt" 2>&1
-
-# ── Verify queue depth zero ───────────────────────────────────
-FINAL_QUEUE=$(grep -c "queue_depth_changed" "$ARTIFACT_DIR/shadow-wrapper-logs.txt" 2>/dev/null || echo 0)
-info "Queue depth events: $FINAL_QUEUE"
-grep "queue_depth_changed" "$ARTIFACT_DIR/shadow-wrapper-logs.txt" | tail -10 | tee "$ARTIFACT_DIR/queue-depth-log.txt"
-
-# ── Verify log events ─────────────────────────────────────────
-for EVENT in queue_request_received queue_admitted queue_wait_started queue_started queue_rejected queue_cancelled client_disconnected synthesis_cancel_requested queue_depth_changed; do
-    COUNT=$(grep -c "$EVENT" "$ARTIFACT_DIR/shadow-wrapper-logs.txt" 2>/dev/null || echo 0)
-    echo "$EVENT: $COUNT occurrences" | tee -a "$ARTIFACT_DIR/log-event-counts.txt"
-done
-
-# ── Check for errors ──────────────────────────────────────────
-ERRORS=$(grep -ci "traceback\|error\|exception" "$ARTIFACT_DIR/shadow-wrapper-logs.txt" 2>/dev/null || echo 0)
-WARNINGS=$(grep -ci "warning" "$ARTIFACT_DIR/shadow-wrapper-logs.txt" 2>/dev/null || echo 0)
-echo "Wrapper errors: $ERRORS, warnings: $WARNINGS" | tee -a "$ARTIFACT_DIR/summary.md"
-
-# ── Step 9: Cleanup ───────────────────────────────────────────
-info "Step 9: Cleanup"
-docker stop "$SHADOW_NAME" 2>/dev/null && docker rm "$SHADOW_NAME" 2>/dev/null
-pass "Shadow wrapper removed"
-
-# ── Verify production unchanged ────────────────────────────────
-for CONTAINER in "$PROD_NAME" "$BACKEND_NAME"; do
-    NEW_CID=$(docker inspect -f '{{.Id}}' "$CONTAINER")
-    OLD_CID=$(grep "id=" "$ARTIFACT_DIR/production-before.txt" | grep "$CONTAINER" | sed 's/.*id=//' | cut -d' ' -f1)
-    if [ "$NEW_CID" = "$OLD_CID" ]; then
-        pass "$CONTAINER unchanged"
-    else
-        fail "$CONTAINER changed: $OLD_CID -> $NEW_CID"
+# ── 11. Wait for backend reachable ──────────────────────────────
+info "Step 11: Waiting for backend..."
+READY=0
+for i in $(seq 1 20); do
+    if docker exec "$SHADOW_NAME" python3 -c "
+import socket; s=socket.socket(); s.settimeout(2)
+try: s.connect(('$BACKEND_HOST',$BACKEND_PORT)); print('ok'); s.close()
+except: pass" 2>/dev/null | grep -q ok; then
+        READY=1; break
     fi
-    STATE=$(docker inspect -f '{{.State.Status}}' "$CONTAINER")
-    [ "$STATE" = "running" ] && pass "$CONTAINER running" || fail "$CONTAINER state=$STATE"
+    sleep 1.5
 done
+[ "$READY" = "1" ] && pass "Backend reachable" || { fail "Backend unreachable"; exit 1; }
 
-# ── Final report ──────────────────────────────────────────────
-cat > "$ARTIFACT_DIR/summary.md" << SUMMARYEOF
-# Phase 9 Live Validation Report
+# Wait for Wyoming describe to be available
+sleep 2
+
+# ── 12. Run Python validation client ────────────────────────────
+info "Step 12: Running Phase 9 validation client"
+PYTHON=""
+[ -f "$REPO_DIR/.venv/bin/python" ] && PYTHON="$REPO_DIR/.venv/bin/python"
+[ -z "$PYTHON" ] && PYTHON="$(which python3 2>/dev/null || echo python3)"
+
+export SHADOW_CONTAINER="$SHADOW_NAME"
+export BACKEND_CONTAINER="$BACKEND_NAME"
+
+"$PYTHON" "$REPO_DIR/scripts/phase_9_live_client.py" "127.0.0.1" "$SHADOW_PORT" "$ARTIFACT_DIR" 2>&1 | tee "$ARTIFACT_DIR/console.log"
+CLIENT_EXIT=$?
+
+# ── 13. Collect logs ────────────────────────────────────────────
+docker logs "$SHADOW_NAME" > "$ARTIFACT_DIR/shadow-wrapper-logs.txt" 2>&1
+docker logs "$BACKEND_NAME" --tail 100 > "$ARTIFACT_DIR/backend-log-excerpt.txt" 2>&1
+
+# ── 14. Parse structured queue events ───────────────────────────
+info "Step 14: Parsing queue events"
+python3 -c "
+import json, sys
+events = []
+with open('$ARTIFACT_DIR/shadow-wrapper-logs.txt','r') as f:
+    for line in f:
+        try: events.append(json.loads(line))
+        except: pass
+queue_events = [e for e in events if e.get('event','').startswith('queue_')]
+with open('$ARTIFACT_DIR/parsed-queue-events.json','w') as f:
+    json.dump(queue_events, f, indent=2)
+depths = [e.get('queue_depth',-1) for e in queue_events if 'queue_depth' in e]
+final = depths[-1] if depths else -1
+print(f'Queue events: {len(queue_events)}, final depth: {final}')
+errors = sum(1 for e in events if e.get('event','') in ('backend_stream_done','backend_busy_exhausted','synthesis_timeout'))
+warnings = sum(1 for line in open('$ARTIFACT_DIR/shadow-wrapper-logs.txt') if 'warning' in line.lower())
+print(f'Errors: {errors}, Warnings: {warnings}')
+" 2>&1 | tee -a "$ARTIFACT_DIR/console.log"
+
+# ── 15. Production verification ─────────────────────────────────
+info "Step 15: Production verification"
+for c in "$PROD_NAME" "$BACKEND_NAME"; do
+    docker inspect "$c" > "$ARTIFACT_DIR/${c}-after.json" 2>/dev/null || true
+done
+python3 -c "
+import json
+for c in ['$PROD_NAME', '$BACKEND_NAME']:
+    before = json.load(open('$ARTIFACT_DIR/production-before-'+c+'.json'))
+    after_data = json.loads(__import__('subprocess').check_output(['docker','inspect',c]))[0]
+    after = {'id': after_data['Id'], 'image_ref': after_data['Config']['Image'],
+             'image_id': after_data['Image'], 'created': after_data['Created'],
+             'started': after_data['State']['StartedAt'],
+             'restart_count': after_data['RestartCount'],
+             'running': after_data['State']['Running']}
+    changed = {k: (before[k], after[k]) for k in before if before[k] != after[k]}
+    result = {'container': c, 'unchanged': len(changed)==0, 'changes': changed}
+    with open('$ARTIFACT_DIR/production-comparison-'+c+'.json','w') as f: json.dump(result,f,indent=2)
+    print(f'{c}: unchanged={len(changed)==0}' + (f' changes={changed}' if changed else ''))
+    if not after['running']:
+        print(f'  WARNING: {c} not running!')
+" 2>&1 | tee -a "$ARTIFACT_DIR/console.log"
+
+# ── 16. Generate summary ────────────────────────────────────────
+info "Step 16: Generating summary"
+python3 -c "
+import json
+with open('$ARTIFACT_DIR/results.json') as f: r = json.load(f)
+with open('$ARTIFACT_DIR/summary.md','w') as f:
+    f.write(f'''# Phase 9 Live Validation Report
 - **Date:** $(date -u -Iseconds)
 - **Image:** $TEST_IMAGE
 - **Digest:** $TEST_DIGEST
-- **Shadow:** $SHADOW_NAME (port $SHADOW_PORT)
-- **Tests:** $TOTAL total, $PASS passed, $FAIL failed
+- **Shadow:** $SHADOW_NAME
+- **Network:** $SHARED_NET
+- **Port:** $SHADOW_PORT
 
+## Overall Classification: {r.get('classification','UNKNOWN')}
+
+## Test Results
+| Test | Status |
+|------|--------|
+''')
+    for k,v in r.items():
+        if k not in ('classification','short','long','fifo_1','fifo_2','fifo_3','queue_full','disconnect','recovery_cycles'):
+            if isinstance(v, dict) and 'status' in v:
+                f.write(f'| {k} | {v[\"status\"]} |\n')
+    f.write('''
 ## Artifacts
-- $ARTIFACT_DIR/short.wav
-- $ARTIFACT_DIR/long.wav
-- $ARTIFACT_DIR/recovery.wav
-- $ARTIFACT_DIR/results.json
-- $ARTIFACT_DIR/shadow-wrapper-logs.txt
-- $ARTIFACT_DIR/client-output.txt
-
-## Classification
-$([ $FAIL -eq 0 ] && echo "PASS" || echo "PARTIAL")
-SUMMARYEOF
+| File | Description |
+|------|-------------|
+| results.json | Machine-readable results |
+| short.wav | Short synthesis output |
+| long.wav | Long synthesis output |
+| fifo-request-*.wav | FIFO test outputs |
+| recovery.wav | Disconnect recovery output |
+| post-queue-full-recovery.wav | Queue-full recovery output |
+| shadow-wrapper-logs.txt | Full shadow container logs |
+| parsed-queue-events.json | Extracted queue lifecycle events |
+| production-before-*.json | Production identity before test |
+| production-comparison-*.json | Production before/after diff |
+''')
+print('Summary written')
+" 2>&1
 
 echo ""
-echo "=== Validation Complete ==="
-echo "Passed: $PASS/$TOTAL"
+echo "========================================"
+echo "Phase 9 Live Validation Complete"
+echo "Classification: $(python3 -c "import json; print(json.load(open('$ARTIFACT_DIR/results.json'))['classification'])")"
+echo "Exit code: $CLIENT_EXIT"
 echo "Artifacts: $ARTIFACT_DIR"
-[ $FAIL -eq 0 ] && echo "Classification: PASS" || echo "Classification: PARTIAL"
+echo "========================================"
+
+exit $CLIENT_EXIT

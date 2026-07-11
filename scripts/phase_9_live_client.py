@@ -142,11 +142,6 @@ def save_wav(path: str, r: RequestResult) -> None:
         w.setframerate(r.rate or 44100); w.writeframes(bytes(r.pcm))
 
 
-async def _run(cmd: str) -> str:
-    proc = await asyncio.create_subprocess_shell(
-        cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-    out, _ = await proc.communicate(); return out.decode(errors="replace")
-
 
 async def poll_log_for(container: str, pattern: str, count: int = 1,
                        timeout: float = 30.0) -> bool:
@@ -163,8 +158,6 @@ async def poll_log_for(container: str, pattern: str, count: int = 1,
 async def run_tests(host: str, port: int, artifact_dir: str) -> dict:
     results: dict = {}
     classification = "PASS"
-    container = os.environ.get("SHADOW_CONTAINER", "unknown")
-
     def record(name: str, status: str, detail=None):
         results[name] = {"status": status, "detail": detail}
         if status == "FAIL":
@@ -223,7 +216,7 @@ async def run_tests(host: str, port: int, artifact_dir: str) -> dict:
     ordered = c_times[0] < c_times[1] < c_times[2]
     all_ok = all(r.valid for r in [r1, r2_, r3_])
     # Verify log-backed: check queue_started events exist
-    log_ok = await poll_log_for(container, "queue_started", 3, timeout=10)
+    log_ok = await poll_log_for("queue_started", 3, timeout=10)
     if all_ok and ordered and log_ok:
         record("fifo", "PASS", {"ordered": True, "log_backed": True})
         print("  PASS: ordered 1<2<3, log-backed")
@@ -236,7 +229,7 @@ async def run_tests(host: str, port: int, artifact_dir: str) -> dict:
     qf_base = "Queue-full-request-%d-deliberately-long-text-for-occupancy"
     q1 = asyncio.create_task(synthesize(qf_base % 1, host, port, timeout=120))
     # Poll until request 1 is active (depth=1)
-    if not await poll_log_for(container, "queue_started", 1, timeout=15):
+    if not await poll_log_for("queue_started", 1, timeout=15):
         record("queue_full", "FAIL", {"reason": "request 1 not detected active"})
     else:
         q2 = asyncio.create_task(synthesize(qf_base % 2, host, port, timeout=120))
@@ -254,7 +247,7 @@ async def run_tests(host: str, port: int, artifact_dir: str) -> dict:
             q4_rejected = False
         rq1, rq2, rq3 = await asyncio.gather(q1, q2, q3)
         # Verify queue_rejected in logs
-        rejected_log = await poll_log_for(container, "queue_rejected", 1, timeout=10)
+        rejected_log = await poll_log_for("queue_rejected", 1, timeout=10)
         r_rec = await synthesize("Recovery after queue-full.", host, port, timeout=60)
         save_wav(f"{artifact_dir}/post-queue-full-recovery.wav", r_rec)
         results["queue_full"] = {
@@ -280,7 +273,7 @@ async def run_tests(host: str, port: int, artifact_dir: str) -> dict:
                 if ev is None: break
                 if AudioChunk.is_type(ev.type): got_chunk = True; break
         # Poll until disconnect is detected in logs
-        cleanup_ok = await poll_log_for(container, "client_disconnected|queue_depth_changed", 1, timeout=15)
+        cleanup_ok = await poll_log_for("client_disconnected|queue_depth_changed", 1, timeout=15)
     except Exception as e:
         results["disconnect_error"] = str(e); cleanup_ok = False
     r_rec2 = await synthesize("Recovery after disconnect.", host, port, timeout=60)

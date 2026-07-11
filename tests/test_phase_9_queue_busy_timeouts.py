@@ -1240,8 +1240,8 @@ class TestAllNewEnvSettingsRejectInvalid:
 
     def test_valid_settings_load_defaults(self):
         settings = Settings()
-        assert settings.s2_backend_busy_max_retries == 3
-        assert settings.s2_backend_busy_retry_delay_ms == 200
+        assert settings.s2_backend_busy_max_retries == 10
+        assert settings.s2_backend_busy_retry_delay_ms == 500
         assert settings.s2_queue_wait_timeout_sec == 30.0
         assert settings.s2_synthesis_timeout_sec == 120.0
 

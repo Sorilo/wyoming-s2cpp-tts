@@ -492,7 +492,7 @@ async def synthesize_s2cpp_streaming_tts_events(
             segment_sentences=request.segment_sentences,
             model=settings.s2_model)
 
-    retry_count = 0
+    attempt = 1
     max_total_attempts = settings.s2_backend_busy_max_retries + 1
     audio_start_emitted = False
     synthesis_deadline = time.monotonic() + settings.s2_synthesis_timeout_sec
@@ -827,23 +827,27 @@ async def synthesize_s2cpp_streaming_tts_events(
                 break  # exit retry loop on success
 
         except S2BackendBusyError as exc:
-            retry_count += 1
             obs_log("backend_busy",
                     connection_id=_ctx.connection_id,
                     synthesis_id=_ctx.synthesis_id,
                     text_fp=fp,
-                    attempt=retry_count + 1,
+                    attempt=attempt,
                     max_attempts=max_total_attempts,
                     pcm_observed=backend_data_observed,
                     audio_start_emitted=audio_start_emitted)
-            if not backend_data_observed and not audio_start_emitted                 and retry_count < max_total_attempts:
+            if (
+                    not backend_data_observed
+                    and not audio_start_emitted
+                    and attempt < max_total_attempts
+                ):
                 obs_log("backend_busy_retry",
                         connection_id=_ctx.connection_id,
                         synthesis_id=_ctx.synthesis_id,
                         text_fp=fp,
-                        retry_count=retry_count,
+                        retry_count=attempt,
                         max_total_attempts=max_total_attempts,
                         delay_ms=settings.s2_backend_busy_retry_delay_ms)
+                attempt += 1
                 await asyncio.sleep(
                     settings.s2_backend_busy_retry_delay_ms / 1000.0)
                 continue
@@ -851,10 +855,10 @@ async def synthesize_s2cpp_streaming_tts_events(
                     connection_id=_ctx.connection_id,
                     synthesis_id=_ctx.synthesis_id,
                     text_fp=fp,
-                    retry_count=retry_count,
+                    attempt=attempt,
                     max_total_attempts=max_total_attempts,
                     pcm_observed=backend_data_observed,
-                    audio_start_emitted=first_audio_emitted)
+                    audio_start_emitted=audio_start_emitted)
             metrics.finalize("error", "backend_busy_exhausted")
             raise
         except asyncio.TimeoutError:
@@ -865,7 +869,7 @@ async def synthesize_s2cpp_streaming_tts_events(
                     elapsed_ms=int((time.monotonic() - stream_start) * 1000),
                     pcm_bytes_received=metrics.total_emitted_bytes,
                     chunk_count=metrics.emitted_chunk_count,
-                    audio_start_emitted=first_audio_emitted)
+                    audio_start_emitted=audio_start_emitted)
             metrics.finalize("error", "synthesis_timeout")
             raise
         except (GeneratorExit, asyncio.CancelledError) as exc:
@@ -884,7 +888,7 @@ async def synthesize_s2cpp_streaming_tts_events(
                     elapsed_ms=total_elapsed_ms,
                     pcm_bytes_received=metrics.total_emitted_bytes,
                     chunk_count=metrics.emitted_chunk_count,
-                    audio_start_emitted=first_audio_emitted)
+                    audio_start_emitted=audio_start_emitted)
             # The ``with`` block's ``__exit__`` also cleans up the stream.
             metrics.finalize("cancelled")
             raise

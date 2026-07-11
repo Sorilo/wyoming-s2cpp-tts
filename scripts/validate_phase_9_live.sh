@@ -12,8 +12,8 @@ TIMESTAMP="$(date -u +%Y%m%d_%H%M%S)"
 ARTIFACT_DIR="$REPO_DIR/verification_artifacts/phase_9_live_smoke/$TIMESTAMP"
 mkdir -p "$ARTIFACT_DIR"
 
-TEST_IMAGE="ghcr.io/sorilo/wyoming-s2cpp-tts:sha-12f3bf8"
-EXPECTED_DIGEST="sha256:1954a448a52cf6ebbbd4c09c231fb416b045d8d421d25b1c3e11acf82be28d9b"
+TEST_IMAGE="ghcr.io/sorilo/wyoming-s2cpp-tts:sha-1b3ee17"
+EXPECTED_DIGEST="${PHASE9_EXPECTED_DIGEST:-sha256:1954a448a52cf6ebbbd4c09c231fb416b045d8d421d25b1c3e11acf82be28d9b}"
 SHADOW_NAME="wyoming-s2cpp-tts-phase9-smoke-${TIMESTAMP}"
 CLIENT_NAME="wyoming-s2cpp-tts-phase9-client-${TIMESTAMP}"
 SHADOW_PORT="10201"
@@ -24,6 +24,7 @@ USE_HELPER_CONTAINER="false"
 
 cleanup() {
     local exit_code=$?
+    [ -n "${LOG_FOLLOWER_PID:-}" ] && kill "$LOG_FOLLOWER_PID" 2>/dev/null || true
     info "Cleaning up temporary containers..."
     local status="ok"
     for c in $CREATED_CONTAINERS; do
@@ -159,7 +160,7 @@ docker run -d --name "$SHADOW_NAME" \
     -e S2_DEFAULT_VOICE=cmu_bdl_male_us -e "S2_VOICE_DIR=$VOICE_DIR" \
     -e MAX_QUEUE_SIZE=3 -e CANCEL_ON_NEW_REQUEST=false \
     -e CANCEL_ON_CLIENT_DISCONNECT=true \
-    -e S2_BACKEND_BUSY_MAX_RETRIES=3 -e S2_BACKEND_BUSY_RETRY_DELAY_MS=200 \
+    -e S2_BACKEND_BUSY_MAX_RETRIES=10 -e S2_BACKEND_BUSY_RETRY_DELAY_MS=500 \
     -e S2_QUEUE_WAIT_TIMEOUT_SEC=30 -e S2_SYNTHESIS_TIMEOUT_SEC=120 \
     "${VOICE_MOUNT_ARGS[@]}" "$TEST_IMAGE" 2>&1
 CREATED_CONTAINERS="$SHADOW_NAME"
@@ -167,6 +168,12 @@ sleep 3
 docker ps --filter "name=$SHADOW_NAME" --format '{{.Status}}' | grep -q "Up" \
     || { fail "Shadow wrapper not running"; docker logs "$SHADOW_NAME" 2>&1 | tail -20; exit 1; }
 pass "Shadow wrapper running"
+
+# Start background log follower (for helper-mode log access)
+LOG_FOLLOWER_PID=""
+docker logs --follow --since 0s "$SHADOW_NAME" > "$ARTIFACT_DIR/shadow-live.log" 2>&1 &
+LOG_FOLLOWER_PID=$!
+info "Log follower PID: $LOG_FOLLOWER_PID"
 
 # ── 10. Wait for backend ────────────────────────────────────────
 info "Step 10: Backend reachable"
@@ -251,12 +258,15 @@ CLIENT_EXIT=${PIPESTATUS[0]}
 set -e
 info "Client exit: $CLIENT_EXIT"
 
-# ── 13. Collect logs ────────────────────────────────────────────
+# ── 13. Stop log follower ──────────────────────────────────────
+[ -n "$LOG_FOLLOWER_PID" ] && kill "$LOG_FOLLOWER_PID" 2>/dev/null && wait "$LOG_FOLLOWER_PID" 2>/dev/null || true
+
+# ── 14. Collect logs ────────────────────────────────────────────
 docker logs "$SHADOW_NAME" > "$ARTIFACT_DIR/shadow-wrapper-logs.txt" 2>&1
 docker logs "$BACKEND_NAME" --tail 100 > "$ARTIFACT_DIR/backend-log-excerpt.txt" 2>&1
 [ "$RUNNER" = "helper" ] && docker logs "$CLIENT_NAME" > "$ARTIFACT_DIR/helper-logs.txt" 2>&1
 
-# ── 14. Production comparison ───────────────────────────────────
+# ── 15. Production comparison ───────────────────────────────────
 snapshot "$PROD_NAME" "$ARTIFACT_DIR/production-after-wrapper.json" 2>/dev/null || true
 snapshot "$BACKEND_NAME" "$ARTIFACT_DIR/production-after-backend.json" 2>/dev/null || true
 

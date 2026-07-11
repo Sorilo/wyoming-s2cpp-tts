@@ -1173,6 +1173,27 @@ class FakeTtsEventHandler(AsyncEventHandler):
             pass
         obs_log("conn_open", connection_id=self._conn_id, peer=peer)
 
+    async def _handle_expected_disconnect(
+        self,
+        synthesis_id: str,
+        *,
+        audio_generator=None,
+    ) -> None:
+        """Close transport and backend generator on expected client disconnect."""
+        obs_log("client_disconnected",
+                connection_id=self._conn_id,
+                synthesis_id=synthesis_id,
+                reason="write_failed")
+        if audio_generator is not None:
+            try:
+                await audio_generator.aclose()
+            except Exception:
+                pass
+        try:
+            self.writer.close()
+        except Exception:
+            pass
+
     async def handle_event(self, event: Event) -> bool:
         """Handle one Wyoming event."""
         # ── Incoming event log ─────────────────────────────────────
@@ -1260,14 +1281,19 @@ class FakeTtsEventHandler(AsyncEventHandler):
                         async for audio_event in audio_generator:
                             try:
                                 await self.write_event(audio_event)
+                            except (BrokenPipeError, ConnectionResetError):
+                                client_connected = False
+                                await self._handle_expected_disconnect(
+                                    "legacy", audio_generator=audio_generator)
+                                break
                             except Exception:
                                 client_connected = False
-                                obs_log("client_disconnected",
+                                obs_log("synthesis_error",
                                         connection_id=self._conn_id,
                                         synthesis_id="legacy",
-                                        reason="write_failed")
+                                        error="unexpected_write_event_failure")
                                 await audio_generator.aclose()
-                                break
+                                raise
                     else:
                         audio_events = await self._synthesize_text(
                             synthesize.text, voice=self._requested_voice
@@ -1275,13 +1301,17 @@ class FakeTtsEventHandler(AsyncEventHandler):
                         for audio_event in audio_events:
                             try:
                                 await self.write_event(audio_event)
+                            except (BrokenPipeError, ConnectionResetError):
+                                client_connected = False
+                                await self._handle_expected_disconnect("legacy")
+                                break
                             except Exception:
                                 client_connected = False
-                                obs_log("client_disconnected",
+                                obs_log("synthesis_error",
                                         connection_id=self._conn_id,
                                         synthesis_id="legacy",
-                                        reason="write_failed")
-                                break
+                                        error="unexpected_write_event_failure")
+                                raise
                 except asyncio.CancelledError:
                     obs_log("synthesis_cancel_requested",
                             connection_id=self._conn_id,
@@ -1291,12 +1321,7 @@ class FakeTtsEventHandler(AsyncEventHandler):
                 except asyncio.TimeoutError:
                     # The wrapper boundary emits the terminal Wyoming Error.
                     raise
-                except (BrokenPipeError, ConnectionResetError) as disc_exc:
-                    # Normal client disconnect — clean shutdown, no task warning
-                    obs_log("client_disconnected",
-                            connection_id=self._conn_id,
-                            synthesis_id="legacy",
-                            reason=f"connection_lost: {type(disc_exc).__name__}")
+
                 except Exception as unexpected_exc:
                     obs_log("synthesis_error",
                             connection_id=self._conn_id,
@@ -1380,14 +1405,19 @@ class FakeTtsEventHandler(AsyncEventHandler):
                             async for audio_event in audio_generator:
                                 try:
                                     await self.write_event(audio_event)
+                                except (BrokenPipeError, ConnectionResetError):
+                                    client_connected = False
+                                    await self._handle_expected_disconnect(
+                                        syn_id, audio_generator=audio_generator)
+                                    break
                                 except Exception:
                                     client_connected = False
-                                    obs_log("client_disconnected",
+                                    obs_log("synthesis_error",
                                             connection_id=self._conn_id,
                                             synthesis_id=syn_id,
-                                            reason="write_failed")
+                                            error="unexpected_write_event_failure")
                                     await audio_generator.aclose()
-                                    break
+                                    raise
                         else:
                             audio_events = await self._synthesize_text(
                                 accumulated, voice=self._requested_voice,
@@ -1398,22 +1428,15 @@ class FakeTtsEventHandler(AsyncEventHandler):
                                     await self.write_event(audio_event)
                                 except (BrokenPipeError, ConnectionResetError):
                                     client_connected = False
-                                    obs_log("client_disconnected",
-                                            connection_id=self._conn_id,
-                                            synthesis_id=syn_id,
-                                            reason="write_failed")
-                                    try:
-                                        self.writer.close()
-                                    except Exception:
-                                        pass
+                                    await self._handle_expected_disconnect(syn_id)
                                     break
                                 except Exception:
                                     client_connected = False
-                                    obs_log("client_disconnected",
+                                    obs_log("synthesis_error",
                                             connection_id=self._conn_id,
                                             synthesis_id=syn_id,
-                                            reason="write_failed")
-                                    break
+                                            error="unexpected_write_event_failure")
+                                    raise
                         # Signal end of streaming response
                         if client_connected:
                             total_synthesis_ms = int((time.monotonic() - syn_start) * 1000)

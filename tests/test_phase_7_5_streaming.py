@@ -4,7 +4,7 @@ import threading
 import pytest
 from wyoming.audio import AudioChunk, AudioStart, AudioStop
 from wyoming.client import AsyncTcpClient
-from wyoming.tts import Synthesize, SynthesizeChunk, SynthesizeStart, SynthesizeStop, SynthesizeStopped
+from wyoming.tts import Synthesize, SynthesizeChunk, SynthesizeStart, SynthesizeStop, SynthesizeStopped, SynthesizeVoice
 from app.config import Settings
 from app.s2_client import S2ClientError, S2GenerateResult
 from app.wyoming_server import FakeTtsConfig, start_fake_tts_server

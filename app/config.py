@@ -127,6 +127,8 @@ FAKE_TTS_SAMPLE_RATE = 22050
 FAKE_TTS_DURATION_MS = 600
 FAKE_TTS_CHUNK_MS = 100
 LOG_LEVEL = "info"
+# -- Phase 9C: graceful shutdown --------------------------------------------
+SHUTDOWN_GRACE_TIMEOUT_SEC = 30.0
 # ── Phase 8C: streaming decode stride tuning ─────────────────────────
 S2_STREAM_DECODE_STRIDE_FRAMES = 4
 S2_STREAM_HOLDBACK_FRAMES = 0
@@ -180,6 +182,8 @@ class Settings:
     s2_stream_holdback_frames: int = S2_STREAM_HOLDBACK_FRAMES
     s2_stream_start_buffer_ms: int = S2_STREAM_START_BUFFER_MS
     s2_low_latency: bool = S2_LOW_LATENCY
+    # -- Phase 9C: graceful shutdown ----------------------------------------
+    shutdown_grace_timeout_sec: float = SHUTDOWN_GRACE_TIMEOUT_SEC
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -384,6 +388,28 @@ class Settings:
         else:
             syn_timeout = float(S2_SYNTHESIS_TIMEOUT_SEC)
 
+        # -- Phase 9C: shutdown grace timeout (positive float, max 300) ----
+        shutdown_grace_raw = os.getenv("SHUTDOWN_GRACE_TIMEOUT_SEC", "").strip()
+        if shutdown_grace_raw:
+            try:
+                shutdown_grace_val = float(shutdown_grace_raw)
+            except (TypeError, ValueError):
+                errors.append(
+                    f"Invalid float for SHUTDOWN_GRACE_TIMEOUT_SEC: {shutdown_grace_raw!r}"
+                )
+                shutdown_grace_val = SHUTDOWN_GRACE_TIMEOUT_SEC
+            if shutdown_grace_val <= 0:
+                errors.append(
+                    f"SHUTDOWN_GRACE_TIMEOUT_SEC must be positive, got {shutdown_grace_val}"
+                )
+            elif shutdown_grace_val > 300:
+                errors.append(
+                    f"SHUTDOWN_GRACE_TIMEOUT_SEC={shutdown_grace_val} exceeds maximum 300"
+                )
+            shutdown_grace = shutdown_grace_val
+        else:
+            shutdown_grace = float(SHUTDOWN_GRACE_TIMEOUT_SEC)
+
         # ── Collect all errors and raise at once ────────────────────
         if errors:
             raise ValueError(
@@ -434,4 +460,6 @@ class Settings:
             s2_stream_holdback_frames=holdback,
             s2_stream_start_buffer_ms=start_buffer,
             s2_low_latency=_s2_low_latency,
+            # -- Phase 9C --------------------------------------------------
+            shutdown_grace_timeout_sec=shutdown_grace,
         )

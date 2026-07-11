@@ -175,7 +175,7 @@ def test_coordinator_shutdown_drains_queued_work():
             active_done = True
 
         t_active = asyncio.create_task(sched.run(_req("s-active"), active_op))
-        await asyncio.sleep(0.02)
+        await asyncio.sleep(0)
         assert sched.snapshot()["active_synthesis_id"] == "s-active"
 
         async def waiter():
@@ -186,10 +186,13 @@ def test_coordinator_shutdown_drains_queued_work():
                 waiter_cancelled = True
 
         t_w = asyncio.create_task(waiter())
-        await asyncio.sleep(0.02)
+        await asyncio.sleep(0)
 
         shutdown_task = asyncio.create_task(c.shutdown())
-        await asyncio.sleep(0.1)
+        for _ in range(50):
+            if waiter_cancelled:
+                break
+            await asyncio.sleep(0)
         assert waiter_cancelled
         assert not active_done
 
@@ -266,10 +269,10 @@ def test_coordinator_shutdown_rejects_new_synthesis():
             await release.wait()
 
         t_active = asyncio.create_task(sched.run(_req("s-active"), active_op))
-        await asyncio.sleep(0.02)
+        await asyncio.sleep(0)
 
         shutdown_task = asyncio.create_task(c.shutdown())
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0)
 
         with pytest.raises(QueueFullError, match="drain"):
             await sched.run(_req("s-new"), lambda: None)
@@ -296,17 +299,17 @@ def test_coordinator_counters_zero_after_shutdown():
             await release.wait()
 
         t_active = asyncio.create_task(sched.run(_req("s-active"), active_op))
-        await asyncio.sleep(0.02)
+        await asyncio.sleep(0)
 
         t_w = asyncio.create_task(sched.run(_req("s-waiter"), lambda: None))
-        await asyncio.sleep(0.02)
+        await asyncio.sleep(0)
 
         snap_before = sched.snapshot()
         assert snap_before["depth"] == 2
         assert snap_before["pending"] == 2
 
         shutdown_task = asyncio.create_task(c.shutdown())
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0)
         release.set()
         await shutdown_task
 
@@ -488,7 +491,7 @@ def test_coordinator_no_leaked_tasks_after_shutdown():
         await c.start()
         await c.shutdown()
 
-        await asyncio.sleep(0.01)
+        await asyncio.sleep(0)
 
         tasks_after = len(asyncio.all_tasks())
         assert tasks_after <= tasks_before + 5, \

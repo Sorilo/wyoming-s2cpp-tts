@@ -3,12 +3,11 @@
 Run phases one at a time. This file is regenerated from the actual repository
 state after every `/goal` run. Do not copy stale assumptions forward.
 
-## Current state after Phase 9
+## Current state after Phase 9C
 
 - Repository: `main`; PR #2 merged as `1a0b93f`.
 - Runtime commit `7db26b7` and documentation commit `105121b` are ancestors of `main`.
-- Phase 9 historical baseline: **876 passed, 0 failed, 0 skipped**.
-- Phase 9B standard-suite baseline: **940 collected, 940 passed, 0 failed, 0 skipped**; 14 Unraid shell-behavior tests remain separate.
+- Phase 9C application-suite baseline: **1112 passed, 0 failed, 0 skipped**, excluding the 14 environment-specific tests in `tests/test_realtime_tuning_unraid.py`.
 - Isolated Unraid validation: **PASS** for short/long synthesis, FIFO,
   queue-full recovery, and three disconnect/recovery cycles.
 - Production backend: `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-6e629d0`.
@@ -433,7 +432,7 @@ Suggested commit:
 fix: clean up synthesis streams on client disconnect
 ```
 
-## Phase 9C prompt — graceful shutdown and optional admin HTTP port
+## Phase 9C prompt — graceful shutdown and optional admin HTTP port ✅ COMPLETE
 
 ```text
 /goal
@@ -495,6 +494,24 @@ Acceptance criteria:
 Suggested commit:
 feat(phase-9c): add graceful shutdown and optional admin HTTP endpoints
 ```
+
+## Phase 9C: Graceful Shutdown & Admin ✅ Complete
+
+Phase 9C added a ServiceCoordinator lifecycle owner with explicit state
+machine, bounded SIGTERM/SIGINT shutdown, scheduler drain with grace timeout,
+and an optional read-only admin HTTP server.  183 new tests.  Full standard
+suite: 1112 passed, 0 failed, 0 skipped.  Source-only — no image
+published or deployed.
+
+## Next official phase: Phase 9.5 — Progressive Phrase Synthesis
+
+Home Assistant sends streaming TTS input via synthesize-start/chunk/stop.
+The wrapper currently accumulates all chunks until synthesize-stop, so TTS
+does not begin while the LLM is still generating.  Phase 9.5 should add
+phrase-boundary accumulation, serialized phrase synthesis, continuous
+Wyoming audio timestamps, cancellation, queueing, and barge-in-safe
+behavior.  Must preserve one active s2.cpp synthesis at a time and avoid
+double-synthesizing the backwards-compatibility full-message event.
 
 ## Prompt-generation guidance
 

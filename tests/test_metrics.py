@@ -740,7 +740,7 @@ class TestStreamingS2CppMetrics:
                 pass
 
         task = asyncio.create_task(consume_and_cancel())
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0)
         task.cancel()
 
         with pytest.raises(asyncio.CancelledError):

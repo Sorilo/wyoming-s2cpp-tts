@@ -208,7 +208,7 @@ def test_scheduler_admitted_increments_counter():
 
     async def run_test():
         task = asyncio.create_task(sched.run(_req("s1"), op))
-        await asyncio.sleep(0.02)
+        await asyncio.sleep(0)
         assert counters.snapshot()["admitted"] == 1
         release.set()
         await task
@@ -243,7 +243,7 @@ def test_scheduler_rejection_increments_counter():
 
     async def run_test():
         t1 = asyncio.create_task(sched.run(_req("s1"), op))
-        await asyncio.sleep(0.02)
+        await asyncio.sleep(0)
 
         with pytest.raises(QueueFullError):
             await sched.run(_req("s2"), op)
@@ -283,10 +283,10 @@ def test_scheduler_cancelled_while_waiting():
 
     async def run_test():
         t1 = asyncio.create_task(sched.run(_req("s1", "c1"), op))
-        await asyncio.sleep(0.02)
+        await asyncio.sleep(0)
 
         t2 = asyncio.create_task(sched.run(_req("s2", "c2"), op))
-        await asyncio.sleep(0.02)
+        await asyncio.sleep(0)
 
         cancelled = await sched.cancel_connection("c2")
         assert cancelled == 1
@@ -344,7 +344,7 @@ def test_scheduler_wait_timeout_increments_timed_out():
 
     async def run_test():
         t1 = asyncio.create_task(sched.run(_req("s1"), op))
-        await asyncio.sleep(0.02)
+        await asyncio.sleep(0)
 
         with pytest.raises(QueueTimeoutError):
             await sched.run(_req("s2"), op)
@@ -409,10 +409,10 @@ def test_scheduler_drain_cancelled_increments_cancelled_queued():
 
     async def run_test():
         t1 = asyncio.create_task(sched.run(_req("s1"), op))
-        await asyncio.sleep(0.02)
+        await asyncio.sleep(0)
 
         t2 = asyncio.create_task(sched.run(_req("s2"), op))
-        await asyncio.sleep(0.02)
+        await asyncio.sleep(0)
 
         cancelled = await sched.drain()
         assert cancelled == 1
@@ -447,7 +447,7 @@ def test_scheduler_multiple_admissions():
                 sched.run(_req(f"s{i}", f"c{i}"), op)
             )
             tasks.append(t)
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(0)
 
         assert counters.snapshot()["admitted"] == 3
 
@@ -851,7 +851,7 @@ def test_scheduler_admitted_only_after_capacity_checks():
 
     async def run_test():
         t1 = asyncio.create_task(sched.run(_req("s1"), op))
-        await asyncio.sleep(0.02)
+        await asyncio.sleep(0)
 
         # First request admitted
         assert counters.snapshot()["admitted"] == 1

@@ -739,7 +739,7 @@ async def test_admin_stop_cancels_pending_connections():
         reader, writer = await asyncio.open_connection("127.0.0.1", port)
         writer.write(b"GET /livez HTTP/1.1\r\n")
         await writer.drain()
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0)
         await server.stop()
         assert len(server._active_tasks) == 0
     finally:

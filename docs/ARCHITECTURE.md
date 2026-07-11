@@ -192,6 +192,38 @@ Phase 9B extracted the queue and scheduling logic into explicit domain objects i
 
 Observable behavior is unchanged from Phase 9. No image is published; production remains on wrapper `sha-7db26b7` and backend `sha-6e629d0`.
 
+
+## Graceful shutdown (Phase 9C)
+
+The service has an explicit ServiceCoordinator lifecycle owner with a
+LifecycleState machine: STARTING, RUNNING, DRAINING, STOPPING, STOPPED, FAILED.
+SIGTERM/SIGINT trigger shutdown exactly once (idempotent).  Readiness flips
+false immediately.  Scheduler drains: cancels queued work, allows active
+synthesis a grace period (SHUTDOWN_GRACE_TIMEOUT_SEC, default 30s, range
+(0, 300]), force-cancels after expiry.  All tracked handlers are closed.
+
+## Optional admin HTTP server (Phase 9C)
+
+Disabled by default, loopback-bound at 127.0.0.1:10201.  Read-only endpoints:
+GET /livez (200 while alive), GET /readyz (200 only RUNNING, 503 otherwise),
+GET /status (sanitized JSON: state, readiness, uptime, scheduler depth/pending/
+active, connection count, cumulative counters), GET /metrics (sanitized JSON
+with independent schema and cumulative process-lifetime counters: admitted,
+rejected, completed, cancelled-queued, cancelled-active, timed-out, failed,
+backend-busy-retries).
+
+Config: ADMIN_HTTP_ENABLED=false, ADMIN_HTTP_HOST=127.0.0.1,
+ADMIN_HTTP_PORT=10201, ADMIN_HTTP_READ_TIMEOUT_SEC=5.0,
+ADMIN_HTTP_MAX_HEADER_SIZE=8192, ADMIN_HTTP_MAX_BODY_SIZE=65536.
+
+Safety: No mutating endpoints (GET-only, 405 with Allow: GET for others).
+No plaintext, audio, secrets, tokens, IDs, or mutable objects.  Bounded
+cumulative time/size HTTP parsing.  Bind failure is non-fatal.  Do not
+expose admin port broadly without network controls.
+
+Docker guidance: set ADMIN_HTTP_ENABLED=true and publish port 10201 only
+if needed.  Use loopback binding or firewall rules for security.
+
 ## Latency measurement ownership
 
 This repository can directly measure:

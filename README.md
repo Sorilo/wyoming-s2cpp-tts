@@ -93,6 +93,40 @@ Progressive backend-audio streaming is now wired (Phase 7.5A). When `S2_STREAM=t
 
 Phase 9 validation passed three deliberate disconnect/recovery cycles with valid recovery audio, released busy state, no persistent HTTP 503 latch, and no unobserved task-exception or disconnect-cleanup warning. The validated images are deployed. Final short and long direct Wyoming requests and the Home Assistant VM smoke passed with audible intelligible speech, zero restarts, queue depth zero, active GPU inference, and clean logs.
 
+## Graceful shutdown (Phase 9C)
+
+The service handles SIGTERM/SIGINT with a bounded graceful shutdown sequence:
+drain queued work, allow active synthesis a grace period (default 30s,
+configurable via SHUTDOWN_GRACE_TIMEOUT_SEC), then force-cancel and exit
+cleanly.  Repeated signals are idempotent.
+
+## Optional admin HTTP server (Phase 9C)
+
+An optional read-only admin HTTP listener provides operational visibility.
+It is **disabled by default** and loopback-bound (127.0.0.1:10201).
+
+### Endpoints
+
+| Endpoint | Purpose | Status |
+|---|---|---|
+| GET /livez | Liveness — process alive | 200 |
+| GET /readyz | Readiness — accepting traffic | 200 only while RUNNING; 503 otherwise |
+| GET /status | Sanitized JSON operational snapshot | 200 |
+| GET /metrics | Sanitized JSON cumulative metrics | 200 |
+
+### Enabling
+
+Set `ADMIN_HTTP_ENABLED=true`. The defaults are `ADMIN_HTTP_HOST=127.0.0.1` and `ADMIN_HTTP_PORT=10201`; optional parser controls are `ADMIN_HTTP_READ_TIMEOUT_SEC=5.0`, `ADMIN_HTTP_MAX_HEADER_SIZE=8192`, and `ADMIN_HTTP_MAX_BODY_SIZE=65536`.
+
+No mutating endpoints exist.  No plaintext, audio, secrets, tokens, or IDs
+are exposed.  Bind failure does not prevent service startup.
+
+### Docker / Unraid
+
+Set ADMIN_HTTP_ENABLED=true and publish port 10201 only if needed.
+Use loopback binding or firewall rules to avoid exposing admin endpoints
+broadly.
+
 ## Running locally for development
 
 The repository default remains the safe fake backend:
@@ -143,7 +177,7 @@ The verified real backend contract is raw `audio/L16; rate=44100; channels=1` wi
 
 ## Testing
 
-Current Phase 9B standard-suite baseline: **940 collected, 940 passed, 0 failed, 0 skipped**. The 14 tests in `tests/test_realtime_tuning_unraid.py` are environment-specific shell-behavior checks and remain a separate invocation. The historical Phase 9 acceptance baseline was 876 passed.
+Current Phase 9C application-suite baseline: **1112 passed, 0 failed, 0 skipped**, excluding the 14 tests in `tests/test_realtime_tuning_unraid.py`. Those environment-specific shell-behavior checks—including fake-`nvidia-smi` cases—remain a separate invocation. The historical Phase 9 acceptance baseline was 876 passed.
 
 Useful focused checks:
 
@@ -163,6 +197,7 @@ No ordinary test should contact a real backend unless explicitly opted in throug
 - ~~True progressive backend HTTP audio streaming in the production handler is future Phase 7.5 work.~~ ✅ Phase 7.5A complete. Live latency verification is Phase 7.5B.
 - Phase 8 client disconnect cleanup, HTTP stream closure, and backend cancellation work is complete.
 - Phase 9 queue admission, HTTP 503 busy retry, queue/synthesis timeouts, controlled Wyoming failures, and disconnect recovery are implemented, merged, validated, deployed, and production-smoke verified. Phase 9 is closed.
+- Phase 9C adds graceful shutdown (SIGTERM/SIGINT, bounded grace, scheduler drain) and an optional read-only admin HTTP server (/livez, /readyz, /status, /metrics). Source-only — no image published or deployed.
 - End-to-end barge-in with a real Home Assistant satellite/player path is future Phase 10 work.
 - STT, LLM, VAD, and actual playback timestamps require Home Assistant/upstream/client instrumentation or a correlated end-to-end test harness.
 

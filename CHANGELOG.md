@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+- Phase 9C: graceful shutdown and optional admin HTTP visibility. Added a
+  single ``ServiceCoordinator`` lifecycle owner with explicit ``LifecycleState``
+  machine (``STARTING`` → ``RUNNING`` → ``DRAINING`` → ``STOPPING`` →
+  ``STOPPED`` or ``FAILED``).  Shutdown is triggered by SIGTERM/SIGINT,
+  bounded by ``SHUTDOWN_GRACE_TIMEOUT_SEC`` (default 30, validated range
+  (0, 300]), and idempotent.  The scheduler drains by cancelling queued/waiting
+  work and allowing one active synthesis to complete within the grace period;
+  force cancellation occurs after expiry.  Readiness flips false immediately
+  on shutdown start; no new Wyoming connections or synthesis admissions are
+  accepted after drain begins.  An optional ``AdminHttpServer`` serves four
+  read-only endpoints on a separate port (disabled by default, loopback-bound
+  at ``127.0.0.1:10201``):
+  * ``GET /livez`` — liveness (200 while process alive)
+  * ``GET /readyz`` — traffic readiness (200 only when ``RUNNING``, 503 otherwise)
+  * ``GET /status`` — sanitized JSON operational snapshot (lifecycle state,
+    readiness, uptime, scheduler depth/pending/active, connection count,
+    cumulative counters, version)
+  * ``GET /metrics`` — sanitized JSON metrics snapshot with independent schema
+    including cumulative process-lifetime counters (admitted, rejected,
+    completed, cancelled-queued, cancelled-active, timed-out, failed,
+    backend-busy-retries)
+  No plaintext, audio, secrets, tokens, IDs, or mutable objects are exposed.
+  All admin HTTP parsing uses bounded time/size limits.  Bind failure is
+  non-fatal (admin is optional).  No mutating endpoints exist.  Configurable
+  via ``ADMIN_HTTP_ENABLED``, ``ADMIN_HTTP_HOST``, ``ADMIN_HTTP_PORT``,
+  ``ADMIN_HTTP_READ_TIMEOUT_SEC``, ``ADMIN_HTTP_MAX_HEADER_SIZE``,
+  ``ADMIN_HTTP_MAX_BODY_SIZE``.  Source-only implementation — no image
+  published or deployed.  Production remains on Phase 9 images: wrapper
+  ``sha-7db26b7``, backend ``sha-6e629d0``.  Full suite: **1112 passed,
+  0 failed, 0 skipped** (excluding the 14 environment-specific tests in
+  `tests/test_realtime_tuning_unraid.py`, including its fake-`nvidia-smi` cases).
+
 - Phase 9B: speech scheduler domain refactor. Extracted `SpeechRequest`, `SpeechMetadata`, `SpeechScheduler`, `SpeechState`, `ScheduledSpeech`, and `SynthesisSession` into explicit domain objects in `app/speech/`. `SpeechScheduler` is the sole owner of admission, FIFO activation, queue depth, active task identity, cancellation, and release. Wyoming handlers create `SpeechRequest` objects and submit operations to the scheduler; they no longer read or mutate scheduler-private fields. The `SingleWorkerSynthesisQueue` compatibility wrapper is removed. All tests migrated to the `SpeechScheduler`/`SpeechRequest` public API. Lifecycle model has deterministic, tested terminal transitions (`TIMED_OUT` vs `FAILED`). Reserved semantic metadata fields are present but inert. Plaintext is excluded from reprs, snapshots, structured logs, and lifecycle observability. Observable behavior (FIFO, capacity, single-worker, busy retries, deadlines, cancellation, event ordering) is unchanged. Source-only refactor — no image published or deployed. Production remains on Phase 9 images: wrapper `sha-7db26b7`, backend `sha-6e629d0`.
 
 - Phase 9 closure: bounded queue admission, backend-busy retry, queue wait and synthesis timeouts, controlled Wyoming errors, and disconnect cleanup are complete. Isolated Unraid validation passed short and long synthesis (RTF ~0.961), FIFO ordering, queue-full rejection/recovery, and three disconnect/recovery cycles without a persistent 503 latch or unobserved task exception. Full suite: **876 passed, 0 failed, 0 skipped**. PR #2 merged as `1a0b93f`. Wrapper `sha-7db26b7` and backend `sha-6e629d0` are deployed. Final production smoke passed: short and long direct Wyoming requests produced valid 44.1 kHz mono 16-bit PCM (RTF `1.002` and `0.974`), Home Assistant produced audible intelligible speech, queue depth returned to zero, both restart counts remained zero, GPU operation remained active, and the final log scan was clean. Phase 9 is closed. See `docs/PHASE_9_DEPLOYMENT_HANDOFF.md`.

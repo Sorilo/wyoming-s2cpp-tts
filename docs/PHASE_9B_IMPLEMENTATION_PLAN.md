@@ -59,11 +59,11 @@ An immutable dataclass representing one admitted unit of speech:
 
 - `synthesis_id: str`
 - `connection_id: str`
-- `text: str`
+- `text: str` declared with `field(repr=False)`
 - `metadata: SpeechMetadata`
 - `created_monotonic: float`
 
-It validates non-empty IDs. Text remains in memory only; existing observability continues to log fingerprints, not full text.
+It validates non-empty IDs. Synthesis requires text in memory, but plaintext text must never appear in dataclass `repr`, scheduler snapshots, structured logs, log-facing exceptions, debug output, or lifecycle observability. Safe diagnostics may contain synthesis/connection IDs, text fingerprint and length, voice, trigger, timestamps, lifecycle state, and terminal reason.
 
 ### `ScheduledSpeech`
 
@@ -74,24 +74,29 @@ A scheduler-owned mutable record:
 - `admitted_monotonic: float`
 - `started_monotonic: float | None`
 - `completed_monotonic: float | None`
+- `terminal_reason: str | None`
 - private waiter future and active task references
 
-No mutable scheduler internals are exposed to handlers. Public snapshots must not expose task/future objects.
+No mutable scheduler internals are exposed to handlers. Public snapshots are immutable and must not expose plaintext text, request objects containing text, task/future objects, or other mutable scheduler-owned state.
 
 ### `SpeechState`
 
 A closed internal lifecycle enum:
 
 ```text
-CREATED -> WAITING -> ACTIVE -> COMPLETED
-                     |          |
-                     |          -> CANCELLED
-                     -> TIMED_OUT
 CREATED -> REJECTED
+CREATED -> WAITING
+WAITING -> ACTIVE
 WAITING -> CANCELLED
+WAITING -> TIMED_OUT
+
+ACTIVE -> COMPLETED
+ACTIVE -> CANCELLED
+ACTIVE -> TIMED_OUT
+ACTIVE -> FAILED
 ```
 
-Terminal states are idempotent. State transitions occur under the scheduler lock; operation execution occurs outside it.
+Terminal states are idempotent. `FAILED` represents backend errors, backend-busy retry exhaustion, PCM validation failures, unexpected transport/backend errors, and other non-timeout active-operation failures. A separate terminal reason or error classification records useful detail without proliferating terminal enum values. State transitions occur under the scheduler lock; operation execution occurs outside it.
 
 ### `SpeechScheduler`
 
@@ -108,6 +113,16 @@ Owns:
 - admission-latency observability;
 - operation execution through `run(request, operation)`.
 
+The explicit public boundary used by Wyoming handlers consists of:
+
+- `run(request, operation)`;
+- immutable `snapshot()` data;
+- cancellation by synthesis ID;
+- cancellation by connection ID; and
+- a public operation implementing the existing `CANCEL_ON_NEW_REQUEST` compatibility behavior without handler reads of `_depth`, `_active`, `_active_task`, `_active_synthesis_id`, `_active_connection_id`, `_pending`, or `_waiters`.
+
+Exact operation names may differ if implementation tests demonstrate a cleaner boundary, but handler code must neither read nor mutate scheduler-private fields.
+
 It preserves `QueueFullError` and `QueueTimeoutError` initially so the protocol boundary remains unchanged. A compatibility alias for `SingleWorkerSynthesisQueue` may exist for one migration slice only and must be removed before Phase 9B acceptance unless downstream imports require a documented deprecation.
 
 ### `SynthesisSession`
@@ -117,9 +132,12 @@ A protocol-adapter-owned record for one Wyoming synthesis lifecycle:
 - `request: SpeechRequest`
 - resolved voice and trigger;
 - whether `AudioStart` was emitted;
+- whether `AudioStop` was emitted;
 - whether the client is connected;
+- whether streaming-only `synthesize-stopped` is eligible;
 - PCM/chunk counters already maintained by existing helpers;
-- optional generator/resource closer reference.
+- optional private generator/resource closer reference;
+- exactly-once cleanup/resource-closure state.
 
 The first slice introduces the object without moving backend streaming logic. Later slices use it to remove duplicated legacy/streaming cleanup state while preserving exact wire ordering.
 
@@ -136,7 +154,8 @@ The first slice introduces the object without moving backend streaming logic. La
 9. **Wyoming ordering:** legacy success remains `AudioStart -> AudioChunk* -> AudioStop`; streaming success remains `AudioStart -> AudioChunk* -> AudioStop -> synthesize-stopped`.
 10. **Controlled failures:** queue full, queue timeout, backend busy exhaustion, synthesis timeout, and backend errors retain current Wyoming error codes and do not emit false successful terminal events.
 11. **Observability:** existing structured event names/required fields remain; any new lifecycle/admission metric is additive.
-12. **No plaintext logging:** request text is never added to structured logs.
+12. **Active failure lifecycle:** synthesis timeout enters `TIMED_OUT`; other active-operation failures enter `FAILED`, release ownership exactly once, and preserve their existing Wyoming error mapping.
+13. **No plaintext exposure:** request text never appears in dataclass `repr`, snapshots, structured logs, log-facing exceptions, debug output, or lifecycle observability.
 
 ## Migration sequence
 
@@ -157,8 +176,11 @@ The first slice introduces the object without moving backend streaming logic. La
 - valid and invalid request IDs;
 - immutable metadata/request behavior;
 - default metadata is inert;
+- request text is excluded from `repr`;
 - lifecycle transition table rejects illegal transitions;
-- snapshots exclude futures/tasks and plaintext text.
+- terminal transitions are idempotent;
+- active non-timeout failure transitions to `FAILED`;
+- snapshots exclude futures/tasks, request objects, and plaintext text.
 
 **Verification:**
 
@@ -188,9 +210,11 @@ Expected: new tests pass; no production behavior changes.
 - timed-out waiters are removed exactly once;
 - cancelled waiters are removed exactly once;
 - active completion/cancellation hands off to the next waiter;
+- active failure hands off to the next waiter exactly once;
 - connection cancellation affects only matching requests;
 - simultaneous completion/cancellation leaves consistent counters;
-- semantic metadata cannot reorder work.
+- semantic metadata cannot reorder work;
+- snapshots are immutable and plaintext-safe.
 
 Implement `SpeechScheduler.run(request, operation)` with the same lock/future mechanics and exception types. Keep operation execution outside the lock.
 
@@ -215,6 +239,7 @@ Construct one `SpeechRequest` per legacy or accumulated streaming synthesis. Rep
 
 - legacy and streaming requests preserve IDs, connection ownership, voice, and trigger;
 - `CANCEL_ON_NEW_REQUEST` uses a public scheduler cancellation method;
+- handlers never read or mutate scheduler-private fields;
 - disconnect cancellation remains connection-scoped;
 - full/timeout errors retain exact codes;
 - compatibility synthesize deferral still prevents double synthesis.
@@ -243,6 +268,7 @@ Wrap existing per-request protocol state and cleanup bookkeeping in `SynthesisSe
 - exactly-once `AudioStart` and `AudioStop` state;
 - streaming-only `synthesize-stopped` eligibility;
 - disconnect marks the session terminal and invokes cleanup once;
+- generator/resource closure runs once;
 - unexpected writes still propagate;
 - cancellation after partial PCM does not emit a false `AudioStop`;
 - buffered and progressive paths preserve event sequences.
@@ -350,10 +376,12 @@ Phase 9B implementation is complete only when:
 - explicit `SpeechRequest`, `SpeechMetadata`, `ScheduledSpeech`, `SpeechScheduler`, and `SynthesisSession` objects exist with documented ownership;
 - `SpeechScheduler` exclusively owns queue state and handlers do not access scheduler private fields;
 - the lifecycle model has deterministic, tested terminal transitions;
+- active timeout and non-timeout failures are distinguished as `TIMED_OUT` and `FAILED`, with idempotent terminal handling and a separate reason where useful;
 - FIFO, capacity, one-active-worker, busy retries, queue/synthesis deadlines, cancellation, disconnect recovery, and error mappings are behaviorally unchanged;
 - legacy and streaming Wyoming event ordering is unchanged;
 - reserved semantic metadata is demonstrably inert;
 - admission latency is observable without logging plaintext;
+- request plaintext is absent from reprs, snapshots, structured logs, log-facing exceptions, debug output, and lifecycle observability;
 - focused tests and the final full suite pass with zero failures;
 - no backend, model, image, template, voice, or Home Assistant change occurs;
 - no deferred Phase 9C/9.5/10/11 behavior is implemented;

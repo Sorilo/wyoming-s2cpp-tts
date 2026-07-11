@@ -1396,6 +1396,17 @@ class FakeTtsEventHandler(AsyncEventHandler):
                             for audio_event in audio_events:
                                 try:
                                     await self.write_event(audio_event)
+                                except (BrokenPipeError, ConnectionResetError):
+                                    client_connected = False
+                                    obs_log("client_disconnected",
+                                            connection_id=self._conn_id,
+                                            synthesis_id=syn_id,
+                                            reason="write_failed")
+                                    try:
+                                        self.writer.close()
+                                    except Exception:
+                                        pass
+                                    break
                                 except Exception:
                                     client_connected = False
                                     obs_log("client_disconnected",

@@ -802,3 +802,74 @@ class TestBlockedReadTimeout:
         assert read_released.is_set() or read_started.is_set(), (
             "Blocked read was not released on cancel"
         )
+
+class TestDisconnectNoUnretrievedTasks:
+    """Task 3: TCP disconnect must not leave unretrieved task exceptions."""
+
+    @pytest.mark.asyncio
+    async def test_disconnect_no_unretrieved_task_exceptions(self):
+        """Client disconnect during streaming must produce zero unretrieved tasks."""
+        pcm = _pcm_frames(200)
+        stream_chunks = [pcm[:200], pcm[200:400], pcm[400:]]
+        client = RecordingStreamingClient(audio=pcm, stream_chunks=stream_chunks)
+        settings = Settings(tts_backend="s2cpp", s2_stream=True)
+        server = await start_fake_tts_server(
+            host="127.0.0.1", port=0, settings=settings, s2_client_factory=_make_cf(client))
+
+        # Collect any unretrieved task exceptions
+        captured = []
+
+        def _capture(loop, ctx):
+            captured.append(ctx)
+
+        loop = asyncio.get_running_loop()
+        old_handler = loop.get_exception_handler()
+        loop.set_exception_handler(_capture)
+        try:
+            # Cycle 1: disconnect during streaming
+            async with AsyncTcpClient("127.0.0.1", server.port) as tcp:
+                await tcp.write_event(Synthesize(text="no unretrieved task 1").event())
+                ev = await asyncio.wait_for(tcp.read_event(), timeout=5)
+                assert AudioStart.is_type(ev.type)
+                # Receive at least one AudioChunk
+                ev = await asyncio.wait_for(tcp.read_event(), timeout=5)
+                assert AudioChunk.is_type(ev.type)
+                # Abrupt disconnect
+                tcp._writer.close()
+                await tcp._writer.wait_closed()
+
+            # Allow cleanup to settle
+            await asyncio.sleep(0.5)
+
+            # Cycle 2: recovery request
+            async with AsyncTcpClient("127.0.0.1", server.port) as tcp2:
+                await tcp2.write_event(Synthesize(text="recovery after disconnect").event())
+                ev = await asyncio.wait_for(tcp2.read_event(), timeout=5)
+                assert AudioStart.is_type(ev.type)
+                # Collect all audio
+                while True:
+                    try:
+                        ev = await asyncio.wait_for(tcp2.read_event(), timeout=2)
+                        if AudioStop.is_type(ev.type):
+                            break  # normal completion
+                    except asyncio.TimeoutError:
+                        break
+
+            # Wait for any delayed task exception deliveries
+            await asyncio.sleep(0.3)
+
+            # ASSERT: no unretrieved task exception contexts
+            unreceived = [c for c in captured
+                          if c.get("message") and "was never retrieved" in str(c["message"])]
+            assert len(unreceived) == 0, (
+                f"Unretrieved task exceptions: {unreceived}"
+            )
+
+            # Also verify no pending-task warnings, unawaited coroutine warnings
+            pending = [c for c in captured
+                       if "pending" in str(c.get("message", "")) or
+                          "never awaited" in str(c.get("message", ""))]
+            assert len(pending) == 0, f"Pending/unawaited warnings: {pending}"
+        finally:
+            await server.stop()
+            loop.set_exception_handler(old_handler)

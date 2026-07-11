@@ -803,73 +803,224 @@ class TestBlockedReadTimeout:
             "Blocked read was not released on cancel"
         )
 
-class TestDisconnectNoUnretrievedTasks:
-    """Task 3: TCP disconnect must not leave unretrieved task exceptions."""
+class _PacedResetStream:
+    def __init__(self, *, finite=False):
+        self.content_type = _REAL_PCM_CONTENT_TYPE
+        self.response_headers = dict(_REAL_PCM_HEADERS)
+        self._finite = finite
+        self._index = 0
+        self._cancelled = threading.Event()
+        self.finalize_count = 0
+        self.cancel_calls = 0
+    def __enter__(self): return self
+    def __exit__(self, *_args): self._finalize(); return False
+    def __iter__(self): return self
+    def __next__(self):
+        if self._cancelled.wait(0.003): raise StopIteration
+        if self._finite and self._index >= 4:
+            self._finalize(); raise StopIteration
+        self._index += 1
+        return b"\x01\x00" * 32768
+    def cancel(self): self.cancel_calls += 1; self._finalize()
+    def _finalize(self):
+        if self.finalize_count == 0: self.finalize_count = 1
+        self._cancelled.set()
 
-    @pytest.mark.asyncio
-    async def test_disconnect_no_unretrieved_task_exceptions(self):
-        """Client disconnect during streaming must produce zero unretrieved tasks."""
-        pcm = _pcm_frames(200)
-        stream_chunks = [pcm[:200], pcm[200:400], pcm[400:]]
-        client = RecordingStreamingClient(audio=pcm, stream_chunks=stream_chunks)
-        settings = Settings(tts_backend="s2cpp", s2_stream=True)
-        server = await start_fake_tts_server(
-            host="127.0.0.1", port=0, settings=settings, s2_client_factory=_make_cf(client))
+class _AlternatingResetClient:
+    def __init__(self): self.streams = []
+    def generate_stream(self, _request, files=None, boundary=None):
+        stream = _PacedResetStream(finite=(len(self.streams) % 2 == 1))
+        self.streams.append(stream)
+        return stream
 
-        # Collect any unretrieved task exceptions
-        captured = []
+def _assert_queue_idle(queue):
+    return queue.depth == 0 and queue.pending == 0
 
-        def _capture(loop, ctx):
-            captured.append(ctx)
+async def _wait_for(predicate, timeout=8):
+    loop = asyncio.get_running_loop(); deadline = loop.time() + timeout
+    while not predicate():
+        if loop.time() >= deadline: raise AssertionError("condition did not settle")
+        await asyncio.sleep(0.01)
 
-        loop = asyncio.get_running_loop()
-        old_handler = loop.get_exception_handler()
-        loop.set_exception_handler(_capture)
-        try:
-            # Cycle 1: disconnect during streaming
-            async with AsyncTcpClient("127.0.0.1", server.port) as tcp:
-                await tcp.write_event(Synthesize(text="no unretrieved task 1").event())
-                ev = await asyncio.wait_for(tcp.read_event(), timeout=5)
-                assert AudioStart.is_type(ev.type)
-                # Receive at least one AudioChunk
-                ev = await asyncio.wait_for(tcp.read_event(), timeout=5)
-                assert AudioChunk.is_type(ev.type)
-                # Abrupt disconnect
-                tcp._writer.close()
-                await tcp._writer.wait_closed()
+@pytest.mark.parametrize("repeat", range(5))
+@pytest.mark.asyncio
+async def test_tcp_rst_three_disconnect_recovery_cycles(monkeypatch, repeat):
+    import socket, struct
+    import app.wyoming_server as ws
+    queues=[]; real_queue=ws.SingleWorkerSynthesisQueue
+    def capture_queue(*args, **kwargs):
+        queue=real_queue(*args, **kwargs); queues.append(queue); return queue
+    monkeypatch.setattr(ws, "SingleWorkerSynthesisQueue", capture_queue)
+    client=_AlternatingResetClient()
+    settings=Settings(tts_backend="s2cpp", s2_stream=True,
+                      s2_initial_buffer_ms=0, s2_long_form_buffer_ms=0,
+                      cancel_on_client_disconnect=True)
+    contexts=[]; loop=asyncio.get_running_loop(); old_handler=loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, context: contexts.append(context))
+    server=await start_fake_tts_server(host="127.0.0.1",port=0,settings=settings,s2_client_factory=_make_cf(client))
+    queue=queues[0]
+    try:
+        for cycle in range(3):
+            tcp=AsyncTcpClient("127.0.0.1",server.port); await tcp.connect()
+            await tcp.write_event(Synthesize(text=f"reset {repeat}-{cycle}").event())
+            event=await asyncio.wait_for(tcp.read_event(),5); assert AudioStart.is_type(event.type)
+            while True:
+                event=await asyncio.wait_for(tcp.read_event(),5)
+                if AudioChunk.is_type(event.type) and AudioChunk.from_event(event).audio: break
+            await _wait_for(lambda: queue.depth == 1 and queue.pending == 1)
+            sock=tcp._writer.get_extra_info("socket")
+            try: sock.setsockopt(socket.SOL_SOCKET,socket.SO_LINGER,struct.pack("ii",1,0))
+            except (AttributeError,OSError): pytest.skip("SO_LINGER reset unsupported")
+            tcp._writer.close()
+            try: await tcp._writer.wait_closed()
+            except (BrokenPipeError,ConnectionResetError,OSError): pass
+            await _wait_for(lambda: _assert_queue_idle(queue) and client.streams[-1].finalize_count == 1)
 
-            # Allow cleanup to settle
-            await asyncio.sleep(0.5)
-
-            # Cycle 2: recovery request
-            async with AsyncTcpClient("127.0.0.1", server.port) as tcp2:
-                await tcp2.write_event(Synthesize(text="recovery after disconnect").event())
-                ev = await asyncio.wait_for(tcp2.read_event(), timeout=5)
-                assert AudioStart.is_type(ev.type)
-                # Collect all audio
+            async with AsyncTcpClient("127.0.0.1",server.port) as recovery:
+                await recovery.write_event(Synthesize(text=f"recovery {repeat}-{cycle}").event())
+                saw_chunk=False
                 while True:
-                    try:
-                        ev = await asyncio.wait_for(tcp2.read_event(), timeout=2)
-                        if AudioStop.is_type(ev.type):
-                            break  # normal completion
-                    except asyncio.TimeoutError:
-                        break
+                    event=await asyncio.wait_for(recovery.read_event(),5)
+                    assert event is not None
+                    if AudioChunk.is_type(event.type): saw_chunk = saw_chunk or bool(AudioChunk.from_event(event).audio)
+                    if AudioStop.is_type(event.type): break
+                assert saw_chunk
+            await _wait_for(lambda: _assert_queue_idle(queue) and client.streams[-1].finalize_count == 1)
+        assert len(client.streams) == 6
+        assert all(stream.finalize_count == 1 for stream in client.streams)
+    finally:
+        await server.stop(); await asyncio.sleep(0); await asyncio.sleep(0)
+        loop.set_exception_handler(old_handler)
+    assert contexts == []
 
-            # Wait for any delayed task exception deliveries
-            await asyncio.sleep(0.3)
 
-            # ASSERT: no unretrieved task exception contexts
-            unreceived = [c for c in captured
-                          if c.get("message") and "was never retrieved" in str(c["message"])]
-            assert len(unreceived) == 0, (
-                f"Unretrieved task exceptions: {unreceived}"
-            )
+def test_disconnect_source_contract_covers_audio_and_terminal_writes():
+    import inspect
+    from app.wyoming_server import FakeTtsEventHandler
+    source=inspect.getsource(FakeTtsEventHandler)
+    assert source.count("except (BrokenPipeError, ConnectionResetError, TypeError) as disconnect_error:") >= 7
+    assert source.count("_handle_expected_disconnect(") >= 8
+    guarded = source.split(
+        "except (BrokenPipeError, ConnectionResetError, TypeError) as disconnect_error:"
+    )[1:]
+    assert len(guarded) == 7
+    assert all("except Exception" in block for block in guarded[:6])
+    assert "terminal_error_write_failed" not in source
 
-            # Also verify no pending-task warnings, unawaited coroutine warnings
-            pending = [c for c in captured
-                       if "pending" in str(c.get("message", "")) or
-                          "never awaited" in str(c.get("message", ""))]
-            assert len(pending) == 0, f"Pending/unawaited warnings: {pending}"
-        finally:
-            await server.stop()
-            loop.set_exception_handler(old_handler)
+
+class _DisconnectWriter:
+    def __init__(self): self.close_calls = 0
+    def get_extra_info(self, name): return ("127.0.0.1", 12345) if name == "peername" else None
+    def close(self): self.close_calls += 1
+
+class _TrackingEvents:
+    def __init__(self, events, close_error=None): self.events=iter(events); self.close_error=close_error; self.aclose_calls=0
+    def __aiter__(self): return self
+    async def __anext__(self):
+        try: return next(self.events)
+        except StopIteration: raise StopAsyncIteration
+    async def aclose(self):
+        self.aclose_calls += 1
+        if self.close_error: raise self.close_error
+
+def _audio_events():
+    return [AudioStart(rate=44100,width=2,channels=1).event(), AudioChunk(audio=b"\x01\x00",rate=44100,width=2,channels=1).event(), AudioStop().event()]
+
+def _handler(monkeypatch, backend):
+    import app.wyoming_server as ws
+    from app.wyoming_server import FakeTtsEventHandler, SingleWorkerSynthesisQueue
+    logs=[]; monkeypatch.setattr(ws,"obs_log",lambda name,**fields: logs.append((name,fields)))
+    writer=_DisconnectWriter(); queue=SingleWorkerSynthesisQueue(3,1)
+    handler=FakeTtsEventHandler(asyncio.StreamReader(),writer,FakeTtsConfig(),queue,Settings(tts_backend="s2cpp",s2_stream=backend=="streaming"),lambda _:None)
+    sources=[]
+    if backend=="streaming":
+        def stream(*a,**kw):
+            src=_TrackingEvents(_audio_events()); sources.append(src); return src
+        monkeypatch.setattr(handler,"_synthesize_text_streaming",stream)
+    else:
+        async def buffered(*a,**kw): return _audio_events()
+        monkeypatch.setattr(handler,"_synthesize_text",buffered)
+    return handler,writer,queue,logs,sources
+
+async def _invoke(handler, protocol, text):
+    if protocol=="standalone": await handler.handle_event(Synthesize(text=text).event()); return
+    await handler.handle_event(SynthesizeStart().event()); await handler.handle_event(SynthesizeChunk(text=text).event()); await handler.handle_event(SynthesizeStop().event())
+
+@pytest.mark.parametrize("protocol",["standalone","session"])
+@pytest.mark.parametrize("backend",["streaming","buffered"])
+@pytest.mark.parametrize("exc",[BrokenPipeError,ConnectionResetError])
+@pytest.mark.asyncio
+async def test_all_four_audio_paths_own_expected_disconnect_once(monkeypatch,protocol,backend,exc):
+    handler,writer,queue,logs,sources=_handler(monkeypatch,backend); written=[]; fail=True
+    async def write(event):
+        nonlocal fail
+        if fail: fail=False; raise exc("injected")
+        written.append(event)
+    monkeypatch.setattr(handler,"write_event",write); await _invoke(handler,protocol,"disconnect")
+    assert writer.close_calls==1 and queue.depth==queue.pending==0
+    assert sum(n=="client_disconnected" for n,_ in logs)==1
+    if backend=="streaming": assert sources[0].aclose_calls==1
+    assert not any(AudioStop.is_type(e.type) or SynthesizeStopped.is_type(e.type) for e in written)
+    written.clear(); await _invoke(handler,protocol,"recovery")
+    assert queue.depth==queue.pending==0 and any(AudioStop.is_type(e.type) for e in written)
+
+@pytest.mark.parametrize("protocol",["standalone","session"])
+@pytest.mark.parametrize("backend",["streaming","buffered"])
+@pytest.mark.asyncio
+async def test_all_four_audio_paths_propagate_unexpected_write_failure(monkeypatch,protocol,backend):
+    handler,writer,queue,logs,sources=_handler(monkeypatch,backend)
+    async def write(_): raise RuntimeError("injected unexpected")
+    monkeypatch.setattr(handler,"write_event",write)
+    with pytest.raises(RuntimeError,match="injected unexpected"): await _invoke(handler,protocol,"bad")
+    assert writer.close_calls==0 and queue.depth==queue.pending==0
+    assert not any(n=="client_disconnected" for n,_ in logs)
+    assert any(n=="synthesis_error" and f.get("error")=="unexpected_write_event_failure" for n,f in logs)
+    if backend=="streaming": assert sources[0].aclose_calls==1
+
+@pytest.mark.asyncio
+async def test_disconnect_cleanup_is_idempotent(monkeypatch):
+    handler,writer,_,logs,_=_handler(monkeypatch,"buffered"); src=_TrackingEvents([])
+    await asyncio.gather(*(handler._handle_expected_disconnect("same",audio_generator=src) for _ in range(3)))
+    assert writer.close_calls==src.aclose_calls==1
+    assert sum(n=="client_disconnected" for n,_ in logs)==1
+
+@pytest.mark.asyncio
+async def test_disconnect_cleanup_failure_is_visible(monkeypatch):
+    handler,writer,_,logs,_=_handler(monkeypatch,"buffered"); src=_TrackingEvents([],RuntimeError("aclose exploded"))
+    with pytest.raises(RuntimeError,match="aclose exploded"): await handler._handle_expected_disconnect("x",audio_generator=src)
+    assert writer.close_calls==1
+    assert any(n=="disconnect_cleanup_error" and f.get("operation")=="audio_generator_aclose" for n,f in logs)
+
+@pytest.mark.parametrize("empty",[False,True])
+@pytest.mark.parametrize("exc",[BrokenPipeError,ConnectionResetError])
+@pytest.mark.asyncio
+async def test_synthesize_stopped_write_uses_disconnect_cleanup(monkeypatch,empty,exc):
+    handler,writer,queue,logs,_=_handler(monkeypatch,"buffered")
+    async def write(event):
+        if SynthesizeStopped.is_type(event.type): raise exc("terminal reset")
+    monkeypatch.setattr(handler,"write_event",write)
+    await handler.handle_event(SynthesizeStart().event())
+    if not empty: await handler.handle_event(SynthesizeChunk(text="text").event())
+    await handler.handle_event(SynthesizeStop().event())
+    assert writer.close_calls==1 and queue.depth==queue.pending==0
+    assert sum(n=="client_disconnected" for n,_ in logs)==1
+
+@pytest.mark.asyncio
+async def test_unexpected_synthesize_stopped_failure_propagates(monkeypatch):
+    handler,writer,queue,logs,_=_handler(monkeypatch,"buffered")
+    async def write(event):
+        if SynthesizeStopped.is_type(event.type): raise RuntimeError("terminal defect")
+    monkeypatch.setattr(handler,"write_event",write)
+    with pytest.raises(RuntimeError,match="terminal defect"): await _invoke(handler,"session","text")
+    assert writer.close_calls==0 and queue.depth==queue.pending==0
+
+@pytest.mark.asyncio
+async def test_operational_error_write_uses_disconnect_cleanup(monkeypatch):
+    from app.wyoming_server import QueueFullError
+    from wyoming.error import Error
+    handler,writer,_,logs,_=_handler(monkeypatch,"buffered")
+    async def queue_run(*a,**kw): raise QueueFullError("full")
+    async def write(event): assert Error.is_type(event.type); raise BrokenPipeError("reset")
+    monkeypatch.setattr(handler.queue,"run",queue_run); monkeypatch.setattr(handler,"write_event",write)
+    await handler._run_operational(lambda:None,"id")
+    assert writer.close_calls==1 and sum(n=="client_disconnected" for n,_ in logs)==1

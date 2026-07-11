@@ -1172,27 +1172,87 @@ class FakeTtsEventHandler(AsyncEventHandler):
         except Exception:
             pass
         obs_log("conn_open", connection_id=self._conn_id, peer=peer)
+        self._disconnect_cleanup_lock = asyncio.Lock()
+        self._disconnect_logged = False
+        self._transport_close_requested = False
+        self._closed_audio_generators: set[int] = set()
+
+    def _is_expected_disconnect_error(self, error: Exception) -> bool:
+        """Recognize network teardown, including Python 3.13 selector RST state."""
+        if isinstance(error, (BrokenPipeError, ConnectionResetError)):
+            return True
+        if not isinstance(error, TypeError) or str(error) != "'NoneType' object is not callable":
+            return False
+        try:
+            return self.writer.is_closing()
+        except (AttributeError, RuntimeError):
+            return False
 
     async def _handle_expected_disconnect(
-        self,
-        synthesis_id: str,
-        *,
-        audio_generator=None,
+        self, synthesis_id: str, *, audio_generator=None,
     ) -> None:
-        """Close transport and backend generator on expected client disconnect."""
-        obs_log("client_disconnected",
-                connection_id=self._conn_id,
-                synthesis_id=synthesis_id,
-                reason="write_failed")
-        if audio_generator is not None:
-            try:
-                await audio_generator.aclose()
-            except Exception:
-                pass
+        """Finalize disconnect resources once, preserving cleanup failures."""
+        cleanup_error: Exception | None = None
+        async with self._disconnect_cleanup_lock:
+            if not self._disconnect_logged:
+                self._disconnect_logged = True
+                obs_log("client_disconnected", connection_id=self._conn_id,
+                        synthesis_id=synthesis_id, reason="write_failed")
+            if audio_generator is not None:
+                generator_id = id(audio_generator)
+                if generator_id not in self._closed_audio_generators:
+                    self._closed_audio_generators.add(generator_id)
+                    try:
+                        await audio_generator.aclose()
+                    except Exception as exc:
+                        cleanup_error = exc
+                        obs_log("disconnect_cleanup_error",
+                                connection_id=self._conn_id,
+                                synthesis_id=synthesis_id,
+                                operation="audio_generator_aclose",
+                                error_type=type(exc).__name__,
+                                detail=str(exc)[:200])
+            if not self._transport_close_requested:
+                self._transport_close_requested = True
+                try:
+                    self.writer.close()
+                except Exception as exc:
+                    obs_log("disconnect_cleanup_error",
+                            connection_id=self._conn_id,
+                            synthesis_id=synthesis_id,
+                            operation="writer_close",
+                            error_type=type(exc).__name__,
+                            detail=str(exc)[:200])
+                    if cleanup_error is None:
+                        cleanup_error = exc
+        if cleanup_error is not None:
+            raise cleanup_error
+
+    async def _close_generator_after_unexpected_write(
+        self, synthesis_id: str, audio_generator, write_error: Exception,
+    ) -> None:
+        """Finalize a stream without hiding the original write error."""
         try:
-            self.writer.close()
-        except Exception:
-            pass
+            await audio_generator.aclose()
+        except Exception as cleanup_error:
+            obs_log("disconnect_cleanup_error",
+                    connection_id=self._conn_id,
+                    synthesis_id=synthesis_id,
+                    operation="audio_generator_aclose_after_unexpected_write",
+                    error_type=type(cleanup_error).__name__,
+                    detail=str(cleanup_error)[:200])
+            raise write_error from cleanup_error
+
+    async def run(self) -> None:
+        """Own expected transport teardown after base handler cleanup."""
+        try:
+            await super().run()
+        except (BrokenPipeError, ConnectionResetError):
+            return
+        except TypeError as error:
+            if self._is_expected_disconnect_error(error):
+                return
+            raise
 
     async def handle_event(self, event: Event) -> bool:
         """Handle one Wyoming event."""
@@ -1281,18 +1341,21 @@ class FakeTtsEventHandler(AsyncEventHandler):
                         async for audio_event in audio_generator:
                             try:
                                 await self.write_event(audio_event)
-                            except (BrokenPipeError, ConnectionResetError):
+                            except (BrokenPipeError, ConnectionResetError, TypeError) as disconnect_error:
+                                if not self._is_expected_disconnect_error(disconnect_error):
+                                    raise
                                 client_connected = False
                                 await self._handle_expected_disconnect(
-                                    "legacy", audio_generator=audio_generator)
+                                    syn_id, audio_generator=audio_generator)
                                 break
-                            except Exception:
+                            except Exception as write_error:
                                 client_connected = False
                                 obs_log("synthesis_error",
                                         connection_id=self._conn_id,
-                                        synthesis_id="legacy",
+                                        synthesis_id=syn_id,
                                         error="unexpected_write_event_failure")
-                                await audio_generator.aclose()
+                                await self._close_generator_after_unexpected_write(
+                                    syn_id, audio_generator, write_error)
                                 raise
                     else:
                         audio_events = await self._synthesize_text(
@@ -1301,9 +1364,11 @@ class FakeTtsEventHandler(AsyncEventHandler):
                         for audio_event in audio_events:
                             try:
                                 await self.write_event(audio_event)
-                            except (BrokenPipeError, ConnectionResetError):
+                            except (BrokenPipeError, ConnectionResetError, TypeError) as disconnect_error:
+                                if not self._is_expected_disconnect_error(disconnect_error):
+                                    raise
                                 client_connected = False
-                                await self._handle_expected_disconnect("legacy")
+                                await self._handle_expected_disconnect(syn_id)
                                 break
                             except Exception:
                                 client_connected = False
@@ -1405,18 +1470,21 @@ class FakeTtsEventHandler(AsyncEventHandler):
                             async for audio_event in audio_generator:
                                 try:
                                     await self.write_event(audio_event)
-                                except (BrokenPipeError, ConnectionResetError):
+                                except (BrokenPipeError, ConnectionResetError, TypeError) as disconnect_error:
+                                    if not self._is_expected_disconnect_error(disconnect_error):
+                                        raise
                                     client_connected = False
                                     await self._handle_expected_disconnect(
                                         syn_id, audio_generator=audio_generator)
                                     break
-                                except Exception:
+                                except Exception as write_error:
                                     client_connected = False
                                     obs_log("synthesis_error",
                                             connection_id=self._conn_id,
                                             synthesis_id=syn_id,
                                             error="unexpected_write_event_failure")
-                                    await audio_generator.aclose()
+                                    await self._close_generator_after_unexpected_write(
+                                        syn_id, audio_generator, write_error)
                                     raise
                         else:
                             audio_events = await self._synthesize_text(
@@ -1426,7 +1494,9 @@ class FakeTtsEventHandler(AsyncEventHandler):
                             for audio_event in audio_events:
                                 try:
                                     await self.write_event(audio_event)
-                                except (BrokenPipeError, ConnectionResetError):
+                                except (BrokenPipeError, ConnectionResetError, TypeError) as disconnect_error:
+                                    if not self._is_expected_disconnect_error(disconnect_error):
+                                        raise
                                     client_connected = False
                                     await self._handle_expected_disconnect(syn_id)
                                     break
@@ -1442,8 +1512,17 @@ class FakeTtsEventHandler(AsyncEventHandler):
                             total_synthesis_ms = int((time.monotonic() - syn_start) * 1000)
                             try:
                                 await self.write_event(SynthesizeStopped().event())
-                            except Exception:
+                            except (BrokenPipeError, ConnectionResetError, TypeError) as disconnect_error:
+                                if not self._is_expected_disconnect_error(disconnect_error):
+                                    raise
                                 client_connected = False
+                                await self._handle_expected_disconnect(syn_id)
+                            except Exception:
+                                obs_log("synthesis_error",
+                                        connection_id=self._conn_id,
+                                        synthesis_id=syn_id,
+                                        error="unexpected_write_event_failure")
+                                raise
                             if client_connected:
                                 obs_log("syn_stopped",
                                         connection_id=self._conn_id,
@@ -1471,8 +1550,19 @@ class FakeTtsEventHandler(AsyncEventHandler):
 
                 await self._run_operational(send_streaming_audio, synthesis_id=syn_id)
             else:
-                # No text accumulated — still signal end of streaming response
-                await self.write_event(SynthesizeStopped().event())
+                # No text accumulated — still signal end of streaming response.
+                syn_id = new_synthesis_id()
+                try:
+                    await self.write_event(SynthesizeStopped().event())
+                except (BrokenPipeError, ConnectionResetError, TypeError) as disconnect_error:
+                    if not self._is_expected_disconnect_error(disconnect_error):
+                        raise
+                    await self._handle_expected_disconnect(syn_id)
+                except Exception:
+                    obs_log("synthesis_error", connection_id=self._conn_id,
+                            synthesis_id=syn_id,
+                            error="unexpected_write_event_failure")
+                    raise
 
             return True
 
@@ -1507,9 +1597,10 @@ class FakeTtsEventHandler(AsyncEventHandler):
                 synthesis_id=synthesis_id, code=code, detail=detail[:200])
         try:
             await self.write_event(Error(text=detail, code=code).event())
-        except (BrokenPipeError, ConnectionResetError):
-            obs_log("client_disconnected", connection_id=self._conn_id,
-                    synthesis_id=synthesis_id, reason="terminal_error_write_failed")
+        except (BrokenPipeError, ConnectionResetError, TypeError) as disconnect_error:
+            if not self._is_expected_disconnect_error(disconnect_error):
+                raise
+            await self._handle_expected_disconnect(synthesis_id)
 
     async def disconnect(self) -> None:
         """Log connection close and cancel queue entries, then delegate."""

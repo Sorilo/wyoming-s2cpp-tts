@@ -12,6 +12,7 @@ import pytest
 
 from wyoming.audio import AudioChunk, AudioStart, AudioStop
 from wyoming.client import AsyncTcpClient
+from wyoming.error import Error
 from wyoming.tts import (
     Synthesize,
     SynthesizeChunk,
@@ -784,6 +785,8 @@ class TestBackendBusyRetry:
                 events = await _collect_all(tcp, timeout=5)
             types = [e.type for e in events]
             assert "audio-stop" not in types, "AudioStop must not appear on exhaust"
+            assert types[-1] == "error"
+            assert Error.from_event(events[-1]).code == "backend_busy"
         finally:
             await server.stop()
 

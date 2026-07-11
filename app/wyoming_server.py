@@ -16,6 +16,7 @@ from typing import Awaitable, Callable, Protocol
 from urllib.parse import urlparse
 
 from wyoming.audio import AudioChunk, AudioStart, AudioStop
+from wyoming.error import Error
 from wyoming.event import Event
 from wyoming.info import Attribution, Describe, Info, TtsProgram, TtsVoice
 from wyoming.server import AsyncEventHandler, AsyncTcpServer
@@ -1253,9 +1254,10 @@ class FakeTtsEventHandler(AsyncEventHandler):
                         self.settings.tts_backend == "s2cpp"
                         and self.settings.s2_stream
                     ):
-                        async for audio_event in self._synthesize_text_streaming(
+                        audio_generator = self._synthesize_text_streaming(
                             synthesize.text, voice=self._requested_voice,
-                        ):
+                        )
+                        async for audio_event in audio_generator:
                             try:
                                 await self.write_event(audio_event)
                             except Exception:
@@ -1264,6 +1266,7 @@ class FakeTtsEventHandler(AsyncEventHandler):
                                         connection_id=self._conn_id,
                                         synthesis_id="legacy",
                                         reason="write_failed")
+                                await audio_generator.aclose()
                                 break
                     else:
                         audio_events = await self._synthesize_text(
@@ -1286,8 +1289,8 @@ class FakeTtsEventHandler(AsyncEventHandler):
                             reason="task_cancelled")
                     raise
                 except asyncio.TimeoutError:
-                    # Synthesis timeout — already logged by generator; suppress re-raise
-                    pass
+                    # The wrapper boundary emits the terminal Wyoming Error.
+                    raise
                 except (BrokenPipeError, ConnectionResetError) as disc_exc:
                     # Normal client disconnect — clean shutdown, no task warning
                     obs_log("client_disconnected",
@@ -1309,8 +1312,7 @@ class FakeTtsEventHandler(AsyncEventHandler):
                 await asyncio.sleep(0)
 
             syn_id = new_synthesis_id()
-            await self.queue.run(send_audio, synthesis_id=syn_id,
-                                 connection_id=self._conn_id)
+            await self._run_operational(send_audio, synthesis_id=syn_id)
             return True
 
         # ── Streaming TTS: synthesize-start ──────────────────────────
@@ -1371,10 +1373,11 @@ class FakeTtsEventHandler(AsyncEventHandler):
                             self.settings.tts_backend == "s2cpp"
                             and self.settings.s2_stream
                         ):
-                            async for audio_event in self._synthesize_text_streaming(
+                            audio_generator = self._synthesize_text_streaming(
                                 accumulated, voice=self._requested_voice,
                                 trigger="streaming", synthesis_id=syn_id,
-                            ):
+                            )
+                            async for audio_event in audio_generator:
                                 try:
                                     await self.write_event(audio_event)
                                 except Exception:
@@ -1383,9 +1386,7 @@ class FakeTtsEventHandler(AsyncEventHandler):
                                             connection_id=self._conn_id,
                                             synthesis_id=syn_id,
                                             reason="write_failed")
-                                    # Stop consuming the async generator —
-                                    # the async for will trigger GeneratorExit
-                                    # which cleans up the backend stream.
+                                    await audio_generator.aclose()
                                     break
                         else:
                             audio_events = await self._synthesize_text(
@@ -1434,9 +1435,7 @@ class FakeTtsEventHandler(AsyncEventHandler):
                     await self.queue.cancel_waiting(self._conn_id)
                     await asyncio.sleep(0)
 
-                await self.queue.run(send_streaming_audio,
-                                     synthesis_id=syn_id,
-                                     connection_id=self._conn_id)
+                await self._run_operational(send_streaming_audio, synthesis_id=syn_id)
             else:
                 # No text accumulated — still signal end of streaming response
                 await self.write_event(SynthesizeStopped().event())
@@ -1444,6 +1443,39 @@ class FakeTtsEventHandler(AsyncEventHandler):
             return True
 
         return True
+
+    async def _run_operational(self, operation, synthesis_id: str) -> None:
+        """Own expected runtime failures and terminate them on the wire."""
+        try:
+            await self.queue.run(operation, synthesis_id=synthesis_id,
+                                 connection_id=self._conn_id)
+            return
+        except asyncio.CancelledError:
+            # Queue cancellation is requested by disconnect/barge-in cleanup.
+            return
+        except QueueFullError as exc:
+            code = "queue_full"
+            detail = str(exc)
+        except QueueTimeoutError as exc:
+            code = "queue_timeout"
+            detail = str(exc)
+        except S2BackendBusyError as exc:
+            code = "backend_busy"
+            detail = str(exc)
+        except asyncio.TimeoutError as exc:
+            code = "synthesis_timeout"
+            detail = str(exc)
+        except S2ClientError as exc:
+            code = "backend_error"
+            detail = str(exc)
+
+        obs_log("synthesis_terminal_error", connection_id=self._conn_id,
+                synthesis_id=synthesis_id, code=code, detail=detail[:200])
+        try:
+            await self.write_event(Error(text=detail, code=code).event())
+        except (BrokenPipeError, ConnectionResetError):
+            obs_log("client_disconnected", connection_id=self._conn_id,
+                    synthesis_id=synthesis_id, reason="terminal_error_write_failed")
 
     async def disconnect(self) -> None:
         """Log connection close and cancel queue entries, then delegate."""
@@ -1453,7 +1485,6 @@ class FakeTtsEventHandler(AsyncEventHandler):
         self._in_streaming_session = False
         if self.settings.cancel_on_client_disconnect:
             await self.queue.cancel_waiting(self._conn_id)
-            self.queue.cancel_active_for_connection(self._conn_id)
             self.queue.cancel_active_for_connection(self._conn_id)
         obs_log("conn_close", connection_id=self._conn_id)
         await super().disconnect()

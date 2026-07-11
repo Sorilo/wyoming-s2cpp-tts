@@ -1295,3 +1295,147 @@ class TestQueueStructuredLogging:
         release.set()
         await asyncio.wait_for(t1, timeout=5)
         assert queue.pending == 0
+
+
+# ==============================================================================
+# Live-regression tests: errors during stream entry (busy-before-enter)
+# ==============================================================================
+
+@pytest.mark.asyncio
+class _FakeStream:
+    """Minimal stream mock for busy-before-enter tests."""
+    def __init__(self, content_type=None, chunks=None, error_after_chunks=None):
+        self.content_type = content_type or _REAL_PCM_CONTENT_TYPE
+        self.response_headers = dict(_REAL_PCM_HEADERS)
+        self._chunks = list(chunks or [])
+        self._error = error_after_chunks
+        self._idx = 0
+        self._closed = False
+    def __enter__(self): return self
+    def __exit__(self, *a): self._closed = True; return False
+    def __iter__(self): return self
+    def __next__(self):
+        if self._idx < len(self._chunks):
+            chunk = self._chunks[self._idx]; self._idx += 1
+            return chunk
+        if self._error:
+            err = self._error; self._error = None
+            raise err
+        raise StopIteration
+    def cancel(self): self._closed = True
+
+
+class TestBusyBeforeEnter:
+    """Tests for S2BackendBusyError during generate_stream/stream.__enter__."""
+
+    @pytest.mark.asyncio
+    async def test_busy_before_enter_then_success(self):
+        """First 3 stream-entry attempts raise 503, 4th succeeds."""
+        pcm = _pcm_frames(100)
+        from app.wyoming_server import synthesize_s2cpp_streaming_tts_events
+        from app.s2_client import S2GenerateRequest
+
+        class _BusyThenOkClient:
+            def __init__(self): self.calls = 0
+            def generate_stream(self, r, files=None, boundary=None):
+                self.calls += 1
+                if self.calls <= 3:
+                    raise S2BackendBusyError("503 busy", status_code=503)
+                return _FakeStream(content_type=_REAL_PCM_CONTENT_TYPE,
+                                   chunks=[pcm])
+
+        client = _BusyThenOkClient()
+        settings = Settings(tts_backend="s2cpp", s2_stream=True,
+                            s2_backend_busy_max_retries=3)
+        request = S2GenerateRequest(text="busy then ok")
+        events = [e async for e in synthesize_s2cpp_streaming_tts_events(
+            client, request, FakeTtsConfig(), settings)]
+
+        types = [e.type for e in events]
+        assert "audio-start" in types
+        assert "audio-stop" in types
+        assert types.count("audio-start") == 1
+        assert client.calls == 4  # 3 failures + 1 success
+
+    @pytest.mark.asyncio
+    async def test_busy_before_enter_exhausted(self):
+        """All attempts raise 503, no audio, exception propagates."""
+        from app.wyoming_server import synthesize_s2cpp_streaming_tts_events
+        from app.s2_client import S2GenerateRequest
+
+        class _AlwaysBusyClient:
+            def __init__(self): self.calls = 0
+            def generate_stream(self, r, files=None, boundary=None):
+                self.calls += 1
+                raise S2BackendBusyError("503 busy", status_code=503)
+
+        client = _AlwaysBusyClient()
+        settings = Settings(tts_backend="s2cpp", s2_stream=True,
+                            s2_backend_busy_max_retries=2)
+        request = S2GenerateRequest(text="always busy")
+
+        with pytest.raises(S2BackendBusyError):
+            [e async for e in synthesize_s2cpp_streaming_tts_events(
+                client, request, FakeTtsConfig(), settings)]
+
+        assert client.calls == 3  # 1 initial + 2 retries
+
+    @pytest.mark.asyncio
+    async def test_no_retry_after_audio_start(self):
+        """Once AudioStart emitted, 503 should not retry."""
+        pcm = _pcm_frames(50)
+        from app.wyoming_server import synthesize_s2cpp_streaming_tts_events
+        from app.s2_client import S2GenerateRequest
+
+        class _OkThenBusyClient:
+            def __init__(self): self.calls = 0
+            def generate_stream(self, r, files=None, boundary=None):
+                self.calls += 1
+                return _FakeStream(content_type=_REAL_PCM_CONTENT_TYPE,
+                                   chunks=[pcm],
+                                   error_after_chunks=S2BackendBusyError("503 after audio", status_code=503))
+
+        client = _OkThenBusyClient()
+        settings = Settings(tts_backend="s2cpp", s2_stream=True,
+                            s2_backend_busy_max_retries=3)
+        request = S2GenerateRequest(text="ok then busy")
+
+        gen = synthesize_s2cpp_streaming_tts_events(
+            client, request, FakeTtsConfig(), settings)
+        events = []
+        with pytest.raises(S2BackendBusyError):
+            async for e in gen:
+                events.append(e)
+
+        types = [e.type for e in events]
+        assert "audio-start" in types
+        assert "audio-stop" not in types  # error after AudioStart, no retry
+        assert types.count("audio-start") == 1
+        assert client.calls == 1  # only one attempt (no retry after AudioStart)
+
+    @pytest.mark.asyncio
+    async def test_busy_before_enter_no_unbound_local(self):
+        """503 before stream entry must not raise UnboundLocalError."""
+        from app.wyoming_server import synthesize_s2cpp_streaming_tts_events
+        from app.s2_client import S2GenerateRequest
+
+        class _BusyEnterClient:
+            def __init__(self): self.calls = 0
+            def generate_stream(self, r, files=None, boundary=None):
+                self.calls += 1
+                if self.calls == 1:
+                    raise S2BackendBusyError("503 busy", status_code=503)
+                return _FakeStream(content_type=_REAL_PCM_CONTENT_TYPE,
+                                   chunks=[_pcm_frames(50)])
+
+        client = _BusyEnterClient()
+        settings = Settings(tts_backend="s2cpp", s2_stream=True,
+                            s2_backend_busy_max_retries=3)
+        request = S2GenerateRequest(text="busy enter")
+
+        # Should not raise UnboundLocalError
+        events = [e async for e in synthesize_s2cpp_streaming_tts_events(
+            client, request, FakeTtsConfig(), settings)]
+
+        assert any("audio-start" in e.type for e in events)
+        assert any("audio-stop" in e.type for e in events)

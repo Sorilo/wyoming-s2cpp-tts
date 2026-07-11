@@ -336,9 +336,14 @@ async def test_unknown_path_returns_404():
     """Unknown paths return 404."""
     server, port = await _start_server()
     try:
-        status, body = await _http_get("127.0.0.1", port, "/unknown")
+        private_marker = "request-private-marker"
+        status, body = await _http_get(
+            "127.0.0.1", port, f"/unknown/{private_marker}"
+        )
         assert status == 404
         assert body["error"] == "Not Found"
+        assert "path" not in body
+        assert private_marker not in str(body)
     finally:
         await server.stop()
 

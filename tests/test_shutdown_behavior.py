@@ -521,6 +521,34 @@ def test_coordinator_server_closes_on_shutdown():
             result = s.connect_ex(("127.0.0.1", port))
         finally:
             s.close()
+        assert result != 0, "Expected Wyoming listener to refuse connections"
+
+    asyncio.run(run())
+
+
+def test_coordinator_shutdown_completes_after_drain_started_separately():
+    """A prior drain transition must not skip listener/resource shutdown."""
+    from app.coordinator import ServiceCoordinator
+    from app.lifecycle import LifecycleState
+
+    async def run():
+        c = ServiceCoordinator(_settings(shutdown_grace_timeout_sec=5.0))
+        await c.start()
+        assert c.server is not None
+        port = c.server.port
+
+        assert c.start_draining() is True
+        await c.shutdown()
+
+        assert c.lifecycle.state == LifecycleState.STOPPED
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(1.0)
+        try:
+            result = s.connect_ex(("127.0.0.1", port))
+        finally:
+            s.close()
+        assert result != 0, "Expected shutdown to close a separately drained listener"
 
     asyncio.run(run())
 

@@ -493,10 +493,7 @@ class AdminHttpServer:
         elif path == "/metrics":
             return self._handle_metrics()
         else:
-            return _json_response(404, {
-                "error": "Not Found",
-                "path": path,
-            })
+            return _json_response(404, {"error": "Not Found"})
 
     # ── Connection handler ─────────────────────────────────────────────────
 

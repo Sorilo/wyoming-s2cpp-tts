@@ -172,10 +172,14 @@ class ServiceCoordinator:
             return
         self._shutdown_started = True
 
-        if not self.lifecycle.start_draining():
-            # Already terminal — nothing to do
+        if self.lifecycle.state.is_terminal():
             self._shutdown_complete.set()
             return
+
+        # A caller may have initiated the public admission drain before
+        # requesting full shutdown.  Continue cleanup from DRAINING rather
+        # than mistaking the idempotent transition result for a terminal state.
+        self.lifecycle.start_draining()
 
         try:
             # 1. Stop Wyoming listener — no new connections accepted

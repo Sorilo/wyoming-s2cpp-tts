@@ -494,6 +494,7 @@ async def synthesize_s2cpp_streaming_tts_events(
 
     retry_count = 0
     max_total_attempts = settings.s2_backend_busy_max_retries + 1
+    audio_start_emitted = False
     synthesis_deadline = time.monotonic() + settings.s2_synthesis_timeout_sec
 
     while True:
@@ -834,7 +835,7 @@ async def synthesize_s2cpp_streaming_tts_events(
                     attempt=retry_count + 1,
                     max_attempts=max_total_attempts,
                     pcm_observed=backend_data_observed,
-                    audio_start_emitted=first_audio_emitted)
+                    audio_start_emitted=audio_start_emitted)
             if not backend_data_observed and not audio_start_emitted                 and retry_count < max_total_attempts:
                 obs_log("backend_busy_retry",
                         connection_id=_ctx.connection_id,
@@ -1279,6 +1280,22 @@ class FakeTtsEventHandler(AsyncEventHandler):
                             connection_id=self._conn_id,
                             synthesis_id="legacy",
                             reason="task_cancelled")
+                    raise
+                except asyncio.TimeoutError:
+                    # Synthesis timeout — already logged by generator; suppress re-raise
+                    pass
+                except (BrokenPipeError, ConnectionResetError) as disc_exc:
+                    # Normal client disconnect — clean shutdown, no task warning
+                    obs_log("client_disconnected",
+                            connection_id=self._conn_id,
+                            synthesis_id="legacy",
+                            reason=f"connection_lost: {type(disc_exc).__name__}")
+                except Exception as unexpected_exc:
+                    obs_log("synthesis_error",
+                            connection_id=self._conn_id,
+                            synthesis_id="legacy",
+                            error=type(unexpected_exc).__name__,
+                            detail=str(unexpected_exc)[:200])
                     raise
 
             if self.settings.cancel_on_new_request:

@@ -88,7 +88,7 @@ Wyoming protocol streaming is implemented and verified: the wrapper handles `syn
 
 Progressive backend-audio streaming is now wired (Phase 7.5A). When `S2_STREAM=true`, the production handler uses `synthesize_s2cpp_streaming_tts_events()` / `generate_stream()` to yield Wyoming audio events progressively as backend transport chunks arrive. When `S2_STREAM=false`, the existing buffered `generate_multipart()` path is preserved unchanged.
 
-Phase 9 validation passed three deliberate disconnect/recovery cycles with valid recovery audio, released busy state, no persistent HTTP 503 latch, and no unobserved task-exception or disconnect-cleanup warning. The validated images are deployed and passed per-container startup/wiring checks; the final short/long direct Wyoming and Home Assistant VM smoke remains.
+Phase 9 validation passed three deliberate disconnect/recovery cycles with valid recovery audio, released busy state, no persistent HTTP 503 latch, and no unobserved task-exception or disconnect-cleanup warning. The validated images are deployed. Final short and long direct Wyoming requests and the Home Assistant VM smoke passed with audible intelligible speech, zero restarts, queue depth zero, active GPU inference, and clean logs.
 
 ## Running locally for development
 
@@ -159,7 +159,7 @@ No ordinary test should contact a real backend unless explicitly opted in throug
 - Drop-in discovery: new `.s2voice` files placed in `/voices` are discoverable without rebuilding or restarting the wrapper. Home Assistant may require a Wyoming integration reload to see new voices.
 - ~~True progressive backend HTTP audio streaming in the production handler is future Phase 7.5 work.~~ ✅ Phase 7.5A complete. Live latency verification is Phase 7.5B.
 - Phase 8 client disconnect cleanup, HTTP stream closure, and backend cancellation work is complete.
-- Phase 9 queue admission, HTTP 503 busy retry, queue/synthesis timeouts, controlled Wyoming failures, and disconnect recovery are implemented, merged, validated, and deployed. Final compact production smoke remains before operational closeout.
+- Phase 9 queue admission, HTTP 503 busy retry, queue/synthesis timeouts, controlled Wyoming failures, and disconnect recovery are implemented, merged, validated, deployed, and production-smoke verified. Phase 9 is closed.
 - End-to-end barge-in with a real Home Assistant satellite/player path is future Phase 10 work.
 - STT, LLM, VAD, and actual playback timestamps require Home Assistant/upstream/client instrumentation or a correlated end-to-end test harness.
 

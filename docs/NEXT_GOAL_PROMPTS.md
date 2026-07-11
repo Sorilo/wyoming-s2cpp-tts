@@ -14,9 +14,10 @@ state after every `/goal` run. Do not copy stale assumptions forward.
 - Production wrapper: `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-7db26b7`.
 - Production retries: `S2_BACKEND_BUSY_MAX_RETRIES=10`,
   `S2_BACKEND_BUSY_RETRY_DELAY_MS=500`; timeouts remain `30` and `120`.
-- Per-container production startup/wiring checks passed; compact direct/HA smoke
-  remains. Rollback is backend `sha-edf89bd`, wrapper `sha-12f3bf8`, retries
-  `3` and `200`.
+- Final production smoke passed: short/long direct Wyoming requests, audible and
+  intelligible Home Assistant VM speech, queue depth zero, active GPU inference,
+  zero restarts, and clean logs. Phase 9 is closed. Rollback remains backend
+  `sha-edf89bd`, wrapper `sha-12f3bf8`, retries `3` and `200`.
 
 ## Next official phase: Phase 9B
 

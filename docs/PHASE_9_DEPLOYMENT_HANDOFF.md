@@ -4,7 +4,7 @@
 
 Phase 9 implementation, merge, automated testing, isolated Unraid validation, candidate verification, and per-container production deployment verification are complete. PR #2 merged to `main` as `1a0b93f818f61cf560f7921a54cf984b86066798`.
 
-Both validated images are now running in production. The final non-destructive production smoke remains: one short direct Wyoming request, one long direct Wyoming request, one Home Assistant VM TTS request, then a log and restart-count check. Do not repeat the 876-test suite or isolated stress tests unless deployment reveals an unexplained problem.
+Both validated images are running in production, and the final non-destructive production smoke passed. Phase 9 is deployed and closed. Do not repeat the 876-test suite or isolated stress tests unless a future deployment reveals an unexplained problem.
 
 Canonical evidence:
 
@@ -64,23 +64,27 @@ Preserve all other backend and wrapper fields, mounts, ports, networking, GPU as
 - Backend deployment verification: immutable identity, GPU use, port `3032`, zero restarts, valid buffered/progressive audio: **PASS**.
 - Wrapper deployment verification: immutable identity, healthy, port `10200`, backend reachability, settings `10`/`500`, zero restarts: **PASS**.
 
-## Compact final smoke
+## Final production smoke — PASS
 
-Run one short and one long sequential Wyoming request to `127.0.0.1:10200`. Both must produce non-empty, frame-aligned 44.1 kHz mono s16le PCM with one `AudioStart` and one `AudioStop`, and both containers must remain running with restart count zero.
+Final production verification completed successfully:
 
-Then issue one ordinary TTS request from the Home Assistant VM and confirm that speech is audible. Do not change Home Assistant VM configuration.
+- Backend `sha-6e629d0` and wrapper `sha-7db26b7` were running.
+- Wrapper health was `healthy`; both restart counts remained zero.
+- Backend host port `3032` and wrapper host port `10200` were reachable.
+- Wrapper-to-backend connectivity succeeded.
+- Backend inference remained on GPU `GPU-65b9a886-d157-27fa-09d1-8894bc5cc135` using approximately `3372 MiB`.
+- Effective Phase 9 settings were retries `10`, retry delay `500 ms`, queue wait timeout `30 s`, and synthesis timeout `120 s`.
 
-After the three requests, capture:
+Direct Wyoming results:
 
-```bash
-docker inspect wyoming-s2cpp-tts --format 'wrapper image={{.Config.Image}} running={{.State.Running}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} restarts={{.RestartCount}}'
-docker inspect s2cpp-backend --format 'backend image={{.Config.Image}} running={{.State.Running}} restarts={{.RestartCount}}'
-docker logs --since 15m wyoming-s2cpp-tts 2>&1 | tail -n 200
-docker logs --since 15m s2cpp-backend 2>&1 | tail -n 200
-nvidia-smi --query-compute-apps=gpu_uuid,pid,process_name,used_memory --format=csv,noheader
-```
+| Request | Result | Audio | Chunks | First audio | RTF |
+| --- | --- | --- | ---: | ---: | ---: |
+| Short | PASS | 44.1 kHz, mono, 16-bit PCM; one `AudioStart` and one `AudioStop` | 24 | `1.445 s` | `1.002` |
+| Long | PASS | 44.1 kHz, mono, 16-bit PCM; one `AudioStart` and one `AudioStop` | 191 | `1.358 s` | `0.974` |
 
-Acceptance requires audible HA speech, both direct requests valid, wrapper healthy, both restart counts zero, backend GPU use present, and no unexplained traceback, persistent HTTP 503/busy exhaustion, CUDA/OOM failure, unobserved task exception, or disconnect-cleanup error.
+Home Assistant VM smoke: **PASS**. Voice `cmu_rms_male_us` produced audible and intelligible speech, the request completed normally, backend stream status was `ok`, queue depth returned to zero, first backend audio arrived at `1398 ms`, wrapper forwarding overhead was `1 ms`, and both `AudioStart` and `AudioStop` were emitted.
+
+Final log scan: **PASS**. No blocking pattern, persistent busy/503 state, traceback, CUDA failure, OOM, unobserved task exception, or `disconnect_cleanup_error` was present.
 
 ## Rollback
 
@@ -103,4 +107,4 @@ Both rollback images were verified local before deployment. After rollback, appl
 
 ## Closeout boundary
 
-Phase 9 repository implementation is closed. After the final smoke passes, record production smoke as complete without reopening runtime implementation. Phase 9B is planning-only until its separate planning PR is reviewed; no Phase 9B runtime code is part of this closeout.
+Phase 9 implementation, deployment, direct production smoke, Home Assistant production smoke, and log verification are complete. Rollback remains prepared, and Phase 9 is closed. Phase 9B is planning-only in PR #4; no Phase 9B runtime code is part of this closeout.

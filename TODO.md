@@ -51,7 +51,7 @@
 - HA: `192.168.1.233` → `192.168.1.45:10200`
 - Audio: 44100 Hz mono s16le real speech via Wyoming protocol streaming lifecycle
 - Tests baseline: 876 passed, 0 failed, 0 skipped after Phase 9
-- Phase 9 per-container production verification passed; compact short/long direct Wyoming and Home Assistant VM smoke remains.
+- Phase 9 production deployment and final smoke passed: short/long direct Wyoming, audible Home Assistant VM speech, zero restarts, queue depth zero, active GPU inference, and clean logs. Phase 9 is closed.
 
 ## Phase 7B results
 

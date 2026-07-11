@@ -1,6 +1,6 @@
 # TODO
 
-## Completed through Phase 7A (2026-07-08)
+## Completed through Phase 9 (2026-07-11)
 
 1. Scaffold, minimal Wyoming server, config loading, queue ✅
 2. s2.cpp HTTP client with mocked tests ✅
@@ -45,13 +45,13 @@
 
 ## Current verified deployment
 
-- Backend: `s2cpp-backend` (`ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-edf89bd`)
-- Wrapper: `wyoming-s2cpp-tts` (`ghcr.io/sorilo/wyoming-s2cpp-tts:sha-9c134cc`)
+- Backend: `s2cpp-backend` (`ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-6e629d0`)
+- Wrapper: `wyoming-s2cpp-tts` (`ghcr.io/sorilo/wyoming-s2cpp-tts:sha-7db26b7`)
 - Network: `sorilonet`
 - HA: `192.168.1.233` → `192.168.1.45:10200`
 - Audio: 44100 Hz mono s16le real speech via Wyoming protocol streaming lifecycle
-- Tests baseline: 287/287 pass before Phase 7A
-- Runtime caveat: true progressive backend HTTP audio streaming is not wired into the production event handler yet; the live handler still uses buffered `generate_multipart()`.
+- Tests baseline: 876 passed, 0 failed, 0 skipped after Phase 9
+- Phase 9 per-container production verification passed; compact short/long direct Wyoming and Home Assistant VM smoke remains.
 
 ## Phase 7B results
 

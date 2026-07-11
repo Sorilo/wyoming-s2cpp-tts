@@ -3,65 +3,31 @@
 Run phases one at a time. This file is regenerated from the actual repository
 state after every `/goal` run. Do not copy stale assumptions forward.
 
-## Current state after Phase 8C realtime stride tuning
+## Current state after Phase 9
 
-- Repository branch: ``perf/realtime-stride-tuning``.
-- Backend image unchanged: ``ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-edf89bd``.
-- Wrapper image unchanged: ``ghcr.io/sorilo/wyoming-s2cpp-tts:sha-9c134cc``.
-  **A new wrapper image must be built and deployed** before Home Assistant
-  can use the new stride tuning env vars.  The benchmark harness contacts the
-  backend directly and does NOT require a wrapper rebuild.
-- New wrapper env vars: ``S2_STREAM_DECODE_STRIDE_FRAMES`` (1-64, default 4),
-  ``S2_STREAM_HOLDBACK_FRAMES`` (non-negative, default 0),
-  ``S2_STREAM_START_BUFFER_MS`` (non-negative, default 0),
-  ``S2_LOW_LATENCY`` (bool, default true).
-- Environment audit complete: ``S2_MAX_NEW_TOKENS``, ``S2_TEMPERATURE``,
-  ``S2_TOP_P``, ``S2_TOP_K``, ``S2_CHUNKED``, ``S2_OUTPUT_FORMAT``,
-  ``S2_MODEL``, ``S2_GPU_INDEX``, ``S2_GPU_LAYERS``, ``S2_CODEC_CPU``,
-  ``BARGE_IN_FRIENDLY``, ``CANCEL_ON_CLIENT_DISCONNECT``,
-  ``CANCEL_ON_NEW_REQUEST``, and ``MAX_QUEUE_SIZE`` are now parseable
-  from environment with strict validation.
-- All new tuning params are sent explicitly in streaming multipart requests.
-- ``backend_start`` observability includes all tuning parameters.
-- ``scripts/benchmark_realtime_tuning.py``: dry-run-safe stride-sweep harness.
-- ``scripts/run_realtime_tuning_unraid.sh``: one-command Unraid host script.
-- 80 new tests; full suite: **540/540 passing**.
-- Live RTX 3080 benchmarks completed (strides 1-24). Stride 4 is the preferred candidate.
+- Repository: `main`; PR #2 merged as `1a0b93f`.
+- Runtime commit `7db26b7` and documentation commit `105121b` are ancestors of `main`.
+- Full test baseline: **876 passed, 0 failed, 0 skipped**.
+- Isolated Unraid validation: **PASS** for short/long synthesis, FIFO,
+  queue-full recovery, and three disconnect/recovery cycles.
+- Production backend: `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-6e629d0`.
+- Production wrapper: `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-7db26b7`.
+- Production retries: `S2_BACKEND_BUSY_MAX_RETRIES=10`,
+  `S2_BACKEND_BUSY_RETRY_DELAY_MS=500`; timeouts remain `30` and `120`.
+- Per-container production startup/wiring checks passed; compact direct/HA smoke
+  remains. Rollback is backend `sha-edf89bd`, wrapper `sha-12f3bf8`, retries
+  `3` and `200`.
 
-## Current state after live RTX 3080 stride benchmarks
+## Next official phase: Phase 9B
 
-- Live RTX 3080 benchmarks completed across strides 1-24 (Q6_K model).
-- Primary artifact directory: ``verification_artifacts/realtime_tuning/20260710_021915`` (strides 1, 2, 4, 8).
-- Higher-stride testing: ``verification_artifacts/realtime_tuning/20260710_024627`` (strides 8, 12, 16, 24).
-- Summary results (strides 1/2/4/8):
-  stride 1: RTF ~1.34, first PCM ~105 ms
-  stride 2: RTF ~1.19, first PCM ~150 ms
-  stride 4: RTF ~1.13, first PCM ~251 ms
-  stride 8: RTF ~1.08, first PCM ~419 ms
-- Stride 4 is currently preferred for TTFA/throughput compromise.
-- Higher strides (8-24) show diminishing returns (RTF 1.08→1.07) with significant first-PCM penalty (419→1209 ms).
-- Human listening: all strides broadly similar, minor artifacts, mostly acceptable.
-- Q6_K model does NOT achieve RTF < 1.0 at any stride — quantization comparison (Phase 8D) is the next step.
+Create a behavior-preserving scheduler/domain refactor around `SpeechRequest`,
+`SpeechMetadata`, `ScheduledSpeech`, `SpeechScheduler`, and `SynthesisSession`.
+Preserve FIFO, queue limits, retry/deadline semantics, cancellation, disconnect
+recovery, and Wyoming event ordering. Semantic priority, replacement,
+interrupt-policy behavior, progressive phrase queues, barge-in, playback
+interruption, and admin HTTP endpoints remain deferred.
 
-## Next phase: Phase 9 queue, busy handling, and timeout policy
-
-## Current state after Phase 8B2 production backend promotion
-
-- Repository branch: `main`.
-- Production backend image: `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-edf89bd`.
-- Production backend digest: `sha256:c29e41e59b470d58bf4b88c11c9ec753e00fa74a3bffbb003bc257fb9c6e46d9`.
-- Backend image build commit: `edf89bd7c5554769bb36cbd049b6fbb98bcb9d41`.
-- Rollback backend image: `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b`.
-- Wrapper production image remains `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-9c134cc`.
-- Final Phase 8B1.1 retry artifacts: `verification_artifacts/phase_8b1_1_retry/`.
-- Live evidence: 5/5 cancellation/recovery cycles passed.  Backend cancellation events appeared exactly once per cancelled request and in order: `backend_cancel_detected`, `generation_cancel_observed`, `final_decode_skipped`, `backend_request_cancelled`, and `backend_request_cleanup_done`.
-- Cancellation fields were consistent: `reason=client_disconnect`, `point=content_provider_complete`, valid 41-45 ms monotonic timings, accurate frame/decode/PCM counters, `queued_pcm_bytes=0`, and `server_busy=false`.
-- Recovery synthesis passed 5/5 for audio, protocol terminal event, and valid non-empty PCM.
-- GPU utilization returned to idle; backend/wrapper containers remained running; no restart was required.
-- Wrapper deliberate-disconnect BrokenPipe task-exception noise remains a narrow logging issue, but it did not block cleanup or recovery.
-- Do not begin long-form audio-quality comparison unless the current goal explicitly asks for it.
-
-## Next prompt: Phase 9 queue, busy handling, and timeout policy
+## Historical prompt: Phase 9 queue, busy handling, and timeout policy
 
 ```text
 /goal

@@ -108,6 +108,11 @@ class ServiceLifecycle:
     @property
     def uptime_sec(self) -> float:
         return time.monotonic() - self._started_monotonic
+
+    def accepts_new_work(self) -> bool:
+        """Return True if new synthesis work can be admitted."""
+        return self._state.accepts_new_work()
+
     # -- Transitions --
 
     def transition_to_running(self) -> None:

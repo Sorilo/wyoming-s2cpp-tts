@@ -37,6 +37,7 @@ from app.audio import (
     validate_declared_pcm_s16le,
 )
 from app.config import Settings
+from app.lifecycle import LifecycleState
 from app.observability import (
     LogContext,
     new_connection_id,
@@ -48,6 +49,7 @@ from app.speech import SpeechScheduler, SpeechRequest, SpeechMetadata, QueueFull
 from app.speech.session import SynthesisSession
 
 from app.voice_discovery import discover_voices
+import signal
 import sys
 import time
 
@@ -988,12 +990,16 @@ class FakeTtsEventHandler(AsyncEventHandler):
         queue: SpeechScheduler,  # Phase 9B: SpeechScheduler
         settings: Settings,
         s2_client_factory: S2ClientFactory,
+        coordinator: "ServiceCoordinator | None" = None,
     ) -> None:
         super().__init__(reader, writer)
         self.config = config
         self.queue = queue
         self.settings = settings
         self.s2_client_factory = s2_client_factory
+        self.coordinator = coordinator
+        if self.coordinator is not None:
+            self.coordinator.register_handler(self)
         # Streaming state
         self._streaming_text_parts: list[str] = []
         self._in_streaming_session: bool = False
@@ -1017,6 +1023,7 @@ class FakeTtsEventHandler(AsyncEventHandler):
         self._disconnect_logged = False
         self._transport_close_requested = False
         self._closed_audio_generators: set[int] = set()
+        self._disconnected = False
 
     def _is_expected_disconnect_error(self, error: Exception) -> bool:
         """Recognize network teardown, including Python 3.13 selector RST state."""
@@ -1121,6 +1128,13 @@ class FakeTtsEventHandler(AsyncEventHandler):
 
         # ── Legacy (non-streaming) Synthesize ────────────────────────
         if Synthesize.is_type(event.type):
+            # Phase 9C: reject synthesis when draining
+            if self.coordinator is not None and not self.coordinator.lifecycle.accepts_new_work():
+                await self.write_event(Error(
+                    text="Service is shutting down",
+                    code="service_shutting_down",
+                ).event())
+                return True
             synthesize = Synthesize.from_event(event)
             resolved = _resolve_voice_from_synthesize(
                 synthesize, self.settings
@@ -1312,6 +1326,13 @@ class FakeTtsEventHandler(AsyncEventHandler):
                 accumulated = compat_text
 
             if accumulated:
+                # Phase 9C: reject streaming synthesis when draining
+                if self.coordinator is not None and not self.coordinator.lifecycle.accepts_new_work():
+                    await self.write_event(Error(
+                        text="Service is shutting down",
+                        code="service_shutting_down",
+                    ).event())
+                    return True
                 syn_id = new_synthesis_id()
                 async def send_streaming_audio() -> None:
                     session = SynthesisSession(
@@ -1484,7 +1505,15 @@ class FakeTtsEventHandler(AsyncEventHandler):
             await self._handle_expected_disconnect(synthesis_id)
 
     async def disconnect(self) -> None:
-        """Log connection close and cancel queue entries, then delegate."""
+        """Log connection close and cancel queue entries, then delegate.
+
+        Idempotent — safe to call multiple times (e.g. from both the
+        server's handler cleanup and the coordinator's explicit close).
+        """
+        if self._disconnected:
+            return
+        self._disconnected = True
+
         self._streaming_text_parts = []
         self._streaming_compat_text = ""
         self._streaming_compat_voice = None
@@ -1493,6 +1522,9 @@ class FakeTtsEventHandler(AsyncEventHandler):
             await self.queue.cancel_connection(self._conn_id)
             self.queue.cancel_active_for_connection(self._conn_id)
         obs_log("conn_close", connection_id=self._conn_id)
+        # Phase 9C: unregister from coordinator
+        if self.coordinator is not None:
+            self.coordinator.unregister_handler(self)
         await super().disconnect()
 
     async def _synthesize_text(
@@ -1597,6 +1629,7 @@ class RunningFakeTtsServer:
     server: AsyncTcpServer
     host: str
     port: int
+    scheduler: SpeechScheduler | None = None  # Phase 9C: typed scheduler exposure
 
     async def stop(self) -> None:
         """Stop the TCP server and active handlers."""
@@ -1614,6 +1647,7 @@ async def start_fake_tts_server(
     max_queue_size: int = 3,
     settings: Settings | None = None,
     s2_client_factory: S2ClientFactory = S2Client.from_settings,
+    coordinator: "ServiceCoordinator | None" = None,
 ) -> RunningFakeTtsServer:
     """Start the Wyoming TTS server without blocking.
 
@@ -1636,6 +1670,7 @@ async def start_fake_tts_server(
             queue,
             active_settings,
             s2_client_factory,
+            coordinator=coordinator,
         )
 
     await server.start(handler_factory)
@@ -1644,7 +1679,8 @@ async def start_fake_tts_server(
     if raw_server is not None and raw_server.sockets:
         bound_port = int(raw_server.sockets[0].getsockname()[1])
 
-    return RunningFakeTtsServer(server=server, host=host, port=bound_port)
+    result = RunningFakeTtsServer(server=server, host=host, port=bound_port, scheduler=queue)
+    return result
 
 
 def describe_planned_server() -> str:
@@ -1652,30 +1688,47 @@ def describe_planned_server() -> str:
     return "Phase 1 fake Wyoming TTS server on tcp://0.0.0.0:10200"
 
 
-def run_server(settings: Settings | None = None) -> None:
-    """Run the Phase 1 fake Wyoming TCP server until interrupted."""
+def run_server(settings: Settings | None = None) -> int:
+    """Run the Wyoming TCP server with graceful shutdown via ServiceCoordinator.
+
+    Phase 9C: Uses ServiceCoordinator for lifecycle management with
+    SIGTERM/SIGINT signal handling, bounded grace period, and
+    deterministic drain/cancel.  Returns 0 on clean shutdown,
+    non-zero on failure.
+    """
     active_settings = settings or Settings()
-    host, port = parse_tcp_uri(active_settings.wyoming_uri)
-    config = FakeTtsConfig.from_settings(active_settings)
 
-    async def runner() -> None:
-        server = await start_fake_tts_server(
-            host=host,
-            port=port,
-            config=config,
-            max_queue_size=active_settings.max_queue_size,
-            settings=active_settings,
-        )
-        print(
-            f"Wyoming TTS server listening on tcp://{host}:{server.port} "
-            f"with backend={active_settings.tts_backend}"
-        )
+    async def runner() -> int:
+        from app.coordinator import ServiceCoordinator
+
+        coordinator = ServiceCoordinator(active_settings)
+
+        # Install signal handlers via coordinator (owned tasks)
+        loop = asyncio.get_running_loop()
+        coordinator.install_signal_handlers(loop)
+
         try:
-            await asyncio.Event().wait()
-        finally:
-            await server.stop()
+            try:
+                await coordinator.start()
+            except Exception:
+                print(
+                    f"Wyoming TTS server failed to start: "
+                    f"{coordinator.lifecycle.state.value}",
+                    file=sys.stderr,
+                )
+                return 1
 
+            await coordinator.wait_for_shutdown()
+            return 0 if coordinator.lifecycle.state == LifecycleState.STOPPED else 1
+        finally:
+            await coordinator.remove_signal_handlers(loop)
+
+    # Note: signal handlers are removed via coordinator.remove_signal_handlers
+    # in the runner's finally block on all exit paths.
     try:
-        asyncio.run(runner())
+        exit_code = asyncio.run(runner())
     except KeyboardInterrupt:
-        print("Fake Wyoming TTS server stopped")
+        print("Wyoming TTS server stopped")
+        exit_code = 0
+
+    return exit_code

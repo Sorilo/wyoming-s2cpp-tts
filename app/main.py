@@ -15,8 +15,7 @@ from app.wyoming_server import run_server
 def main() -> int:
     """Run the configured Wyoming TTS server."""
     setup_logging()
-    run_server(Settings.from_env())
-    return 0
+    return run_server(Settings.from_env())
 
 
 if __name__ == "__main__":

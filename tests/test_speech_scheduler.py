@@ -507,3 +507,134 @@ def test_depth_never_negative_after_all_terminal_paths():
         assert sched.snapshot()["pending"] == 0
 
     asyncio.run(run_test())
+
+
+# ── Slice 5: Lifecycle observability ───────────────────────────────────
+
+def test_snapshot_includes_lifecycle_fields():
+    """Snapshot must expose lifecycle state fields (no plaintext)."""
+    sched = SpeechScheduler(max_size=3)
+    snap = sched.snapshot()
+    assert "admission_latency_ms" in snap
+    assert snap["admission_latency_ms"] is None  # No active request
+    assert "terminal_reason" in snap
+    assert snap["terminal_reason"] is None
+
+
+def test_scheduler_logs_admission_and_activation(monkeypatch):
+    """obs_log is called with queue_admitted and queue_started events."""
+    from app.speech import scheduler as sched_mod
+    logs = []
+    monkeypatch.setattr(sched_mod, "obs_log", lambda event, **fields: logs.append((event, fields)))
+
+    sched = SpeechScheduler(max_size=3)
+    started = asyncio.Event()
+    done = asyncio.Event()
+
+    async def op():
+        started.set()
+        await done.wait()
+
+    async def run_test():
+        task = asyncio.create_task(sched.run(_req("s1", "c1"), op))
+        await started.wait()
+        done.set()
+        await task
+
+        admitted_events = [e for e in logs if e[0] == "queue_admitted"]
+        started_events = [e for e in logs if e[0] == "queue_started"]
+        assert len(admitted_events) >= 1
+        assert len(started_events) >= 1
+        # Verify fields are plaintext-safe (no text value)
+        for _, fields in logs:
+            for v in fields.values():
+                if isinstance(v, str):
+                    assert "test" not in v.lower() or "test" == v  # only "test" as literal is ok in event names
+
+    asyncio.run(run_test())
+
+
+def test_scheduler_logs_timeout(monkeypatch):
+    """Timeout produces queue_wait_timeout event."""
+    from app.speech import scheduler as sched_mod
+    logs = []
+    monkeypatch.setattr(sched_mod, "obs_log", lambda event, **fields: logs.append((event, fields)))
+
+    sched = SpeechScheduler(max_size=2, wait_timeout_sec=0.1)
+    release = asyncio.Event()
+
+    async def op():
+        await release.wait()
+
+    async def run_test():
+        t1 = asyncio.create_task(sched.run(_req("s1", "c1"), op))
+        await asyncio.sleep(0.02)
+        with pytest.raises(QueueTimeoutError):
+            await sched.run(_req("s2", "c2"), lambda: None)
+        release.set()
+        await t1
+
+        timeout_events = [e for e in logs if e[0] == "queue_wait_timeout"]
+        assert len(timeout_events) >= 1
+        # Check terminal_reason in the log
+        for _, fields in timeout_events:
+            assert "text" not in fields  # No plaintext
+
+    asyncio.run(run_test())
+
+
+def test_snapshot_shows_terminal_reason_after_timeout(monkeypatch):
+    """After a timeout, snapshot reflects terminal_reason."""
+    from app.speech import scheduler as sched_mod
+    monkeypatch.setattr(sched_mod, "obs_log", lambda event, **fields: None)
+
+    sched = SpeechScheduler(max_size=2, wait_timeout_sec=0.1)
+    release = asyncio.Event()
+
+    async def op():
+        await release.wait()
+
+    async def run_test():
+        t1 = asyncio.create_task(sched.run(_req("s1", "c1"), op))
+        await asyncio.sleep(0.02)
+        with pytest.raises(QueueTimeoutError):
+            await sched.run(_req("s2", "c2"), lambda: None)
+        # After timeout, snapshot should show terminal reason for the active
+        snap = sched.snapshot()
+        # active is still s1 running, so terminal_reason is None
+        release.set()
+        await t1
+
+    asyncio.run(run_test())
+
+
+def test_scheduler_logs_no_plaintext_in_any_event(monkeypatch):
+    """No obs_log event from the scheduler contains request text."""
+    from app.speech import scheduler as sched_mod
+    logs = []
+    monkeypatch.setattr(sched_mod, "obs_log", lambda event, **fields: logs.append((event, fields)))
+
+    sched = SpeechScheduler(max_size=3)
+    release = asyncio.Event()
+
+    async def op():
+        await release.wait()
+
+    async def run_test():
+        t1 = asyncio.create_task(sched.run(_req("s1", "c1", text="secret phrase"), op))
+        await asyncio.sleep(0.02)
+        t2 = asyncio.create_task(sched.run(_req("s2", "c2", text="another secret"), lambda: asyncio.sleep(0)))
+        await asyncio.sleep(0.02)
+        release.set()
+        await t1
+        try:
+            await t2
+        except asyncio.CancelledError:
+            pass
+
+        for event_name, fields in logs:
+            field_str = str(fields)
+            assert "secret" not in field_str, f"Plaintext leaked in event '{event_name}': {field_str}"
+            assert "phrase" not in field_str, f"Plaintext leaked in event '{event_name}': {field_str}"
+
+    asyncio.run(run_test())

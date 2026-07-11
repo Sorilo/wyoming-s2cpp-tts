@@ -13,6 +13,7 @@ from collections import deque
 from typing import Any, Awaitable, Callable
 
 from app.speech.models import SpeechRequest, SpeechState, ScheduledSpeech
+from app.observability import obs_log
 
 
 class QueueFullError(RuntimeError):
@@ -65,6 +66,12 @@ class SpeechScheduler:
             "pending": self._pending,
             "max_size": self.max_size,
             "waiting_count": len(self._waiters),
+            "admission_latency_ms": (
+                int((active.started_monotonic - active.admitted_monotonic) * 1000)
+                if active and active.started_monotonic is not None
+                else None
+            ),
+            "terminal_reason": active.terminal_reason if active else None,
         }
 
     # ── Admission and activation ───────────────────────────────────────
@@ -99,6 +106,11 @@ class SpeechScheduler:
                 state=SpeechState.CREATED,
                 admitted_monotonic=time.monotonic(),
             )
+            obs_log("queue_admitted",
+                    synthesis_id=synthesis_id,
+                    connection_id=connection_id,
+                    queue_depth=self._depth,
+                    max_queue_size=self.max_size)
 
             if self._active_entry is None:
                 # First worker: become active immediately
@@ -139,6 +151,10 @@ class SpeechScheduler:
                     entry.state = SpeechState.TIMED_OUT
                     entry.completed_monotonic = time.monotonic()
                     entry.terminal_reason = "queue_wait_timeout"
+                obs_log("queue_wait_timeout", synthesis_id=synthesis_id,
+                        connection_id=connection_id,
+                        queue_depth=self._depth,
+                        wait_timeout_sec=self.wait_timeout_sec)
                 raise QueueTimeoutError(
                     f"Queue wait timeout after {self.wait_timeout_sec}s"
                 )
@@ -153,7 +169,13 @@ class SpeechScheduler:
                     entry.state = SpeechState.CANCELLED
                     entry.completed_monotonic = time.monotonic()
                     entry.terminal_reason = "cancelled_while_waiting"
+                obs_log("queue_cancelled", synthesis_id=synthesis_id,
+                        connection_id=connection_id,
+                        reason="cancelled_while_waiting")
                 raise
+
+        obs_log("queue_started", synthesis_id=synthesis_id,
+                connection_id=connection_id, queue_depth=self._depth)
 
         try:
             await operation()
@@ -181,6 +203,11 @@ class SpeechScheduler:
                 self._depth -= 1
                 self._pending -= 1
                 entry.completed_monotonic = time.monotonic()
+
+                obs_log("queue_completed", synthesis_id=synthesis_id,
+                        connection_id=connection_id,
+                        terminal_reason=entry.terminal_reason,
+                        queue_depth=self._depth)
 
                 if self._active_entry is entry:
                     self._active_entry = None

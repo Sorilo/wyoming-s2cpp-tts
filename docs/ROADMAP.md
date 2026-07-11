@@ -129,7 +129,7 @@ build comparison, mild GPU overclock testing, final stride 5/6/8 comparison.
 Requires separate goal and controlled backend-image builds.
 
 ### Phase 9: queue, busy handling, and timeout policy ✅
-Implemented deterministic bounded FIFO admission, backend HTTP 503 retry, queue-wait and synthesis deadlines, controlled Wyoming failure behavior, and disconnect recovery. PR #2 merged as `1a0b93f`; 876 tests and isolated Unraid validation passed. Validated images are deployed and passed per-container verification; only the compact direct/HA production smoke remains.
+Implemented deterministic bounded FIFO admission, backend HTTP 503 retry, queue-wait and synthesis deadlines, controlled Wyoming failure behavior, and disconnect recovery. PR #2 merged as `1a0b93f`; 876 tests and isolated Unraid validation passed. Validated images are deployed. Short and long direct Wyoming smoke and audible Home Assistant VM smoke passed with zero restarts, queue depth zero, active GPU inference, and clean logs. Phase 9 is closed.
 
 ### Phase 9.5: progressive LLM text-to-TTS phrase pipeline
 

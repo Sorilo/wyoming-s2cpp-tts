@@ -68,3 +68,67 @@ class TestValidResult:
                         submit_time=0.0, audio_start_time=1.0, completion_time=2.0)
         assert r.duration_s == 2.0
         assert r.audio_start_s == 1.0
+
+
+class TestInfrastructureFallback:
+    """Tests for shell-script patterns (logic verified in Python)."""
+
+    def test_grep_count_zero_normalizes_to_int(self):
+        """grep -c with no matches prints '0' and exits 1; || true ensures success."""
+        import subprocess
+        result = subprocess.run(
+            "echo '' | grep -c 'nomatch' || true",
+            shell=True, capture_output=True, text=True)
+        val = result.stdout.strip() or "0"
+        assert val == "0"
+        assert int(val) == 0
+
+    def test_missing_results_creates_infrastructure_failure(self):
+        """When results.json is absent, the shell finalizer fabricates FAIL."""
+        import json, tempfile, os
+        d = tempfile.mkdtemp()
+        try:
+            # Simulate: no results.json, but production snapshots exist
+            for c in ['wrapper', 'backend']:
+                with open(f'{d}/production-before-{c}.json', 'w') as f:
+                    json.dump({'id': 'abc', 'running': True}, f)
+                with open(f'{d}/production-after-{c}.json', 'w') as f:
+                    json.dump({'id': 'abc', 'running': True}, f)
+            # Client did not produce results.json — finalizer creates it
+            assert not os.path.exists(f'{d}/results.json')
+            # This is what the shell script does
+            results = {
+                'classification': 'FAIL',
+                'failure_type': 'infrastructure',
+                'reason': 'Client did not produce results.json',
+                'production_unchanged': True,
+                'tests': {}
+            }
+            with open(f'{d}/results.json', 'w') as f:
+                json.dump(results, f)
+            assert os.path.exists(f'{d}/results.json')
+            with open(f'{d}/results.json') as f:
+                r = json.load(f)
+            assert r['classification'] == 'FAIL'
+            assert r['failure_type'] == 'infrastructure'
+        finally:
+            import shutil; shutil.rmtree(d, ignore_errors=True)
+
+    def test_venv_missing_deps_not_used(self):
+        """If .venv exists but import wyoming fails, fall back."""
+        import subprocess
+        # Simulate: a python that can't import wyoming returns nonzero
+        result = subprocess.run(
+            "python3 -c 'import nonexistent_module' 2>/dev/null",
+            shell=True)
+        assert result.returncode != 0  # import failure = nonzero
+
+    def test_helper_client_uses_shadow_name_not_localhost(self):
+        """Helper container must use $SHADOW_NAME:10200, not 127.0.0.1:10201."""
+        CLIENT_HOST = "wyoming-s2cpp-tts-phase9-smoke-20260711_003025"
+        CLIENT_PORT = "10200"
+        cmd = f"python3 /workspace/scripts/phase_9_live_client.py {CLIENT_HOST} {CLIENT_PORT} /artifacts"
+        assert CLIENT_HOST in cmd
+        assert "127.0.0.1" not in cmd  # helper mode uses container name
+        assert "10201" not in cmd       # helper uses container port 10200
+

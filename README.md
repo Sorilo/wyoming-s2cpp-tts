@@ -24,17 +24,11 @@ Real Home Assistant TTS playback has been deployed and verified: Home Assistant 
 - CPU: Intel i9-13900K
 - RAM: 96 GB DDR4
 - Persistent appdata root: `/mnt/user/appdata`
-- Model path inside backend container: `/models/s2-pro-q6_k.gguf`
+- Model path inside backend container: `/models/s2-pro-q4_k_m.gguf`
 - Host voices directory: `/mnt/user/appdata/s2cpp/voices`
 - Backend voices mount: `/voices`
 
-The verified first model target is:
-
-```text
-/models/s2-pro-q6_k.gguf
-```
-
-This `q6_k` target is the current RTX 3080 baseline. Future model choices may include `s2-pro-q8_0.gguf` for quality if VRAM allows, or `s2-pro-q4_k_m.gguf` as a lower-VRAM fallback. Hardware-upgrade benchmarking is post-v0.1 work.
+The current verified RTX 3080 runtime baseline is `/models/s2-pro-q4_k_m.gguf` with codec context 32, decode stride 32, and 8 threads. Hardware-upgrade benchmarking is post-v0.1 work.
 
 
 ## Real-time stride tuning (Phase 8C)
@@ -42,9 +36,7 @@ This `q6_k` target is the current RTX 3080 baseline. Future model choices may in
 The wrapper code now supports configurable streaming decode stride for
 RTX 3080 performance optimisation. The benchmark harness contacts the s2.cpp
 backend directly — no wrapper rebuild is required to run the stride sweep.
-**To use these settings through Home Assistant / Wyoming, a new wrapper image
-must be built and deployed** (the current production image sha-9c134cc does
-not include these changes). The s2.cpp backend with ``low_latency=true`` defaults to stride 1 (one frame per CUDA kernel launch), which may cause excessive overhead with ``codec_decode_context_frames=4``.
+Phase 9 validated these settings through an isolated wrapper/backend candidate pair; that validation did not deploy the candidates to production. The s2.cpp backend with ``low_latency=true`` defaults to stride 1 (one frame per CUDA kernel launch), which may cause excessive overhead with ``codec_decode_context_frames=4``.
 
 ### Quick benchmark (on Unraid host)
 
@@ -75,10 +67,10 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#streaming-decode-stride-tuning-p
 | Backend endpoint | `http://s2cpp-backend:3030/generate` |
 | Backend contract | `multipart/form-data` only; raw `audio/L16; rate=44100; channels=1` |
 | Wrapper container | `wyoming-s2cpp-tts` |
-| Wrapper image | `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-9c134cc` |
+| Wrapper image | `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-12f3bf8` |
 | Wyoming endpoint | `tcp://0.0.0.0:10200` inside container; `192.168.1.45:10200` from Home Assistant |
 | Home Assistant result | Discovery succeeds; `s2-pro` is visible; real speech is audible |
-| Test baseline | 418 tests passing after Phase 8B2 production backend promotion |
+| Test baseline | 876 passed, 0 failed, 0 skipped after Phase 9 validation |
 
 ## Current architecture
 
@@ -96,7 +88,7 @@ Wyoming protocol streaming is implemented and verified: the wrapper handles `syn
 
 Progressive backend-audio streaming is now wired (Phase 7.5A). When `S2_STREAM=true`, the production handler uses `synthesize_s2cpp_streaming_tts_events()` / `generate_stream()` to yield Wyoming audio events progressively as backend transport chunks arrive. When `S2_STREAM=false`, the existing buffered `generate_multipart()` path is preserved unchanged.
 
-Live Phase 8B2 verification proved five deliberate disconnect/recovery cycles: backend cancellation is recorded once, generation exits promptly, final decode is skipped, and immediate recovery synthesis succeeds. Wrapper BrokenPipe task-exception noise on deliberate disconnect remains a narrow logging issue.
+Live Phase 9 candidate validation passed three deliberate disconnect/recovery cycles with valid recovery audio, released busy state, no persistent HTTP 503 latch, and no unobserved task-exception or disconnect-cleanup warning. The candidate images were not deployed; production remained unchanged.
 
 ## Running locally for development
 
@@ -148,7 +140,7 @@ The verified real backend contract is raw `audio/L16; rate=44100; channels=1` wi
 
 ## Testing
 
-Current full-suite baseline before Phase 6E: 287 passing tests.
+Current full-suite baseline: **876 passed, 0 failed, 0 skipped**.
 
 Useful focused checks:
 
@@ -166,8 +158,8 @@ No ordinary test should contact a real backend unless explicitly opted in throug
 - Saved voice selection uses `voice` and `voice_dir` multipart fields; CLI voice creation uses `--prompt-audio`, `--prompt-text`, `--voice`, `--save-voice`, `--voice-dir`; CLI voice listing uses `--list-voices`. There is no HTTP voice-management API.
 - Drop-in discovery: new `.s2voice` files placed in `/voices` are discoverable without rebuilding or restarting the wrapper. Home Assistant may require a Wyoming integration reload to see new voices.
 - ~~True progressive backend HTTP audio streaming in the production handler is future Phase 7.5 work.~~ ✅ Phase 7.5A complete. Live latency verification is Phase 7.5B.
-- Client disconnect cleanup, open HTTP stream closure, and backend cancellation limitations are future Phase 8 work.
-- Queue-busy behavior, HTTP 503 handling, queue wait timeout, synthesis timeout, and controlled Wyoming failure behavior are future Phase 9 work.
+- Phase 8 client disconnect cleanup, HTTP stream closure, and backend cancellation work is complete.
+- Phase 9 queue admission, HTTP 503 busy retry, queue/synthesis timeouts, controlled Wyoming failures, and disconnect recovery are implemented and validated in isolated candidates; production deployment was not performed.
 - End-to-end barge-in with a real Home Assistant satellite/player path is future Phase 10 work.
 - STT, LLM, VAD, and actual playback timestamps require Home Assistant/upstream/client instrumentation or a correlated end-to-end test harness.
 

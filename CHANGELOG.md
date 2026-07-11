@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Phase 9 closure: bounded queue admission, backend-busy retry, queue wait and synthesis timeouts, controlled Wyoming errors, and disconnect cleanup are complete. Isolated Unraid validation passed short and long synthesis (RTF ~0.961), FIFO ordering, queue-full rejection/recovery, and three disconnect/recovery cycles without a persistent 503 latch or unobserved task exception. Full suite: **876 passed, 0 failed, 0 skipped**. Validated candidates are wrapper `sha-7db26b7` and backend `sha-6e629d0`; production remained unchanged and deployment was not performed. See `docs/PHASE_9_DEPLOYMENT_HANDOFF.md`.
+
 - Phase 8E.1 closure: Q4_K_M runtime tuning complete.  After six benchmark
   phases, the provisional baseline is Q4_K_M at context=32, stride=32,
   threads=8.  Backend first PCM ~1.35s, RTF 0.987 (narrow margin).

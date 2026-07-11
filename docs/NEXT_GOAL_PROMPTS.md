@@ -7,7 +7,8 @@ state after every `/goal` run. Do not copy stale assumptions forward.
 
 - Repository: `main`; PR #2 merged as `1a0b93f`.
 - Runtime commit `7db26b7` and documentation commit `105121b` are ancestors of `main`.
-- Full test baseline: **876 passed, 0 failed, 0 skipped**.
+- Phase 9 historical baseline: **876 passed, 0 failed, 0 skipped**.
+- Phase 9B standard-suite baseline: **940 collected, 940 passed, 0 failed, 0 skipped**; 14 Unraid shell-behavior tests remain separate.
 - Isolated Unraid validation: **PASS** for short/long synthesis, FIFO,
   queue-full recovery, and three disconnect/recovery cycles.
 - Production backend: `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-6e629d0`.
@@ -19,14 +20,13 @@ state after every `/goal` run. Do not copy stale assumptions forward.
   zero restarts, and clean logs. Phase 9 is closed. Rollback remains backend
   `sha-edf89bd`, wrapper `sha-12f3bf8`, retries `3` and `200`.
 
-## Next official phase: Phase 9B
+## Phase 9B: Speech Scheduler Domain Refactor ✅ Complete
 
-Create a behavior-preserving scheduler/domain refactor around `SpeechRequest`,
-`SpeechMetadata`, `ScheduledSpeech`, `SpeechScheduler`, and `SynthesisSession`.
-Preserve FIFO, queue limits, retry/deadline semantics, cancellation, disconnect
-recovery, and Wyoming event ordering. Semantic priority, replacement,
-interrupt-policy behavior, progressive phrase queues, barge-in, playback
-interruption, and admin HTTP endpoints remain deferred.
+Phase 9B extracted the queue, request identity, lifecycle ownership, and synthesis-session boundaries into explicit `app/speech/` domain objects. `SpeechScheduler` exclusively owns admission, FIFO activation, queue depth, active task identity, cancellation, and release. Wyoming handlers are protocol adapters: they create `SpeechRequest` objects and submit operations. `SingleWorkerSynthesisQueue` compatibility wrapper removed; all tests migrated to `SpeechScheduler`/`SpeechRequest` public API. Observable behavior unchanged. Source-only refactor — no image published or deployed. Production remains on Phase 9 images: wrapper `sha-7db26b7`, backend `sha-6e629d0`.
+
+## Next official phase: Phase 9C — Graceful Shutdown & Admin
+
+Implement graceful shutdown and an optional admin HTTP port with liveness, readiness, status, and metrics endpoints. This is a separate planning/review-first phase.
 
 ## Historical prompt: Phase 9 queue, busy handling, and timeout policy
 
@@ -139,7 +139,7 @@ Do not modify wrapper code, voice profiles, or Home Assistant during this phase.
 ## Next phase: S2 Backend Generation & Flush Investigation
 
 Since first backend audio arrived at ~2,932 ms and the stream completed at
-~2,937 ms (only ~5 ms progressive window), the recommended next latency phase
+~2,940 ms (only ~5 ms progressive window), the recommended next latency phase
 should investigate s2.cpp backend generation and flush behavior before assuming
 further wrapper optimization will help.
 
@@ -431,6 +431,69 @@ Acceptance criteria:
 
 Suggested commit:
 fix: clean up synthesis streams on client disconnect
+```
+
+## Phase 9C prompt — graceful shutdown and optional admin HTTP port
+
+```text
+/goal
+
+Proceed with Phase 9C only: graceful shutdown and optional admin HTTP port with
+liveness, readiness, status, and metrics endpoints. This is a separate planning
+and review-first phase. Do NOT implement Phase 9.5 (progressive phrase
+synthesis) or Phase 10 (barge-in).
+
+Project:
+/workspace/wyoming-s2cpp-tts
+
+Current verified deployment:
+- Backend: s2cpp-backend (ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-6e629d0)
+- Wrapper: wyoming-s2cpp-tts (ghcr.io/sorilo/wyoming-s2cpp-tts:sha-7db26b7)
+- Network: sorilonet, HA: 192.168.1.233 → 192.168.1.45:10200
+- Phase 9B: source-only domain refactor complete, no image published
+- SpeechScheduler domain model in app/speech/; handlers are protocol adapters
+
+Required work:
+1. Inspect git status, app/wyoming_server.py, app/speech/scheduler.py, app/config.py,
+   tests, and all Phase 9B domain objects.
+2. Design an optional admin HTTP port (disabled by default) with:
+   - /healthz (liveness — returns 200 if the event loop is running)
+   - /ready (readiness — returns 200 if the Wyoming TCP server is accepting)
+   - /status (returns scheduler snapshot without plaintext)
+   - /metrics (returns Prometheus-style or structured JSON metrics)
+3. Implement graceful shutdown:
+   - On SIGTERM/SIGINT, stop accepting new Wyoming connections
+   - Drain in-flight syntheses (wait for completion or cancel with timeout)
+   - Close the admin HTTP server
+   - Exit cleanly with zero queue depth and released resources
+4. Preserve all Phase 9B behavior, domain objects, and test expectations.
+5. Add deterministic tests for each endpoint, graceful shutdown, and
+   signal handling (no real backend required).
+6. Run focused tests, then the full Python suite with zero failures.
+7. Update TODO.md, CHANGELOG.md, docs/ROADMAP.md, docs/ARCHITECTURE.md,
+   README.md, and docs/NEXT_GOAL_PROMPTS.md.
+8. Make one focused commit and push it.
+
+Do not:
+- Implement progressive phrase synthesis, barge-in, or playback interruption (Phase 9.5/10)
+- Implement semantic priority, replacement, or interrupt-policy changes
+- Change queue/scheduler behavior, retry/deadline semantics, or event ordering
+- Publish or deploy images unless explicitly authorized
+- Change backend, model, voice, template, or Home Assistant configuration
+- Expose plaintext text through admin endpoints
+
+Acceptance criteria:
+- Admin HTTP port is optional, disabled by default, configurable via ADMIN_PORT env var
+- /healthz and /ready return correct status codes
+- /status returns safe scheduler snapshot (synthesis/connection IDs, depth, pending, no text)
+- /metrics returns useful operational metrics
+- Graceful shutdown drains or cancels in-flight work, closes cleanly
+- All existing tests pass; new tests cover each endpoint and shutdown path
+- Documentation is accurate and includes Phase 9C limitations
+- Working tree is clean after commit
+
+Suggested commit:
+feat(phase-9c): add graceful shutdown and optional admin HTTP endpoints
 ```
 
 ## Prompt-generation guidance

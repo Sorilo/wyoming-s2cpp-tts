@@ -50,8 +50,20 @@
 - Network: `sorilonet`
 - HA: `192.168.1.233` → `192.168.1.45:10200`
 - Audio: 44100 Hz mono s16le real speech via Wyoming protocol streaming lifecycle
-- Tests baseline: 876 passed, 0 failed, 0 skipped after Phase 9
+- Phase 9 historical test baseline: 876 passed, 0 failed, 0 skipped
+- Phase 9B standard-suite baseline: 940 collected, 940 passed, 0 failed, 0 skipped; 14 Unraid shell-behavior tests remain a separate environment-specific invocation
 - Phase 9 production deployment and final smoke passed: short/long direct Wyoming, audible Home Assistant VM speech, zero restarts, queue depth zero, active GPU inference, and clean logs. Phase 9 is closed.
+## Phase 9B results
+
+- Source-only domain refactor extracting `SpeechRequest`, `SpeechMetadata`, `SpeechScheduler`, `SpeechState`, `ScheduledSpeech`, and `SynthesisSession` into explicit `app/speech/` domain objects.
+- `SpeechScheduler` exclusively owns admission, FIFO activation, queue state, cancellation, and release. Handlers create `SpeechRequest` objects and submit operations; they do not read or mutate scheduler-private fields.
+- `SingleWorkerSynthesisQueue` compatibility wrapper removed; all code uses `SpeechScheduler` directly.
+- Lifecycle state machine: `CREATED → WAITING → ACTIVE → COMPLETED/CANCELLED/TIMED_OUT/FAILED` with idempotent terminal transitions and `TIMED_OUT` vs `FAILED` distinction.
+- Reserved semantic metadata fields present but inert (do not affect FIFO order).
+- Plaintext excluded from reprs, snapshots, structured logs, and lifecycle observability.
+- Observable behavior (FIFO, capacity, single-worker, busy retries, deadlines, cancellation, event ordering) unchanged from Phase 9.
+- No image published or deployed. Production remains on Phase 9 images (wrapper `sha-7db26b7`, backend `sha-6e629d0`).
+
 
 ## Phase 7B results
 

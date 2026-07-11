@@ -38,9 +38,9 @@ from app.s2_client import S2BackendBusyError
 # -- wyoming_server imports ------------------------------------------------
 from app.wyoming_server import (
     FakeTtsConfig,
-    SingleWorkerSynthesisQueue,
     start_fake_tts_server,
 )
+from app.speech import SpeechScheduler, SpeechRequest
 
 
 # ==============================================================================
@@ -393,21 +393,21 @@ class _RecordingClient:
 # ==============================================================================
 
 class TestQueueBasicOperation:
-    """Tests for SingleWorkerSynthesisQueue basic operation."""
+    """Tests for SpeechScheduler basic operation."""
 
     @pytest.mark.asyncio
     async def test_one_request_succeeds_normally(self):
         """Queue allows one request, completes, pending goes to 0."""
-        queue = SingleWorkerSynthesisQueue(max_size=3, wait_timeout_sec=30)
+        queue = SpeechScheduler(max_size=3, wait_timeout_sec=30)
         executed = False
 
         async def operation() -> None:
             nonlocal executed
             executed = True
 
-        await queue.run(operation, synthesis_id="syn-1", connection_id="conn-1")
+        await queue.run(SpeechRequest(synthesis_id="syn-1", connection_id="conn-1", text="test"), operation)
         assert executed, "Operation was not executed"
-        assert queue.pending == 0, f"Expected pending=0, got {queue.pending}"
+        assert queue.snapshot()["pending"] == 0, f"Expected pending=0, got {queue.snapshot()["pending"]}"
 
     @pytest.mark.asyncio
     async def test_two_requests_serialize(self):
@@ -430,15 +430,15 @@ class TestQueueBasicOperation:
             second_started.set()
             recorder.record(event="r2_done")
 
-        queue = SingleWorkerSynthesisQueue(max_size=3, wait_timeout_sec=30)
+        queue = SpeechScheduler(max_size=3, wait_timeout_sec=30)
 
         t1 = asyncio.create_task(
-            queue.run(request_1, synthesis_id="syn-1", connection_id="conn-1")
+            queue.run(SpeechRequest(synthesis_id="syn-1", connection_id="conn-1", text="test"), request_1)
         )
         await asyncio.wait_for(first_started.wait(), timeout=5)
 
         t2 = asyncio.create_task(
-            queue.run(request_2, synthesis_id="syn-2", connection_id="conn-2")
+            queue.run(SpeechRequest(synthesis_id="syn-2", connection_id="conn-2", text="test"), request_2)
         )
         await asyncio.sleep(0.2)
 
@@ -470,19 +470,16 @@ class TestQueueBasicOperation:
             order.append(n)
             recorder.record(event="done", n=n)
 
-        queue = SingleWorkerSynthesisQueue(max_size=3, wait_timeout_sec=30)
+        queue = SpeechScheduler(max_size=3, wait_timeout_sec=30)
 
         t1 = asyncio.create_task(
-            queue.run(lambda: make_request(1, block=True),
-                      synthesis_id="syn-1", connection_id="conn-1")
+            queue.run(SpeechRequest(synthesis_id="syn-1", connection_id="conn-1", text="test"), lambda: make_request(1, block=True))
         )
         t2 = asyncio.create_task(
-            queue.run(lambda: make_request(2),
-                      synthesis_id="syn-2", connection_id="conn-2")
+            queue.run(SpeechRequest(synthesis_id="syn-2", connection_id="conn-2", text="test"), lambda: make_request(2))
         )
         t3 = asyncio.create_task(
-            queue.run(lambda: make_request(3),
-                      synthesis_id="syn-3", connection_id="conn-3")
+            queue.run(SpeechRequest(synthesis_id="syn-3", connection_id="conn-3", text="test"), lambda: make_request(3))
         )
 
         await asyncio.sleep(0.3)
@@ -501,7 +498,7 @@ class TestQueueBasicOperation:
     @pytest.mark.asyncio
     async def test_queue_full_rejected(self):
         """When queue is at capacity, new request raises immediately."""
-        queue = SingleWorkerSynthesisQueue(max_size=2, wait_timeout_sec=30)
+        queue = SpeechScheduler(max_size=2, wait_timeout_sec=30)
         blocker_started = asyncio.Event()
         release_blocker = asyncio.Event()
 
@@ -513,23 +510,22 @@ class TestQueueBasicOperation:
             await asyncio.sleep(0.5)
 
         t1 = asyncio.create_task(
-            queue.run(blocker, synthesis_id="syn-1", connection_id="conn-1")
+            queue.run(SpeechRequest(synthesis_id="syn-1", connection_id="conn-1", text="test"), blocker)
         )
         await asyncio.wait_for(blocker_started.wait(), timeout=5)
 
         t2 = asyncio.create_task(
-            queue.run(waiter, synthesis_id="syn-2", connection_id="conn-2")
+            queue.run(SpeechRequest(synthesis_id="syn-2", connection_id="conn-2", text="test"), waiter)
         )
         await asyncio.sleep(0.2)
 
         with pytest.raises(RuntimeError, match="Queue full"):
-            await queue.run(lambda: asyncio.sleep(0),
-                            synthesis_id="syn-3", connection_id="conn-3")
+            await queue.run(SpeechRequest(synthesis_id="syn-3", connection_id="conn-3", text="test"), lambda: asyncio.sleep(0))
 
         release_blocker.set()
         await asyncio.wait_for(t1, timeout=5)
         await asyncio.wait_for(t2, timeout=15)
-        assert queue.pending == 0
+        assert queue.snapshot()["pending"] == 0
 
 
 # ==============================================================================
@@ -542,7 +538,7 @@ class TestQueueTimeoutAndCancel:
     @pytest.mark.asyncio
     async def test_waiting_request_times_out(self):
         """Waiting request exceeding queue_wait_timeout_sec is removed cleanly."""
-        queue = SingleWorkerSynthesisQueue(max_size=2, wait_timeout_sec=0.5)
+        queue = SpeechScheduler(max_size=2, wait_timeout_sec=0.5)
         blocker_started = asyncio.Event()
         release_blocker = asyncio.Event()
 
@@ -551,22 +547,21 @@ class TestQueueTimeoutAndCancel:
             await release_blocker.wait()
 
         t1 = asyncio.create_task(
-            queue.run(blocker, synthesis_id="syn-1", connection_id="conn-1")
+            queue.run(SpeechRequest(synthesis_id="syn-1", connection_id="conn-1", text="test"), blocker)
         )
         await asyncio.wait_for(blocker_started.wait(), timeout=5)
 
         with pytest.raises(asyncio.TimeoutError):
-            await queue.run(lambda: asyncio.sleep(0),
-                            synthesis_id="syn-2", connection_id="conn-2")
+            await queue.run(SpeechRequest(synthesis_id="syn-2", connection_id="conn-2", text="test"), lambda: asyncio.sleep(0))
 
         release_blocker.set()
         await asyncio.wait_for(t1, timeout=5)
-        assert queue.pending == 0
+        assert queue.snapshot()["pending"] == 0
 
     @pytest.mark.asyncio
     async def test_waiting_client_disconnect_removes_entry(self):
         """Client disconnect removes their waiting queue entry."""
-        queue = SingleWorkerSynthesisQueue(max_size=3, wait_timeout_sec=30)
+        queue = SpeechScheduler(max_size=3, wait_timeout_sec=30)
         blocker_started = asyncio.Event()
         release_blocker = asyncio.Event()
 
@@ -575,21 +570,19 @@ class TestQueueTimeoutAndCancel:
             await release_blocker.wait()
 
         t1 = asyncio.create_task(
-            queue.run(blocker, synthesis_id="syn-1", connection_id="conn-a")
+            queue.run(SpeechRequest(synthesis_id="syn-1", connection_id="conn-a", text="test"), blocker)
         )
         await asyncio.wait_for(blocker_started.wait(), timeout=5)
 
         t2 = asyncio.create_task(
-            queue.run(lambda: asyncio.sleep(0.1),
-                      synthesis_id="syn-2", connection_id="conn-b")
+            queue.run(SpeechRequest(synthesis_id="syn-2", connection_id="conn-b", text="test"), lambda: asyncio.sleep(0.1))
         )
         t3 = asyncio.create_task(
-            queue.run(lambda: asyncio.sleep(0.1),
-                      synthesis_id="syn-3", connection_id="conn-c")
+            queue.run(SpeechRequest(synthesis_id="syn-3", connection_id="conn-c", text="test"), lambda: asyncio.sleep(0.1))
         )
         await asyncio.sleep(0.2)
 
-        cancelled = await queue.cancel_waiting("conn-b")
+        cancelled = await queue.cancel_connection("conn-b")
         assert cancelled == 1, f"Expected 1 cancelled, got {cancelled}"
 
         release_blocker.set()
@@ -601,12 +594,12 @@ class TestQueueTimeoutAndCancel:
         except (asyncio.CancelledError, RuntimeError, Exception):
             pass
 
-        assert queue.pending == 0
+        assert queue.snapshot()["pending"] == 0
 
     @pytest.mark.asyncio
     async def test_active_client_disconnect_cancels_releases_backend(self):
         """Active request cancellation releases backend via cancel_active_if_matches."""
-        queue = SingleWorkerSynthesisQueue(max_size=3, wait_timeout_sec=30)
+        queue = SpeechScheduler(max_size=3, wait_timeout_sec=30)
         blocker_started = asyncio.Event()
         release_blocker = asyncio.Event()
 
@@ -618,11 +611,11 @@ class TestQueueTimeoutAndCancel:
                 raise
 
         t1 = asyncio.create_task(
-            queue.run(blocker, synthesis_id="syn-active", connection_id="conn-a")
+            queue.run(SpeechRequest(synthesis_id="syn-active", connection_id="conn-a", text="test"), blocker)
         )
         await asyncio.wait_for(blocker_started.wait(), timeout=5)
 
-        result = queue.cancel_active_if_matches("syn-active")
+        result = queue.cancel_synthesis("syn-active")
         assert result is True
 
         try:
@@ -631,13 +624,13 @@ class TestQueueTimeoutAndCancel:
             pass
 
         release_blocker.set()
-        assert queue.pending == 0
+        assert queue.snapshot()["pending"] == 0
 
     @pytest.mark.asyncio
     async def test_cancel_active_if_matches_no_match(self):
         """cancel_active_if_matches returns False when no match."""
-        queue = SingleWorkerSynthesisQueue(max_size=3, wait_timeout_sec=30)
-        result = queue.cancel_active_if_matches("nonexistent")
+        queue = SpeechScheduler(max_size=3, wait_timeout_sec=30)
+        result = queue.cancel_synthesis("nonexistent")
         assert result is False
 
 
@@ -1048,27 +1041,24 @@ class TestRecoveryAfterFailure:
     @pytest.mark.asyncio
     async def test_queue_counters_zero_after_all_scenarios(self):
         """Queue pending returns to 0 after timeouts, errors, and success."""
-        queue = SingleWorkerSynthesisQueue(max_size=3, wait_timeout_sec=30)
+        queue = SpeechScheduler(max_size=3, wait_timeout_sec=30)
 
-        await queue.run(lambda: asyncio.sleep(0.05),
-                        synthesis_id="s1", connection_id="c1")
-        assert queue.pending == 0
+        await queue.run(SpeechRequest(synthesis_id="s1", connection_id="c1", text="test"), lambda: asyncio.sleep(0.05))
+        assert queue.snapshot()["pending"] == 0
 
-        await queue.run(lambda: asyncio.sleep(0.05),
-                        synthesis_id="s2", connection_id="c2")
-        assert queue.pending == 0
+        await queue.run(SpeechRequest(synthesis_id="s2", connection_id="c2", text="test"), lambda: asyncio.sleep(0.05))
+        assert queue.snapshot()["pending"] == 0
 
         for i in range(5):
-            await queue.run(lambda: asyncio.sleep(0.02),
-                            synthesis_id=f"seq-{i}", connection_id="c-seq")
-        assert queue.pending == 0
+            await queue.run(SpeechRequest(synthesis_id=f"seq-{i}", connection_id="c-seq", text="test"), lambda: asyncio.sleep(0.02))
+        assert queue.snapshot()["pending"] == 0
 
         async def raise_err():
             raise ValueError("test error")
 
         with pytest.raises(ValueError):
-            await queue.run(raise_err, synthesis_id="err", connection_id="c-err")
-        assert queue.pending == 0
+            await queue.run(SpeechRequest(synthesis_id="err", connection_id="c-err", text="test"), raise_err)
+        assert queue.snapshot()["pending"] == 0
 
 
 # ==============================================================================
@@ -1273,15 +1263,14 @@ class TestQueueStructuredLogging:
     @pytest.mark.asyncio
     async def test_queue_emits_request_received(self):
         """Queue processes requests with synthesis/connection IDs."""
-        queue = SingleWorkerSynthesisQueue(max_size=3, wait_timeout_sec=30)
-        await queue.run(lambda: asyncio.sleep(0.01),
-                        synthesis_id="log-1", connection_id="log-conn")
-        assert queue.pending == 0
+        queue = SpeechScheduler(max_size=3, wait_timeout_sec=30)
+        await queue.run(SpeechRequest(synthesis_id="log-1", connection_id="log-conn", text="test"), lambda: asyncio.sleep(0.01))
+        assert queue.snapshot()["pending"] == 0
 
     @pytest.mark.asyncio
     async def test_queue_pending_reflects_active_requests(self):
         """Queue pending property tracks active/waiting requests."""
-        queue = SingleWorkerSynthesisQueue(max_size=3, wait_timeout_sec=30)
+        queue = SpeechScheduler(max_size=3, wait_timeout_sec=30)
         blocker_started = asyncio.Event()
         release = asyncio.Event()
 
@@ -1290,14 +1279,14 @@ class TestQueueStructuredLogging:
             await release.wait()
 
         t1 = asyncio.create_task(
-            queue.run(blocker, synthesis_id="depth-1", connection_id="dc"))
+            queue.run(SpeechRequest(synthesis_id="depth-1", connection_id="dc", text="test"), blocker))
         await asyncio.wait_for(blocker_started.wait(), timeout=5)
 
-        assert queue.pending >= 1
+        assert queue.snapshot()["pending"] >= 1
 
         release.set()
         await asyncio.wait_for(t1, timeout=5)
-        assert queue.pending == 0
+        assert queue.snapshot()["pending"] == 0
 
 
 # ==============================================================================

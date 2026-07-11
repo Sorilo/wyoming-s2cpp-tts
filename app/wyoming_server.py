@@ -10,7 +10,6 @@ use CUDA/GPU resources directly.
 from __future__ import annotations
 
 import asyncio
-from collections import deque
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Protocol
 from urllib.parse import urlparse
@@ -921,55 +920,9 @@ async def synthesize_s2cpp_streaming_tts_events(
             raise
 
 
-class QueueFullError(RuntimeError):
-    """Raised when the synthesis queue is at capacity."""
-
-
-class QueueTimeoutError(asyncio.TimeoutError):
-    """Raised when a waiting request exceeds the queue wait timeout."""
-
-
-class SingleWorkerSynthesisQueue:
-    """Phase 9B backward-compatible wrapper around SpeechScheduler.
-
-    Preserves the Phase 9 API for existing tests and callers.
-    Delegates all scheduling to an internal SpeechScheduler.
-    """
-
-    worker_count = 1
-
-    def __init__(self, max_size: int, wait_timeout_sec: float = 30) -> None:
-        from app.speech.scheduler import SpeechScheduler as _Sched
-        self._scheduler = _Sched(max_size, wait_timeout_sec)
-        self.max_size = max_size
-        self.wait_timeout_sec = wait_timeout_sec
-
-    @property
-    def pending(self) -> int:
-        return self._scheduler.snapshot()["pending"]
-
-    @property
-    def depth(self) -> int:
-        return self._scheduler.snapshot()["depth"]
-
-    async def run(self, operation,
-                  synthesis_id: str = "", connection_id: str = "") -> None:
-        from app.speech import SpeechRequest
-        request = SpeechRequest(
-            synthesis_id=synthesis_id or "unknown",
-            connection_id=connection_id or "unknown",
-            text="",
-        )
-        await self._scheduler.run(request, operation)
-
-    async def cancel_waiting(self, connection_id: str) -> int:
-        return await self._scheduler.cancel_connection(connection_id)
-
-    def cancel_active_if_matches(self, synthesis_id: str) -> bool:
-        return self._scheduler.cancel_synthesis(synthesis_id)
-
-    def cancel_active_for_connection(self, connection_id: str) -> bool:
-        return self._scheduler.cancel_active_for_connection(connection_id)
+# QueueFullError and QueueTimeoutError are imported from app.speech (Phase 9B Slice 6).
+# The SingleWorkerSynthesisQueue compatibility wrapper was removed — all code
+# uses SpeechScheduler directly.
 
 
 

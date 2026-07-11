@@ -1019,7 +1019,7 @@ async def test_unexpected_synthesize_stopped_failure_propagates(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_operational_error_write_uses_disconnect_cleanup(monkeypatch):
-    from app.wyoming_server import QueueFullError
+    from app.speech import QueueFullError
     from wyoming.error import Error
     handler,writer,_,logs,_=_handler(monkeypatch,"buffered")
     async def queue_run(*a,**kw): raise QueueFullError("full")

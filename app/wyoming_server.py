@@ -46,6 +46,7 @@ from app.observability import (
     text_fingerprint,
 )
 from app.speech import SpeechScheduler, SpeechRequest, SpeechMetadata, QueueFullError, QueueTimeoutError
+from app.speech.session import SynthesisSession
 
 from app.voice_discovery import discover_voices
 import sys
@@ -1216,7 +1217,19 @@ class FakeTtsEventHandler(AsyncEventHandler):
             self._requested_voice = resolved
 
             async def send_audio() -> None:
+                session = SynthesisSession(
+                    request=SpeechRequest(synthesis_id=syn_id, connection_id=self._conn_id, text=""),
+                    trigger="legacy",
+                )
                 client_connected = True
+                # Import Wyoming audio types for session tracking
+                from wyoming.audio import AudioStart as WAStart, AudioStop as WAStop
+
+                def _track(session, ev):
+                    if WAStart.is_type(ev.type):
+                        session.mark_audio_start()
+                    elif WAStop.is_type(ev.type):
+                        session.mark_audio_stop()
                 try:
                     if (
                         self.settings.tts_backend == "s2cpp"
@@ -1225,18 +1238,22 @@ class FakeTtsEventHandler(AsyncEventHandler):
                         audio_generator = self._synthesize_text_streaming(
                             synthesize.text, voice=self._requested_voice,
                         )
+                        session.set_generator(audio_generator)
+                        session.set_cleanup(lambda: audio_generator.aclose())
                         async for audio_event in audio_generator:
+                            _track(session, audio_event)
                             try:
                                 await self.write_event(audio_event)
                             except (BrokenPipeError, ConnectionResetError, TypeError) as disconnect_error:
                                 if not self._is_expected_disconnect_error(disconnect_error):
                                     raise
                                 client_connected = False
-                                await self._handle_expected_disconnect(
-                                    syn_id, audio_generator=audio_generator)
+                                await session.disconnect()
+                                await self._handle_expected_disconnect(syn_id)
                                 break
                             except Exception as write_error:
                                 client_connected = False
+                                session.mark_client_disconnected()
                                 obs_log("synthesis_error",
                                         connection_id=self._conn_id,
                                         synthesis_id=syn_id,
@@ -1249,12 +1266,14 @@ class FakeTtsEventHandler(AsyncEventHandler):
                             synthesize.text, voice=self._requested_voice
                         )
                         for audio_event in audio_events:
+                            _track(session, audio_event)
                             try:
                                 await self.write_event(audio_event)
                             except (BrokenPipeError, ConnectionResetError, TypeError) as disconnect_error:
                                 if not self._is_expected_disconnect_error(disconnect_error):
                                     raise
                                 client_connected = False
+                                session.mark_client_disconnected()
                                 await self._handle_expected_disconnect(syn_id)
                                 break
                             except Exception:
@@ -1265,6 +1284,7 @@ class FakeTtsEventHandler(AsyncEventHandler):
                                         error="unexpected_write_event_failure")
                                 raise
                 except asyncio.CancelledError:
+                    session.mark_cancelled()
                     obs_log("synthesis_cancel_requested",
                             connection_id=self._conn_id,
                             synthesis_id="legacy",
@@ -1341,8 +1361,19 @@ class FakeTtsEventHandler(AsyncEventHandler):
             if accumulated:
                 syn_id = new_synthesis_id()
                 async def send_streaming_audio() -> None:
+                    session = SynthesisSession(
+                        request=SpeechRequest(synthesis_id=syn_id, connection_id=self._conn_id, text=""),
+                        trigger="streaming",
+                    )
                     syn_start = time.monotonic()
                     client_connected = True
+                    from wyoming.audio import AudioStart as WAStart, AudioStop as WAStop
+
+                    def _track(session, ev):
+                        if WAStart.is_type(ev.type):
+                            session.mark_audio_start()
+                        elif WAStop.is_type(ev.type):
+                            session.mark_audio_stop()
                     try:
                         if (
                             self.settings.tts_backend == "s2cpp"
@@ -1352,18 +1383,22 @@ class FakeTtsEventHandler(AsyncEventHandler):
                                 accumulated, voice=self._requested_voice,
                                 trigger="streaming", synthesis_id=syn_id,
                             )
+                            session.set_generator(audio_generator)
+                            session.set_cleanup(lambda: audio_generator.aclose())
                             async for audio_event in audio_generator:
+                                _track(session, audio_event)
                                 try:
                                     await self.write_event(audio_event)
                                 except (BrokenPipeError, ConnectionResetError, TypeError) as disconnect_error:
                                     if not self._is_expected_disconnect_error(disconnect_error):
                                         raise
                                     client_connected = False
-                                    await self._handle_expected_disconnect(
-                                        syn_id, audio_generator=audio_generator)
+                                    await session.disconnect()
+                                    await self._handle_expected_disconnect(syn_id)
                                     break
                                 except Exception as write_error:
                                     client_connected = False
+                                    session.mark_client_disconnected()
                                     obs_log("synthesis_error",
                                             connection_id=self._conn_id,
                                             synthesis_id=syn_id,
@@ -1377,12 +1412,14 @@ class FakeTtsEventHandler(AsyncEventHandler):
                                 trigger="streaming", synthesis_id=syn_id,
                             )
                             for audio_event in audio_events:
+                                _track(session, audio_event)
                                 try:
                                     await self.write_event(audio_event)
                                 except (BrokenPipeError, ConnectionResetError, TypeError) as disconnect_error:
                                     if not self._is_expected_disconnect_error(disconnect_error):
                                         raise
                                     client_connected = False
+                                    session.mark_client_disconnected()
                                     await self._handle_expected_disconnect(syn_id)
                                     break
                                 except Exception:
@@ -1392,8 +1429,8 @@ class FakeTtsEventHandler(AsyncEventHandler):
                                             synthesis_id=syn_id,
                                             error="unexpected_write_event_failure")
                                     raise
-                        # Signal end of streaming response
-                        if client_connected:
+                        # Signal end of streaming response (gated on session eligibility)
+                        if client_connected and session.eligible_for_synthesize_stopped:
                             total_synthesis_ms = int((time.monotonic() - syn_start) * 1000)
                             try:
                                 await self.write_event(SynthesizeStopped().event())
@@ -1401,6 +1438,7 @@ class FakeTtsEventHandler(AsyncEventHandler):
                                 if not self._is_expected_disconnect_error(disconnect_error):
                                     raise
                                 client_connected = False
+                                session.mark_client_disconnected()
                                 await self._handle_expected_disconnect(syn_id)
                             except Exception:
                                 obs_log("synthesis_error",
@@ -1421,6 +1459,7 @@ class FakeTtsEventHandler(AsyncEventHandler):
                                     trigger="streaming",
                                     status="client_disconnected")
                     except asyncio.CancelledError:
+                        session.mark_cancelled()
                         obs_log("synthesis_cancel_requested",
                                 connection_id=self._conn_id,
                                 synthesis_id=syn_id,

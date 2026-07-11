@@ -1,5 +1,6 @@
-import os, sys, json, pytest
+import os, sys, json, pytest, asyncio, inspect
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+from scripts import phase_9_live_client as live
 from scripts.phase_9_live_client import RequestResult
 
 def make_result(**kw):
@@ -132,3 +133,109 @@ class TestInfrastructureFallback:
         assert "127.0.0.1" not in cmd  # helper mode uses container name
         assert "10201" not in cmd       # helper uses container port 10200
 
+
+
+class TestFileEventLog:
+    def test_shadow_path_is_required(self, monkeypatch):
+        monkeypatch.delenv("SHADOW_LOG_PATH", raising=False)
+        with pytest.raises(RuntimeError, match="SHADOW_LOG_PATH"):
+            live.shadow_log_path()
+
+    def test_complete_json_lines_only_and_order(self, tmp_path):
+        path = tmp_path / "live.log"
+        path.write_text('noise\n{"event":"one"}\n{"event":"two"}\n{"event":"unfinished"')
+        assert live.read_json_events(path) == [{"event":"one"}, {"event":"two"}]
+
+    def test_valid_final_json_without_newline_is_kept(self, tmp_path):
+        path = tmp_path / "live.log"
+        path.write_text('{"event":"one"}\n{"event":"final"}')
+        assert live.read_json_events(path) == [{"event":"one"}, {"event":"final"}]
+
+    def test_baseline_and_events_since(self, tmp_path):
+        path = tmp_path / "live.log"
+        path.write_text('{"event":"old"}\n')
+        baseline = live.current_event_index(path)
+        with path.open("a") as stream:
+            stream.write('{"event":"new-1"}\nnot json\n{"event":"new-2"}\n')
+        assert live.events_since(path, baseline) == [{"event":"new-1"}, {"event":"new-2"}]
+
+    def test_wait_returns_actual_dict_and_count_is_monotonic(self, tmp_path):
+        path = tmp_path / "live.log"
+        path.write_text('{"event":"queue_started","sequence":1}\n{"event":"queue_started","sequence":2}\n')
+        pred = lambda event: event.get("event") == "queue_started"
+        found = asyncio.run(live.wait_for_event(path, 0, pred, timeout=.05))
+        assert found == {"event": "queue_started", "sequence": 1}
+        found_many = asyncio.run(live.wait_for_event_count(path, 0, pred, 2, timeout=.05))
+        assert [item["sequence"] for item in found_many] == [1, 2]
+
+    def test_no_docker_subprocess_log_polling(self):
+        source = inspect.getsource(live)
+        assert "_run" not in source
+        assert "docker logs" not in source
+
+    def test_required_path_first_predicate_signatures(self):
+        assert list(inspect.signature(live.events_since).parameters)[:2] == ["path", "baseline"]
+        assert list(inspect.signature(live.wait_for_event).parameters)[:3] == ["path", "baseline", "predicate"]
+        assert list(inspect.signature(live.wait_for_event_count).parameters)[:5] == ["path", "baseline", "predicate", "count", "timeout"]
+
+    def test_run_tests_wires_proofs_without_sleep_acceptance(self):
+        source = inspect.getsource(live.run_tests)
+        assert "prove_fifo(" in source
+        assert "prove_queue_full(" in source
+        assert "asyncio.sleep" not in source
+        assert "completion_time" not in source
+        assert "q4_rejected" not in source
+
+
+class TestQueueProofs:
+    @staticmethod
+    def good():
+        return make_result(rate=1, width=1, channels=1, pcm=bytearray(b"x"), audio_start_count=1, audio_stop_count=1)
+
+    def test_fifo_success_and_wrong_order_failure(self):
+        ids = ["FIFO-request-1", "FIFO-request-2", "FIFO-request-3"]
+        events = []
+        for number, identity in enumerate(ids, 1):
+            events += [{"event":"queue_started", "text":identity, "sequence":number},
+                       {"event":"request_completed", "text":identity, "sequence":number, "queue_depth":3-number}]
+        assert live.prove_fifo(events, ids, [self.good() for _ in ids])[0]
+        events[-1]["sequence"] = 2
+        assert not live.prove_fifo(events, ids, [self.good() for _ in ids])[0]
+
+    def test_queue_full_success_and_missing_rejection_failure(self):
+        ids = ["Queue-full-request-1", "Queue-full-request-2", "Queue-full-request-3"]
+        events = [{"event":"queue_started", "text":identity, "sequence":n} for n, identity in enumerate(ids, 1)]
+        events += [{"event":"queue_rejected", "text":"Queue-full-request-4"}]
+        events += [{"event":"request_completed", "text":identity, "queue_depth":3-n}
+                   for n, identity in enumerate(ids, 1)]
+        rejected = make_result()
+        assert live.prove_queue_full(events, ids, "Queue-full-request-4", [self.good() for _ in ids], rejected)[0]
+        assert not live.prove_queue_full([event for event in events if event.get("event") != "queue_rejected"], ids, "Queue-full-request-4", [self.good() for _ in ids], rejected)[0]
+
+    @pytest.mark.parametrize("warning", [
+        "UnboundLocalError",
+        "Task was destroyed but it is pending",
+        "Task exception was never retrieved",
+        "coroutine was never awaited",
+    ])
+    def test_disconnect_proof_rejects_runtime_warning_signatures(self, warning):
+        text = "Disconnect-cycle-1"
+        events = [
+            {"event": "event_in", "text_fp": live._text_fp(text), "connection_id": "conn"},
+            {"event": "client_disconnected", "connection_id": "conn"},
+            {"event": "synthesis_cancelled", "connection_id": "conn"},
+            {"event": "queue_depth_changed", "queue_depth": 0},
+        ]
+        assert not live.prove_disconnect(events, text, warning)[0]
+
+
+def test_shell_contract():
+    shell = open(os.path.join(os.path.dirname(__file__), "..", "scripts", "validate_phase_9_live.sh")).read()
+    assert 'TEST_IMAGE="${PHASE9_TEST_IMAGE:-ghcr.io/sorilo/wyoming-s2cpp-tts:sha-5355048}"' in shell
+    assert 'EXPECTED_DIGEST="${PHASE9_EXPECTED_DIGEST:-}"' in shell
+    assert "sha256:1954" not in shell
+    assert 'SHADOW_LOG_PATH=/artifacts/shadow-live.log' in shell
+    assert 'SHADOW_LOG_PATH="$ARTIFACT_DIR/shadow-live.log"' in shell
+    assert "docker.sock" not in shell
+    assert 'kill "$LOG_FOLLOWER_PID"' in shell and 'wait "$LOG_FOLLOWER_PID"' in shell
+    assert shell.index("EXPECTED_DIGEST") < shell.index('docker run -d --name "$SHADOW_NAME"')

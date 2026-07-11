@@ -6,7 +6,7 @@ Usage:
     python scripts/phase_9_live_client.py <host> <port> <artifact_dir>
 """
 from __future__ import annotations
-import asyncio, json, os, sys, time, wave
+import asyncio, hashlib, json, os, sys, time, wave
 from dataclasses import dataclass, field
 
 from wyoming.audio import AudioChunk, AudioStart, AudioStop
@@ -143,19 +143,187 @@ def save_wav(path: str, r: RequestResult) -> None:
 
 
 
-async def poll_log_for(container: str, pattern: str, count: int = 1,
-                       timeout: float = 30.0) -> bool:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        logs = await _run(f"docker logs {container} --tail 50 2>&1 | grep -c '{pattern}'")
+
+def shadow_log_path() -> str:
+    """Return the required, externally-followed shadow JSONL log."""
+    path = os.environ.get("SHADOW_LOG_PATH")
+    if not path:
+        raise RuntimeError("SHADOW_LOG_PATH is required")
+    return path
+
+
+def read_json_events(path) -> list[dict]:
+    """Read JSON objects in order; discard only an invalid partial trailing line."""
+    log_path = os.fspath(path)
+    try:
+        with open(log_path, "rb") as stream:
+            data = stream.read()
+    except OSError as exc:
+        raise RuntimeError(f"shadow log is not readable: {log_path}: {exc}") from exc
+    events = []
+    for raw in data.splitlines():
         try:
-            if int(logs.strip() or 0) >= count: return True
-        except ValueError: pass
-        await asyncio.sleep(0.5)
-    return False
+            item = json.loads(raw)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if isinstance(item, dict):
+            events.append(item)
+    return events
+
+
+def current_event_index(path) -> int:
+    return len(read_json_events(path))
+
+
+def events_since(path, baseline: int) -> list[dict]:
+    return read_json_events(path)[baseline:]
+
+
+def _event_name(item: dict) -> str:
+    return str(item.get("event") or item.get("type") or item.get("message") or "")
+
+
+async def wait_for_event(path, baseline: int, predicate, timeout: float = 30.0) -> dict:
+    deadline = time.monotonic() + timeout
+    while True:
+        seen = events_since(path, baseline)
+        for item in seen:
+            if predicate(item):
+                return item
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"timed out waiting for event; saw {seen[-10:]!r}")
+        await asyncio.sleep(min(0.1, max(0, deadline - time.monotonic())))
+
+
+async def wait_for_event_count(path, baseline: int, predicate, count: int,
+                               timeout: float = 30.0) -> list[dict]:
+    deadline = time.monotonic() + timeout
+    while True:
+        found = [item for item in events_since(path, baseline) if predicate(item)]
+        if len(found) >= count:
+            return found[:count]
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"timed out waiting for {count} events; found {len(found)}: {found[-10:]!r}")
+        await asyncio.sleep(min(0.1, max(0, deadline - time.monotonic())))
+
+
+def _text_fp(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()[:12]
+
+
+def _is_event(name: str):
+    return lambda item: _event_name(item) == name
+
+
+async def wait_for_identity(path, baseline: int, text: str, event: str,
+                            timeout: float = 30.0) -> dict:
+    incoming = await wait_for_event(
+        path, baseline,
+        lambda item: _event_name(item) == "event_in" and item.get("text_fp") == _text_fp(text),
+        timeout)
+    connection_id = incoming.get("connection_id")
+    return await wait_for_event(
+        path, baseline,
+        lambda item: _event_name(item) == event and item.get("connection_id") == connection_id,
+        timeout)
+
+
+def _identity_keys(events: list[dict], identity: str) -> tuple[set, set]:
+    fp = _text_fp(identity)
+    connections = {item.get("connection_id") for item in events
+                   if item.get("text_fp") == fp or _identity_matches_raw(item, identity)}
+    connections.discard(None)
+    syntheses = {item.get("synthesis_id") for item in events
+                 if item.get("connection_id") in connections and item.get("synthesis_id")}
+    return connections, syntheses
+
+
+def _identity_matches_raw(item: dict, identity: str) -> bool:
+    return identity in json.dumps(item, sort_keys=True)
+
+
+def _identity_matches(events: list[dict], item: dict, identity: str) -> bool:
+    connections, syntheses = _identity_keys(events, identity)
+    return (_identity_matches_raw(item, identity)
+            or item.get("connection_id") in connections
+            or item.get("synthesis_id") in syntheses)
+
+
+def _terminal_depth_zero(events: list[dict]) -> bool:
+    depth_events = [item for item in events if _event_name(item) in
+                    ("queue_depth_changed", "request_completed", "queue_completed", "synthesis_completed")
+                    and ("queue_depth" in item or "depth" in item)]
+    return bool(depth_events) and (depth_events[-1].get("queue_depth", depth_events[-1].get("depth")) == 0)
+
+
+def _ordered(events: list[dict], names: tuple[str, ...], identities: list[str]) -> list[int]:
+    selected = [item for item in events if _event_name(item) in names]
+    order = [next((i for i, identity in enumerate(identities)
+                   if _identity_matches(events, item, identity)), None) for item in selected]
+    return [value for value in order if value is not None]
+
+
+def prove_fifo(events: list[dict], identities: list[str],
+               requests: list[RequestResult]) -> tuple[bool, dict]:
+    started_order = _ordered(events, ("queue_started",), identities)
+    completed_order = _ordered(events,
+        ("queue_depth_changed", "request_completed", "queue_completed", "synthesis_completed"), identities)
+    expected = list(range(len(identities)))
+    completion_sequences = [item.get("sequence") for item in events
+                            if _event_name(item) in ("request_completed", "queue_completed", "synthesis_completed")
+                            and item.get("sequence") is not None]
+    sequence_ok = not completion_sequences or completion_sequences == list(range(1, len(identities) + 1))
+    ok = (started_order == expected and completed_order == expected and sequence_ok
+          and all(request.valid for request in requests) and _terminal_depth_zero(events))
+    return ok, {"started_order": started_order, "completed_order": completed_order,
+                "valid_pcm": [request.valid for request in requests],
+                "final_depth_zero": _terminal_depth_zero(events)}
+
+
+def prove_queue_full(events: list[dict], identities: list[str], rejected_identity: str,
+                     requests: list[RequestResult], rejected: RequestResult) -> tuple[bool, dict]:
+    rejected_events = [item for item in events if _event_name(item) == "queue_rejected"
+                       and _identity_matches(events, item, rejected_identity)]
+    rejected_lifecycle = [item for item in events
+                          if _identity_matches(events, item, rejected_identity)]
+    forbidden_events = [item for item in rejected_lifecycle
+                        if _event_name(item) in ("backend_start", "audio_out", "queue_started")]
+    forbidden = bool(rejected.pcm_bytes or rejected.audio_stop_count or forbidden_events)
+    started_order = _ordered(events, ("queue_started",), identities)
+    completed_order = _ordered(events, ("queue_depth_changed", "request_completed"), identities)
+    expected = list(range(len(identities)))
+    ok = (bool(rejected_events) and not forbidden and started_order == expected
+          and completed_order == expected and all(request.valid for request in requests)
+          and _terminal_depth_zero(events))
+    return ok, {"rejection": rejected_events[0] if rejected_events else None,
+                "started_order": started_order, "completed_order": completed_order,
+                "rejected_pcm": rejected.pcm_bytes, "forbidden_events": forbidden_events,
+                "final_depth_zero": _terminal_depth_zero(events)}
+
+
+def prove_disconnect(events: list[dict], text: str, raw_text: str = "") -> tuple[bool, dict]:
+    related = [item for item in events if _identity_matches(events, item, text)]
+    disconnected = any(_event_name(item) == "client_disconnected" for item in related)
+    cancelled = any(_event_name(item) in ("synthesis_cancelled", "synthesis_cancel_requested")
+                    for item in related)
+    depth_zero = _terminal_depth_zero(events)
+    forbidden_strings = (
+        "UnboundLocalError",
+        "Task was destroyed but it is pending",
+        "Task exception was never retrieved",
+        "coroutine was never awaited",
+    )
+    rendered = raw_text + "\n" + "\n".join(json.dumps(item, sort_keys=True) for item in events)
+    warnings = [warning for warning in forbidden_strings if warning in rendered]
+    return disconnected and cancelled and depth_zero and not warnings, {
+        "client_disconnected": disconnected, "cancelled": cancelled,
+        "final_depth_zero": depth_zero, "forbidden_warnings": warnings}
 
 
 async def run_tests(host: str, port: int, artifact_dir: str) -> dict:
+    log_path = shadow_log_path()
+    if not os.path.isfile(log_path) or not os.access(log_path, os.R_OK):
+        raise RuntimeError(f"SHADOW_LOG_PATH must name a readable file: {log_path}")
     results: dict = {}
     classification = "PASS"
     def record(name: str, status: str, detail=None):
@@ -200,116 +368,106 @@ async def run_tests(host: str, port: int, artifact_dir: str) -> dict:
         record("long", "FAIL", {"errors": r2.errors})
         print(f"  FAIL: {r2.errors}")
 
-    # C: FIFO (log-backed)
+    # C: FIFO -- every admission is gated by a correlated structured event.
     print("\n--- C: FIFO ---")
-    base = "FIFO-request-%d-unique-fingerprint-for-tracing"
-    t1 = asyncio.create_task(synthesize(base % 1, host, port, timeout=120))
-    await asyncio.sleep(0.1)
-    t2 = asyncio.create_task(synthesize(base % 2, host, port, timeout=120))
-    await asyncio.sleep(0.1)
-    t3 = asyncio.create_task(synthesize(base % 3, host, port, timeout=120))
-    r1, r3_, r2_ = await asyncio.gather(t1, t3, t2)
-    for n, rr in [(1, r1), (2, r2_), (3, r3_)]:
-        save_wav(f"{artifact_dir}/fifo-request-{n}.wav", rr)
-        results[f"fifo_{n}"] = rr.to_dict()
-    c_times = [(r1.completion_time or 0), (r2_.completion_time or 0), (r3_.completion_time or 0)]
-    ordered = c_times[0] < c_times[1] < c_times[2]
-    all_ok = all(r.valid for r in [r1, r2_, r3_])
-    # Verify log-backed: check queue_started events exist
-    log_ok = await poll_log_for("queue_started", 3, timeout=10)
-    if all_ok and ordered and log_ok:
-        record("fifo", "PASS", {"ordered": True, "log_backed": True})
-        print("  PASS: ordered 1<2<3, log-backed")
-    else:
-        record("fifo", "FAIL", {"ordered": ordered, "log_backed": log_ok, "times": c_times})
-        print(f"  FAIL: ordered={ordered}, log={log_ok}")
+    fifo_texts = [f"FIFO-request-{n}-unique-fingerprint-for-tracing" for n in range(1, 4)]
+    fifo_baseline = current_event_index(log_path)
+    fifo_tasks = []
+    fifo_tasks.append(asyncio.create_task(synthesize(fifo_texts[0], host, port, timeout=120)))
+    await wait_for_identity(log_path, fifo_baseline, fifo_texts[0], "queue_started", 20)
+    fifo_tasks.append(asyncio.create_task(synthesize(fifo_texts[1], host, port, timeout=120)))
+    second_wait = await wait_for_identity(log_path, fifo_baseline, fifo_texts[1], "queue_wait_started", 20)
+    if second_wait.get("queue_depth") != 2:
+        raise AssertionError(f"FIFO request 2 did not establish depth 2: {second_wait}")
+    fifo_tasks.append(asyncio.create_task(synthesize(fifo_texts[2], host, port, timeout=120)))
+    third_wait = await wait_for_identity(log_path, fifo_baseline, fifo_texts[2], "queue_wait_started", 20)
+    if third_wait.get("queue_depth") != 3:
+        raise AssertionError(f"FIFO request 3 did not establish depth 3: {third_wait}")
+    fifo_requests = await asyncio.gather(*fifo_tasks)
+    await wait_for_event(log_path, fifo_baseline,
+                         lambda item: _event_name(item) == "queue_depth_changed" and item.get("queue_depth") == 0, 30)
+    fifo_events = events_since(log_path, fifo_baseline)
+    fifo_ok, fifo_detail = prove_fifo(fifo_events, fifo_texts, fifo_requests)
+    for n, request in enumerate(fifo_requests, 1):
+        save_wav(f"{artifact_dir}/fifo-request-{n}.wav", request)
+        results[f"fifo_{n}"] = request.to_dict()
+    record("fifo", "PASS" if fifo_ok else "FAIL", fifo_detail)
 
-    # D: Queue-full (poll-based)
+    # D: Queue-full -- establish exact depths 1/2/3 before the rejected request.
     print("\n--- D: Queue-full ---")
-    qf_base = "Queue-full-request-%d-deliberately-long-text-for-occupancy"
-    q1 = asyncio.create_task(synthesize(qf_base % 1, host, port, timeout=120))
-    # Poll until request 1 is active (depth=1)
-    if not await poll_log_for("queue_started", 1, timeout=15):
-        record("queue_full", "FAIL", {"reason": "request 1 not detected active"})
-    else:
-        q2 = asyncio.create_task(synthesize(qf_base % 2, host, port, timeout=120))
-        # Poll until depth=2 (2nd request waiting)
-        await asyncio.sleep(0.5)
-        q3 = asyncio.create_task(synthesize(qf_base % 3, host, port, timeout=120))
-        await asyncio.sleep(0.5)
-        # Submit 4th — should be rejected
-        q4_rejected = False
-        try:
-            q4 = await asyncio.wait_for(
-                synthesize("Should be rejected by queue-full policy.", host, port, timeout=120), timeout=10)
-            q4_rejected = q4.pcm_bytes == 0
-        except (asyncio.TimeoutError, Exception):
-            q4_rejected = False
-        rq1, rq2, rq3 = await asyncio.gather(q1, q2, q3)
-        # Verify queue_rejected in logs
-        rejected_log = await poll_log_for("queue_rejected", 1, timeout=10)
-        r_rec = await synthesize("Recovery after queue-full.", host, port, timeout=60)
-        save_wav(f"{artifact_dir}/post-queue-full-recovery.wav", r_rec)
-        results["queue_full"] = {
-            "rejected_by_log": rejected_log, "recovery_valid": r_rec.valid}
-        fifo_ok = all(r.valid for r in [rq1, rq2, rq3])
-        if rejected_log and fifo_ok and r_rec.valid:
-            record("queue_full", "PASS", {"log_backed": True})
-            print("  PASS: rejected (log-backed), recovered")
-        else:
-            record("queue_full", "FAIL", {"rejected_log": rejected_log, "fifo_valid": fifo_ok})
-            print(f"  FAIL: log={rejected_log}, fifo={fifo_ok}")
+    queue_texts = [f"Queue-full-request-{n}-deliberately-long-text-for-occupancy" for n in range(1, 4)]
+    rejected_text = "Queue-full-request-4-must-be-rejected"
+    queue_baseline = current_event_index(log_path)
+    queue_tasks = [asyncio.create_task(synthesize(queue_texts[0], host, port, timeout=120))]
+    await wait_for_identity(log_path, queue_baseline, queue_texts[0], "queue_started", 20)
+    queue_tasks.append(asyncio.create_task(synthesize(queue_texts[1], host, port, timeout=120)))
+    q2_wait = await wait_for_identity(log_path, queue_baseline, queue_texts[1], "queue_wait_started", 20)
+    if q2_wait.get("queue_depth") != 2: raise AssertionError(f"queue depth 2 not established: {q2_wait}")
+    queue_tasks.append(asyncio.create_task(synthesize(queue_texts[2], host, port, timeout=120)))
+    q3_wait = await wait_for_identity(log_path, queue_baseline, queue_texts[2], "queue_wait_started", 20)
+    if q3_wait.get("queue_depth") != 3: raise AssertionError(f"queue depth 3 not established: {q3_wait}")
+    rejected_request = await synthesize(rejected_text, host, port, timeout=20)
+    await wait_for_identity(log_path, queue_baseline, rejected_text, "queue_rejected", 20)
+    queue_requests = await asyncio.gather(*queue_tasks)
+    await wait_for_event(log_path, queue_baseline,
+                         lambda item: _event_name(item) == "queue_depth_changed" and item.get("queue_depth") == 0, 30)
+    queue_events = events_since(log_path, queue_baseline)
+    queue_ok, queue_detail = prove_queue_full(
+        queue_events, queue_texts, rejected_text, queue_requests, rejected_request)
+    recovery5_text = "Queue-full-request-5-recovery"
+    recovery5_baseline = current_event_index(log_path)
+    recovery5 = await synthesize(recovery5_text, host, port, timeout=60)
+    await wait_for_identity(log_path, recovery5_baseline, recovery5_text, "queue_started", 20)
+    await wait_for_event(log_path, recovery5_baseline,
+                         lambda item: _event_name(item) == "queue_depth_changed" and item.get("queue_depth") == 0, 20)
+    recovery5_proof, recovery5_detail = prove_fifo(
+        events_since(log_path, recovery5_baseline), [recovery5_text], [recovery5])
+    queue_detail["recovery"] = recovery5_detail
+    queue_ok = queue_ok and recovery5_proof
+    save_wav(f"{artifact_dir}/post-queue-full-recovery.wav", recovery5)
+    record("queue_full", "PASS" if queue_ok else "FAIL", queue_detail)
 
-    # E: Disconnect (poll-based)
-    print("\n--- E: Disconnect ---")
-    got_chunk = False
-    try:
-        async with AsyncTcpClient(host, port) as tcp:
-            await tcp.write_event(Synthesize(
-                text="Disconnect test with long text for active synthesis.",
-                voice=SynthesizeVoice(name="cmu_bdl_male_us")).event())
-            while True:
-                ev = await asyncio.wait_for(tcp.read_event(), timeout=30)
-                if ev is None: break
-                if AudioChunk.is_type(ev.type): got_chunk = True; break
-        # Poll until disconnect is detected in logs
-        cleanup_ok = await poll_log_for("client_disconnected|queue_depth_changed", 1, timeout=15)
-    except Exception as e:
-        results["disconnect_error"] = str(e); cleanup_ok = False
-    r_rec2 = await synthesize("Recovery after disconnect.", host, port, timeout=60)
-    save_wav(f"{artifact_dir}/recovery.wav", r_rec2)
-    results["disconnect"] = {"chunk_before": got_chunk, "cleanup_logged": cleanup_ok,
-                             "recovery": r_rec2.to_dict()}
-    if got_chunk and r_rec2.valid:
-        record("disconnect", "PASS", {"recovery_pcm": r_rec2.pcm_bytes})
-        print(f"  PASS: recovered {r_rec2.pcm_bytes}B")
-    else:
-        record("disconnect", "FAIL", {"chunk": got_chunk, "valid": r_rec2.valid})
-        print("  FAIL")
-
-    # F: 3-cycle recovery
-    print("\n--- F: 3-cycle recovery ---")
+    # E/F: repeat disconnect lifecycle and recovery proof three times.
+    print("\n--- E/F: Disconnect and 3-cycle recovery ---")
     cycles = []
-    for cyc in range(1, 4):
-        print(f"  Cycle {cyc}...")
+    for cycle in range(1, 4):
+        text = f"Disconnect-cycle-{cycle}-long-active-synthesis"
+        baseline = current_event_index(log_path)
+        raw_baseline = os.path.getsize(log_path)
+        got_start = got_chunk = False
         async with AsyncTcpClient(host, port) as tcp:
-            await tcp.write_event(Synthesize(
-                text=f"Recovery cycle {cyc} disconnect test.",
-                voice=SynthesizeVoice(name="cmu_bdl_male_us")).event())
-            while True:
-                ev = await asyncio.wait_for(tcp.read_event(), timeout=30)
-                if ev is None: break
-                if AudioChunk.is_type(ev.type): break
-        await asyncio.sleep(0.5)
-        rr = await synthesize(f"Recovery cycle {cyc} validation.", host, port, timeout=60)
-        cycles.append({"cycle": cyc, "recovery_valid": rr.valid, "recovery_pcm": rr.pcm_bytes})
-    results["recovery_cycles"] = cycles
-    if all(c["recovery_valid"] for c in cycles):
-        record("recovery_cycles", "PASS", {"cycles": 3})
-        print("  PASS: all 3")
-    else:
-        record("recovery_cycles", "FAIL", {"cycles": cycles})
-        print("  FAIL")
+            await tcp.write_event(Synthesize(text=text, voice=SynthesizeVoice(name="cmu_bdl_male_us")).event())
+            while not got_chunk:
+                event = await asyncio.wait_for(tcp.read_event(), timeout=30)
+                if event is None: break
+                if AudioStart.is_type(event.type): got_start = True
+                elif AudioChunk.is_type(event.type):
+                    chunk = AudioChunk.from_event(event)
+                    got_chunk = bool(chunk.audio)
+        await wait_for_identity(log_path, baseline, text, "client_disconnected", 30)
+        await wait_for_event(log_path, baseline,
+            lambda item: _event_name(item) in ("synthesis_cancelled", "synthesis_cancel_requested"), 30)
+        await wait_for_event(log_path, baseline,
+            lambda item: _event_name(item) == "queue_depth_changed" and item.get("queue_depth") == 0, 30)
+        with open(log_path, "rb") as raw_log:
+            raw_log.seek(raw_baseline)
+            raw_text = raw_log.read().decode("utf-8", errors="replace")
+        lifecycle_ok, lifecycle = prove_disconnect(events_since(log_path, baseline), text, raw_text)
+        recovery_text = f"Recovery cycle {cycle} validation."
+        recovery_baseline = current_event_index(log_path)
+        recovery = await synthesize(recovery_text, host, port, timeout=60)
+        await wait_for_identity(log_path, recovery_baseline, recovery_text, "queue_started", 20)
+        await wait_for_event(log_path, recovery_baseline,
+            lambda item: _event_name(item) == "queue_depth_changed" and item.get("queue_depth") == 0, 20)
+        recovery_proof, recovery_detail = prove_fifo(
+            events_since(log_path, recovery_baseline), [recovery_text], [recovery])
+        cycle_ok = got_start and got_chunk and lifecycle_ok and recovery_proof
+        cycles.append({"cycle": cycle, "audio_start": got_start, "nonempty_chunk": got_chunk,
+                       "lifecycle": lifecycle, "recovery": recovery_detail, "recovery_valid": recovery.valid,
+                       "recovery_pcm": recovery.pcm_bytes, "valid": cycle_ok})
+    results["disconnect"] = cycles[0]
+    record("disconnect", "PASS" if cycles[0]["valid"] else "FAIL", cycles[0])
+    record("recovery_cycles", "PASS" if all(c["valid"] for c in cycles) else "FAIL", {"cycles": cycles})
 
     results["classification"] = classification
     with open(f"{artifact_dir}/results.json", "w") as f:

@@ -12,8 +12,12 @@ TIMESTAMP="$(date -u +%Y%m%d_%H%M%S)"
 ARTIFACT_DIR="$REPO_DIR/verification_artifacts/phase_9_live_smoke/$TIMESTAMP"
 mkdir -p "$ARTIFACT_DIR"
 
-TEST_IMAGE="ghcr.io/sorilo/wyoming-s2cpp-tts:sha-1b3ee17"
-EXPECTED_DIGEST="${PHASE9_EXPECTED_DIGEST:-sha256:1954a448a52cf6ebbbd4c09c231fb416b045d8d421d25b1c3e11acf82be28d9b}"
+TEST_IMAGE="${PHASE9_TEST_IMAGE:-ghcr.io/sorilo/wyoming-s2cpp-tts:sha-5355048}"
+EXPECTED_DIGEST="${PHASE9_EXPECTED_DIGEST:-}"
+if ! [[ "$EXPECTED_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    fail "PHASE9_EXPECTED_DIGEST must be sha256 followed by 64 lowercase hex characters"
+    exit 1
+fi
 SHADOW_NAME="wyoming-s2cpp-tts-phase9-smoke-${TIMESTAMP}"
 CLIENT_NAME="wyoming-s2cpp-tts-phase9-client-${TIMESTAMP}"
 SHADOW_PORT="10201"
@@ -24,7 +28,11 @@ USE_HELPER_CONTAINER="false"
 
 cleanup() {
     local exit_code=$?
-    [ -n "${LOG_FOLLOWER_PID:-}" ] && kill "$LOG_FOLLOWER_PID" 2>/dev/null || true
+    if [ -n "${LOG_FOLLOWER_PID:-}" ]; then
+        kill "$LOG_FOLLOWER_PID" 2>/dev/null || true
+        wait "$LOG_FOLLOWER_PID" 2>/dev/null || true
+        LOG_FOLLOWER_PID=""
+    fi
     info "Cleaning up temporary containers..."
     local status="ok"
     for c in $CREATED_CONTAINERS; do
@@ -132,7 +140,7 @@ info "Step 7: Pulling image"
 docker pull "$TEST_IMAGE" 2>&1 | tail -1
 DIGESTS=$(docker image inspect "$TEST_IMAGE" --format '{{json .RepoDigests}}' 2>/dev/null)
 IMAGE_ID=$(docker image inspect "$TEST_IMAGE" --format '{{.Id}}' 2>/dev/null)
-echo "$DIGESTS" | grep -q "$EXPECTED_DIGEST" && pass "Digest verified" || { fail "Digest mismatch"; exit 1; }
+echo "$DIGESTS" | grep -Fq "@$EXPECTED_DIGEST" && pass "Digest verified" || { fail "Digest mismatch"; exit 1; }
 
 # ── 8. Backend idle check (fixed integer bug) ───────────────────
 info "Step 8: Idle check"
@@ -222,6 +230,7 @@ else
         -v "$REPO_DIR:/workspace:ro" \
         -v "$ARTIFACT_DIR:/artifacts" \
         -e "SHADOW_CONTAINER=$SHADOW_NAME" \
+        -e SHADOW_LOG_PATH=/artifacts/shadow-live.log \
         -e "BACKEND_CONTAINER=$BACKEND_NAME" \
         "$TEST_IMAGE" infinity 2>&1
 
@@ -239,15 +248,17 @@ fi
 
 # ── 12. Run validation client ───────────────────────────────────
 info "Step 12: Running client ($RUNNER mode)"
+[ -f "$ARTIFACT_DIR/shadow-live.log" ] && [ -r "$ARTIFACT_DIR/shadow-live.log" ] \
+    || { fail "Shadow live log missing or unreadable"; exit 1; }
 
 run_client() {
     if [ "$RUNNER" = "helper" ]; then
-        docker exec "$CLIENT_NAME" python3 \
+        docker exec -e SHADOW_LOG_PATH=/artifacts/shadow-live.log "$CLIENT_NAME" python3 \
             /workspace/scripts/phase_9_live_client.py \
             "$CLIENT_HOST" "$CLIENT_PORT" /artifacts 2>&1
     else
         SHADOW_CONTAINER="$SHADOW_NAME" BACKEND_CONTAINER="$BACKEND_NAME" \
-            "$PYTHON" "$REPO_DIR/scripts/phase_9_live_client.py" \
+            SHADOW_LOG_PATH="$ARTIFACT_DIR/shadow-live.log" "$PYTHON" "$REPO_DIR/scripts/phase_9_live_client.py" \
             "$CLIENT_HOST" "$CLIENT_PORT" "$ARTIFACT_DIR" 2>&1
     fi
 }
@@ -259,7 +270,11 @@ set -e
 info "Client exit: $CLIENT_EXIT"
 
 # ── 13. Stop log follower ──────────────────────────────────────
-[ -n "$LOG_FOLLOWER_PID" ] && kill "$LOG_FOLLOWER_PID" 2>/dev/null && wait "$LOG_FOLLOWER_PID" 2>/dev/null || true
+if [ -n "$LOG_FOLLOWER_PID" ]; then
+    kill "$LOG_FOLLOWER_PID" 2>/dev/null || true
+    wait "$LOG_FOLLOWER_PID" 2>/dev/null || true
+    LOG_FOLLOWER_PID=""
+fi
 
 # ── 14. Collect logs ────────────────────────────────────────────
 docker logs "$SHADOW_NAME" > "$ARTIFACT_DIR/shadow-wrapper-logs.txt" 2>&1

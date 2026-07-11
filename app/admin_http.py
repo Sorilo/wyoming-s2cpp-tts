@@ -73,6 +73,7 @@ def build_status_snapshot(
     scheduler_snapshot: dict[str, Any] | None = None,
     active_connection_count: int = 0,
     version: str = "",
+    counters_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a sanitized, immutable operational snapshot for /status.
 
@@ -98,6 +99,9 @@ def build_status_snapshot(
             scheduler_snapshot.get("active_synthesis_id") is not None
         )
 
+    if counters_snapshot is not None:
+        snapshot["counters"] = counters_snapshot
+
     snapshot["active_connections"] = active_connection_count
     return snapshot
 
@@ -108,16 +112,18 @@ def build_metrics_snapshot(
     scheduler_snapshot: dict[str, Any] | None = None,
     active_connection_count: int = 0,
     version: str = "",
+    counters_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a sanitized, stable JSON metrics snapshot for /metrics.
 
-    Independent schema from /status.  Stable bounded format;
-    Slice 5 will add cumulative counters.
+    Independent schema from /status.  Includes cumulative counters
+    from Phase 9C Slice 5.
 
     Never exposes IDs, tokens, text, audio, or secrets.
     """
     state = lifecycle.state
     snapshot: dict[str, Any] = {
+        "schema_version": "1.0",
         "state": state.value,
         "ready": state.is_ready(),
         "uptime_sec": round(lifecycle.uptime_sec, 3),
@@ -132,6 +138,9 @@ def build_metrics_snapshot(
         snapshot["has_active_synthesis"] = (
             scheduler_snapshot.get("active_synthesis_id") is not None
         )
+
+    if counters_snapshot is not None:
+        snapshot["counters"] = counters_snapshot
 
     return snapshot
 
@@ -382,12 +391,14 @@ class AdminHttpServer:
         lifecycle: ServiceLifecycle,
         get_scheduler_snapshot: callable = lambda: None,
         get_active_connection_count: callable = lambda: 0,
+        get_counters_snapshot: callable = lambda: None,
         version: str = "",
     ) -> None:
         self._settings = settings
         self._lifecycle = lifecycle
         self._get_scheduler_snapshot = get_scheduler_snapshot
         self._get_active_connection_count = get_active_connection_count
+        self._get_counters_snapshot = get_counters_snapshot
         self._version = version
         self._server: asyncio.AbstractServer | None = None
         self._active_tasks: set[asyncio.Task[Any]] = set()
@@ -417,20 +428,25 @@ class AdminHttpServer:
             conn_count = self._get_active_connection_count()
         except Exception:
             conn_count = 0
+        try:
+            counters_snap = self._get_counters_snapshot()
+        except Exception:
+            counters_snap = None
         snapshot = build_status_snapshot(
             lifecycle=self._lifecycle,
             settings=self._settings,
             scheduler_snapshot=sched_snap,
             active_connection_count=conn_count,
             version=self._version,
+            counters_snapshot=counters_snap,
         )
         return _json_response(200, snapshot)
 
     def _handle_metrics(self) -> bytes:
         """GET /metrics — sanitized JSON metrics snapshot.
 
-        Uses independent schema from /status.  Stable bounded format;
-        Slice 5 will add cumulative counters.
+        Uses independent schema from /status.  Includes cumulative
+        counters from Phase 9C Slice 5.
         """
         try:
             sched_snap = self._get_scheduler_snapshot()
@@ -440,12 +456,17 @@ class AdminHttpServer:
             conn_count = self._get_active_connection_count()
         except Exception:
             conn_count = 0
+        try:
+            counters_snap = self._get_counters_snapshot()
+        except Exception:
+            counters_snap = None
         snapshot = build_metrics_snapshot(
             lifecycle=self._lifecycle,
             settings=self._settings,
             scheduler_snapshot=sched_snap,
             active_connection_count=conn_count,
             version=self._version,
+            counters_snapshot=counters_snap,
         )
         return _json_response(200, snapshot)
 

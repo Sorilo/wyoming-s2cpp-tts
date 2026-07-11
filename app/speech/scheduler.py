@@ -10,10 +10,13 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import deque
-from typing import Any, Awaitable, Callable
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from app.speech.models import SpeechRequest, SpeechState, ScheduledSpeech
 from app.observability import obs_log
+
+if TYPE_CHECKING:
+    from app.counters import CumulativeCounters
 
 
 class QueueFullError(RuntimeError):
@@ -34,11 +37,17 @@ class SpeechScheduler:
 
     worker_count = 1
 
-    def __init__(self, max_size: int, wait_timeout_sec: float = 30) -> None:
+    def __init__(
+        self,
+        max_size: int,
+        wait_timeout_sec: float = 30,
+        counters: "CumulativeCounters | None" = None,
+    ) -> None:
         if max_size <= 0:
             raise ValueError("max_size must be positive")
         self.max_size = max_size
         self.wait_timeout_sec = wait_timeout_sec
+        self._counters = counters
         self._lock = asyncio.Lock()
         self._active_entry: ScheduledSpeech | None = None
         self._waiters: deque[tuple[str, asyncio.Future, str, ScheduledSpeech]] = deque()
@@ -105,10 +114,14 @@ class SpeechScheduler:
 
         async with self._lock:
             if self._drain_event.is_set():
+                if self._counters is not None:
+                    self._counters.record_rejected()
                 raise QueueFullError(
                     "Scheduler is draining, not accepting new requests"
                 )
             if self._depth >= self.max_size:
+                if self._counters is not None:
+                    self._counters.record_rejected()
                 raise QueueFullError(
                     f"Queue full (depth={self._depth}, max={self.max_size})"
                 )
@@ -119,6 +132,8 @@ class SpeechScheduler:
             if was_quiescent:
                 self._quiescence.clear()
 
+            if self._counters is not None:
+                self._counters.record_admitted()
             entry = ScheduledSpeech(
                 request=request,
                 state=SpeechState.CREATED,
@@ -170,6 +185,7 @@ class SpeechScheduler:
                     entry.state = SpeechState.TIMED_OUT
                     entry.completed_monotonic = time.monotonic()
                     entry.terminal_reason = "queue_wait_timeout"
+                    _record_terminal_once(self, entry)
                     # Signal drain-done if this was a drained waiter
                     _signal_drain_done(self, entry)
                     if self._depth == 0:
@@ -193,6 +209,7 @@ class SpeechScheduler:
                     entry.completed_monotonic = time.monotonic()
                     if entry.terminal_reason is None:
                         entry.terminal_reason = "cancelled_while_waiting"
+                    _record_terminal_once(self, entry)
                     # Signal drain-done if this was a drained waiter
                     _signal_drain_done(self, entry)
                     if self._depth == 0:
@@ -231,6 +248,8 @@ class SpeechScheduler:
                 self._depth -= 1
                 self._pending -= 1
                 entry.completed_monotonic = time.monotonic()
+
+                _record_terminal_once(self, entry)
 
                 obs_log("queue_completed", synthesis_id=synthesis_id,
                         connection_id=connection_id,
@@ -404,7 +423,30 @@ class SpeechScheduler:
         await self.cancel_connection(connection_id)
 
 
-# ── Module-level helper ──────────────────────────────────────────────
+# ── Module-level helpers ─────────────────────────────────────────────
+
+def _record_terminal_once(sched: SpeechScheduler, entry: ScheduledSpeech) -> None:
+    """Record one terminal outcome for *entry* — exactly once.
+
+    Must be called under ``sched._lock``.  Idempotent: subsequent
+    calls with the same entry are no-ops because ``terminal_counted``
+    is set on first invocation.
+
+    This ensures that waiter timeout/cancel paths and the outer
+    finally block cannot double-count the same entry, even if code
+    paths evolve.
+    """
+    if entry.terminal_counted:
+        return
+    if sched._counters is None:
+        entry.terminal_counted = True  # prevent future double-attempt
+        return
+    if entry.terminal_reason is None:
+        entry.terminal_counted = True  # prevent future double-attempt
+        return
+    entry.terminal_counted = True
+    sched._counters.record_terminal(entry.terminal_reason)
+
 
 def _signal_drain_done(sched: SpeechScheduler, entry: ScheduledSpeech) -> None:
     """Decrement drain counter when a drained waiter finishes cleanup.

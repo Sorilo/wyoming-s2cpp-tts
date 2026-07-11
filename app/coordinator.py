@@ -23,6 +23,7 @@ from app.config import Settings
 from app.lifecycle import LifecycleState, ServiceLifecycle
 from app.speech.scheduler import SpeechScheduler
 from app.admin_http import AdminHttpServer
+from app.counters import CumulativeCounters, build_counters_snapshot
 from app.wyoming_server import (
     FakeTtsConfig,
     RunningFakeTtsServer,
@@ -66,6 +67,7 @@ class ServiceCoordinator:
         self._signal_received: int | None = None
         self._active_handlers: set[Any] = set()
         self._signal_tasks: list[asyncio.Task[Any]] = []
+        self.counters = CumulativeCounters()
 
     # ── Properties ──────────────────────────────────────────────────
 
@@ -323,6 +325,7 @@ class ServiceCoordinator:
                     self.scheduler.snapshot if self.scheduler else lambda: None
                 ),
                 get_active_connection_count=lambda: self.active_connection_count,
+                get_counters_snapshot=lambda: build_counters_snapshot(self.counters),
                 version="0.1",
             )
             port = await self.admin.start()

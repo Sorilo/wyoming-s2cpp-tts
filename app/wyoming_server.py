@@ -1656,9 +1656,11 @@ async def start_fake_tts_server(
     """
     active_settings = settings or Settings()
     fake_config = config or FakeTtsConfig.from_settings(active_settings)
+    counters = coordinator.counters if coordinator is not None else None
     queue = SpeechScheduler(
         max_size=max_queue_size,
         wait_timeout_sec=active_settings.s2_queue_wait_timeout_sec,
+        counters=counters,
     )
     server = AsyncTcpServer(host, port)
 

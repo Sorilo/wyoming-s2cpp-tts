@@ -211,6 +211,7 @@ info "Step 4a: Starting readiness probe container"
 docker run -d --name "$PROBE_NAME" \
     --label com.sorilo.phase9-live-smoke=true \
     --network "$SHARED_NET" \
+    --no-healthcheck \
     --entrypoint sleep \
     "$TEST_IMAGE" infinity >/dev/null
 CREATED_CONTAINERS="$CREATED_CONTAINERS $PROBE_NAME"

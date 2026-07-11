@@ -469,6 +469,21 @@ async def behavioral_tests(host: str, port: int, artifact_dir: str) -> dict:
     record("disconnect", "PASS" if cycles[0]["valid"] else "FAIL", cycles[0])
     record("recovery_cycles", "PASS" if all(c["valid"] for c in cycles) else "FAIL", {"cycles": cycles})
 
+    # When disconnect cycles produce forbidden runtime warnings
+    # (e.g. unretrieved asyncio task exceptions), add structured
+    # failure metadata so summary.md and results.json are accurate.
+    warned_cycles = []
+    for c in cycles:
+        lifecycle = c.get("lifecycle", {})
+        fw = lifecycle.get("forbidden_warnings", [])
+        if fw:
+            warned_cycles.append({"cycle": c["cycle"], "warnings": fw})
+    if warned_cycles:
+        results["failure_type"] = "runtime_warning"
+        results["reason"] = f"unretrieved asyncio task exception occurred in {len(warned_cycles)} disconnect cycles: {warned_cycles}"
+        if classification == "PASS":
+            classification = "FAIL"
+
     results["classification"] = classification
     with open(f"{artifact_dir}/results.json", "w") as f:
         json.dump(results, f, indent=2)

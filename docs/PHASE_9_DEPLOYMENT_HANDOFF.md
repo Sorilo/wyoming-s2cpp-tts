@@ -92,3 +92,34 @@ docker pull ghcr.io/sorilo/wyoming-s2cpp-tts:sha-22db725
 - Two backend calls overlap (check backend metrics)
 - Home Assistant TTS hangs >30s after disconnect
 - Existing audio quality regresses
+
+## First Unraid Live Validation — 2026-07-11
+
+### Image tested
+`ghcr.io/sorilo/wyoming-s2cpp-tts:sha-12f3bf8`
+
+### PASS
+- Short synthesis: valid PCM, one AudioStart/Stop
+- Long synthesis: multiple AudioChunks, RTF ~0.972
+- FIFO ordering and serialization verified
+- Production containers unchanged
+- Shadow cleanup successful
+
+### FAIL
+- **Backend-busy retry crashed with UnboundLocalError** — `audio_start_emitted` not initialized before retry loop; raised when `stream.__enter__()` returned 503
+- Recovery requests after disconnect produced no audio (same crash)
+- **Unhandled BrokenPipeError task warning** — Wyoming handler task exception not retrieved after client disconnect
+
+### UNPROVEN
+- Queue-full rejection: helper-mode log polling inaccessible from container
+
+### Fixes applied (commits 94ebd76, 1b3ee17)
+- Initialize `audio_start_emitted=False` before retry loop
+- Catch BrokenPipeError/ConnectionResetError as normal disconnect
+- Suppress asyncio.TimeoutError re-raise (already logged by generator)
+- 4 regression tests for busy-before-enter paths
+
+### New image
+**Source commit:** 1b3ee176dc65aa7e0a00775257e84c81d74debe8
+**Tag:** ghcr.io/sorilo/wyoming-s2cpp-tts:sha-1b3ee17
+**Workflow:** https://github.com/Sorilo/wyoming-s2cpp-tts/actions/runs/29134187755

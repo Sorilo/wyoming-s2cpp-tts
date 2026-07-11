@@ -3,7 +3,7 @@ import asyncio
 import pytest
 
 from app.config import Settings
-from app.wyoming_server import SingleWorkerSynthesisQueue
+from app.speech import SpeechScheduler, SpeechRequest, QueueFullError
 
 
 def test_initial_queue_policy_is_bounded_single_worker_friendly():
@@ -14,7 +14,7 @@ def test_initial_queue_policy_is_bounded_single_worker_friendly():
 
 
 def test_single_worker_queue_rejects_when_capacity_is_full():
-    queue = SingleWorkerSynthesisQueue(max_size=1)
+    queue = SpeechScheduler(max_size=1)
 
     async def scenario():
         blocker_started = asyncio.Event()
@@ -24,14 +24,16 @@ def test_single_worker_queue_rejects_when_capacity_is_full():
             blocker_started.set()
             await release_blocker.wait()
 
-        first = asyncio.create_task(queue.run(blocker))
+        first = asyncio.create_task(
+            queue.run(SpeechRequest(synthesis_id="s1", connection_id="c1", text="test"), blocker))
         await blocker_started.wait()
 
-        with pytest.raises(RuntimeError, match="Queue full"):
-            await queue.run(lambda: asyncio.sleep(0))
+        with pytest.raises(QueueFullError, match="Queue full"):
+            await queue.run(SpeechRequest(synthesis_id="s2", connection_id="c2", text="test"),
+                           lambda: asyncio.sleep(0))
 
         release_blocker.set()
         await first
-        assert queue.pending == 0
+        assert queue.snapshot()["pending"] == 0
 
     asyncio.run(scenario())

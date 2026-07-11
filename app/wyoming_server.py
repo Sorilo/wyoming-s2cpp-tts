@@ -10,7 +10,6 @@ use CUDA/GPU resources directly.
 from __future__ import annotations
 
 import asyncio
-from collections import deque
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Protocol
 from urllib.parse import urlparse
@@ -45,6 +44,9 @@ from app.observability import (
     obs_log,
     text_fingerprint,
 )
+from app.speech import SpeechScheduler, SpeechRequest, SpeechMetadata, QueueFullError, QueueTimeoutError
+from app.speech.session import SynthesisSession
+
 from app.voice_discovery import discover_voices
 import sys
 import time
@@ -918,170 +920,9 @@ async def synthesize_s2cpp_streaming_tts_events(
             raise
 
 
-class QueueFullError(RuntimeError):
-    """Raised when the synthesis queue is at capacity."""
-
-
-class QueueTimeoutError(asyncio.TimeoutError):
-    """Raised when a waiting request exceeds the queue wait timeout."""
-
-
-class SingleWorkerSynthesisQueue:
-    """Bounded FIFO queue gate with explicit ownership handoff.
-
-    Uses a :class:`collections.deque` of waiter futures for
-    deterministic FIFO activation.  Ownership is transferred by
-    resolving the next waiter's future — no :class:`asyncio.Semaphore`
-    is used for FIFO guarantees.
-    """
-
-    worker_count = 1
-
-    def __init__(self, max_size: int, wait_timeout_sec: float = 30) -> None:
-        if max_size <= 0:
-            raise ValueError("max_size must be positive")
-        self.max_size = max_size
-        self.wait_timeout_sec = wait_timeout_sec
-        self._lock = asyncio.Lock()
-        self._active = False
-        self._depth = 0
-        self._pending = 0
-        self._waiters: deque = deque()
-        self._active_synthesis_id: str | None = None
-        self._active_connection_id: str | None = None
-        self._active_task: asyncio.Task | None = None
-
-    @property
-    def pending(self) -> int:
-        return self._pending
-
-    @property
-    def depth(self) -> int:
-        return self._depth
-
-    async def run(self, operation,
-                  synthesis_id: str = "", connection_id: str = "") -> None:
-        obs_log("queue_request_received",
-                synthesis_id=synthesis_id, connection_id=connection_id,
-                queue_depth=self._depth, max_queue_size=self.max_size)
-        future = None
-        acquired = False
-        async with self._lock:
-            if self._depth >= self.max_size:
-                obs_log("queue_rejected", synthesis_id=synthesis_id,
-                        connection_id=connection_id, queue_depth=self._depth,
-                        max_queue_size=self.max_size, reason="queue_full")
-                raise QueueFullError(
-                    f"Queue full (depth={self._depth}, max={self.max_size})")
-            self._depth += 1
-            self._pending += 1
-            obs_log("queue_admitted", synthesis_id=synthesis_id,
-                    connection_id=connection_id, queue_depth=self._depth,
-                    max_queue_size=self.max_size)
-            if not self._active:
-                self._active = True
-                self._active_synthesis_id = synthesis_id
-                self._active_connection_id = connection_id
-                self._active_task = asyncio.current_task()
-                acquired = True
-            else:
-                future = asyncio.get_running_loop().create_future()
-                self._waiters.append((synthesis_id, future, connection_id))
-                obs_log("queue_wait_started", synthesis_id=synthesis_id,
-                        connection_id=connection_id,
-                        queue_depth=self._depth)
-
-        if not acquired:
-            try:
-                await asyncio.wait_for(future, timeout=self.wait_timeout_sec)
-                # Successfully resumed — now we're the active worker
-                async with self._lock:
-                    self._active_task = asyncio.current_task()
-            except asyncio.TimeoutError:
-                async with self._lock:
-                    for j, (_sid, fut, _cid) in enumerate(self._waiters):
-                        if fut is future:
-                            del self._waiters[j]
-                            break
-                    self._depth -= 1
-                    self._pending -= 1
-                obs_log("queue_wait_timeout", synthesis_id=synthesis_id,
-                        connection_id=connection_id,
-                        queue_depth=self._depth,
-                        wait_timeout_sec=self.wait_timeout_sec)
-                raise QueueTimeoutError(
-                    f"Queue wait timeout after {self.wait_timeout_sec}s")
-            except asyncio.CancelledError:
-                async with self._lock:
-                    for j, (_sid, fut, _cid) in enumerate(self._waiters):
-                        if fut is future:
-                            del self._waiters[j]
-                            break
-                    self._depth -= 1
-                    self._pending -= 1
-                obs_log("queue_cancelled", synthesis_id=synthesis_id,
-                        connection_id=connection_id,
-                        reason="cancelled_while_waiting")
-                raise
-
-        obs_log("queue_started", synthesis_id=synthesis_id,
-                connection_id=connection_id, queue_depth=self._depth)
-
-        try:
-            await operation()
-        except (asyncio.CancelledError, QueueTimeoutError):
-            raise
-        finally:
-            async with self._lock:
-                self._depth -= 1
-                self._pending -= 1
-                if self._active_synthesis_id == synthesis_id:
-                    self._active_synthesis_id = None
-                    self._active_connection_id = None
-                    self._active_task = None
-                if self._waiters:
-                    nsid, nfut, nc = self._waiters.popleft()
-                    self._active_synthesis_id = nsid
-                    self._active_connection_id = nc
-                    nfut.set_result(None)
-                else:
-                    self._active = False
-            obs_log("queue_depth_changed", synthesis_id=synthesis_id,
-                    connection_id=connection_id, queue_depth=self._depth)
-
-    async def cancel_waiting(self, connection_id: str) -> int:
-        """Cancel all waiting requests for *connection_id*.  Returns count.
-
-        Counter decrements are handled by each waiter's ``run()``
-        cleanup path — this method only removes from the deque and
-        cancels the future.
-        """
-        cancelled = 0
-        async with self._lock:
-            keep = []
-            for sid, fut, cid in self._waiters:
-                if cid == connection_id:
-                    fut.cancel()
-                    cancelled += 1
-                else:
-                    keep.append((sid, fut, cid))
-            self._waiters = deque(keep)
-        return cancelled
-
-    def cancel_active_if_matches(self, synthesis_id: str) -> bool:
-        if (self._active_synthesis_id == synthesis_id
-                and self._active_task is not None):
-            self._active_task.cancel()
-            return True
-        return False
-
-    def cancel_active_for_connection(self, connection_id: str) -> bool:
-        """Cancel the active synthesis if it belongs to *connection_id*."""
-        if (self._active_connection_id == connection_id
-                and self._active_task is not None):
-            self._active_task.cancel()
-            return True
-        return False
+# QueueFullError and QueueTimeoutError are imported from app.speech (Phase 9B Slice 6).
+# The SingleWorkerSynthesisQueue compatibility wrapper was removed — all code
+# uses SpeechScheduler directly.
 
 
 
@@ -1144,7 +985,7 @@ class FakeTtsEventHandler(AsyncEventHandler):
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
         config: FakeTtsConfig,
-        queue: SingleWorkerSynthesisQueue,
+        queue: SpeechScheduler,  # Phase 9B: SpeechScheduler
         settings: Settings,
         s2_client_factory: S2ClientFactory,
     ) -> None:
@@ -1329,7 +1170,19 @@ class FakeTtsEventHandler(AsyncEventHandler):
             self._requested_voice = resolved
 
             async def send_audio() -> None:
+                session = SynthesisSession(
+                    request=SpeechRequest(synthesis_id=syn_id, connection_id=self._conn_id, text=""),
+                    trigger="legacy",
+                )
                 client_connected = True
+                # Import Wyoming audio types for session tracking
+                from wyoming.audio import AudioStart as WAStart, AudioStop as WAStop
+
+                def _track(session, ev):
+                    if WAStart.is_type(ev.type):
+                        session.mark_audio_start()
+                    elif WAStop.is_type(ev.type):
+                        session.mark_audio_stop()
                 try:
                     if (
                         self.settings.tts_backend == "s2cpp"
@@ -1338,18 +1191,22 @@ class FakeTtsEventHandler(AsyncEventHandler):
                         audio_generator = self._synthesize_text_streaming(
                             synthesize.text, voice=self._requested_voice,
                         )
+                        session.set_generator(audio_generator)
+                        session.set_cleanup(lambda: audio_generator.aclose())
                         async for audio_event in audio_generator:
+                            _track(session, audio_event)
                             try:
                                 await self.write_event(audio_event)
                             except (BrokenPipeError, ConnectionResetError, TypeError) as disconnect_error:
                                 if not self._is_expected_disconnect_error(disconnect_error):
                                     raise
                                 client_connected = False
-                                await self._handle_expected_disconnect(
-                                    syn_id, audio_generator=audio_generator)
+                                await session.disconnect()
+                                await self._handle_expected_disconnect(syn_id)
                                 break
                             except Exception as write_error:
                                 client_connected = False
+                                session.mark_client_disconnected()
                                 obs_log("synthesis_error",
                                         connection_id=self._conn_id,
                                         synthesis_id=syn_id,
@@ -1362,12 +1219,14 @@ class FakeTtsEventHandler(AsyncEventHandler):
                             synthesize.text, voice=self._requested_voice
                         )
                         for audio_event in audio_events:
+                            _track(session, audio_event)
                             try:
                                 await self.write_event(audio_event)
                             except (BrokenPipeError, ConnectionResetError, TypeError) as disconnect_error:
                                 if not self._is_expected_disconnect_error(disconnect_error):
                                     raise
                                 client_connected = False
+                                session.mark_client_disconnected()
                                 await self._handle_expected_disconnect(syn_id)
                                 break
                             except Exception:
@@ -1378,6 +1237,7 @@ class FakeTtsEventHandler(AsyncEventHandler):
                                         error="unexpected_write_event_failure")
                                 raise
                 except asyncio.CancelledError:
+                    session.mark_cancelled()
                     obs_log("synthesis_cancel_requested",
                             connection_id=self._conn_id,
                             synthesis_id="legacy",
@@ -1396,13 +1256,11 @@ class FakeTtsEventHandler(AsyncEventHandler):
                     raise
 
             if self.settings.cancel_on_new_request:
-                self.queue.cancel_active_if_matches(
-                    self.queue._active_synthesis_id or "")
-                await self.queue.cancel_waiting(self._conn_id)
+                await self.queue.cancel_new_request(self._conn_id)
                 await asyncio.sleep(0)
 
             syn_id = new_synthesis_id()
-            await self._run_operational(send_audio, synthesis_id=syn_id)
+            await self._run_operational(send_audio, synthesis_id=syn_id, trigger="legacy")
             return True
 
         # ── Streaming TTS: synthesize-start ──────────────────────────
@@ -1456,8 +1314,19 @@ class FakeTtsEventHandler(AsyncEventHandler):
             if accumulated:
                 syn_id = new_synthesis_id()
                 async def send_streaming_audio() -> None:
+                    session = SynthesisSession(
+                        request=SpeechRequest(synthesis_id=syn_id, connection_id=self._conn_id, text=""),
+                        trigger="streaming",
+                    )
                     syn_start = time.monotonic()
                     client_connected = True
+                    from wyoming.audio import AudioStart as WAStart, AudioStop as WAStop
+
+                    def _track(session, ev):
+                        if WAStart.is_type(ev.type):
+                            session.mark_audio_start()
+                        elif WAStop.is_type(ev.type):
+                            session.mark_audio_stop()
                     try:
                         if (
                             self.settings.tts_backend == "s2cpp"
@@ -1467,18 +1336,22 @@ class FakeTtsEventHandler(AsyncEventHandler):
                                 accumulated, voice=self._requested_voice,
                                 trigger="streaming", synthesis_id=syn_id,
                             )
+                            session.set_generator(audio_generator)
+                            session.set_cleanup(lambda: audio_generator.aclose())
                             async for audio_event in audio_generator:
+                                _track(session, audio_event)
                                 try:
                                     await self.write_event(audio_event)
                                 except (BrokenPipeError, ConnectionResetError, TypeError) as disconnect_error:
                                     if not self._is_expected_disconnect_error(disconnect_error):
                                         raise
                                     client_connected = False
-                                    await self._handle_expected_disconnect(
-                                        syn_id, audio_generator=audio_generator)
+                                    await session.disconnect()
+                                    await self._handle_expected_disconnect(syn_id)
                                     break
                                 except Exception as write_error:
                                     client_connected = False
+                                    session.mark_client_disconnected()
                                     obs_log("synthesis_error",
                                             connection_id=self._conn_id,
                                             synthesis_id=syn_id,
@@ -1492,12 +1365,14 @@ class FakeTtsEventHandler(AsyncEventHandler):
                                 trigger="streaming", synthesis_id=syn_id,
                             )
                             for audio_event in audio_events:
+                                _track(session, audio_event)
                                 try:
                                     await self.write_event(audio_event)
                                 except (BrokenPipeError, ConnectionResetError, TypeError) as disconnect_error:
                                     if not self._is_expected_disconnect_error(disconnect_error):
                                         raise
                                     client_connected = False
+                                    session.mark_client_disconnected()
                                     await self._handle_expected_disconnect(syn_id)
                                     break
                                 except Exception:
@@ -1507,8 +1382,8 @@ class FakeTtsEventHandler(AsyncEventHandler):
                                             synthesis_id=syn_id,
                                             error="unexpected_write_event_failure")
                                     raise
-                        # Signal end of streaming response
-                        if client_connected:
+                        # Signal end of streaming response (gated on session eligibility)
+                        if client_connected and session.eligible_for_synthesize_stopped:
                             total_synthesis_ms = int((time.monotonic() - syn_start) * 1000)
                             try:
                                 await self.write_event(SynthesizeStopped().event())
@@ -1516,6 +1391,7 @@ class FakeTtsEventHandler(AsyncEventHandler):
                                 if not self._is_expected_disconnect_error(disconnect_error):
                                     raise
                                 client_connected = False
+                                session.mark_client_disconnected()
                                 await self._handle_expected_disconnect(syn_id)
                             except Exception:
                                 obs_log("synthesis_error",
@@ -1536,19 +1412,18 @@ class FakeTtsEventHandler(AsyncEventHandler):
                                     trigger="streaming",
                                     status="client_disconnected")
                     except asyncio.CancelledError:
+                        session.mark_cancelled()
                         obs_log("synthesis_cancel_requested",
                                 connection_id=self._conn_id,
                                 synthesis_id=syn_id,
                                 reason="task_cancelled")
                         raise
 
-                if self.settings.cancel_on_new_request and self.queue._depth > 0:
-                    self.queue.cancel_active_if_matches(
-                        self.queue._active_synthesis_id or "")
-                    await self.queue.cancel_waiting(self._conn_id)
+                if self.settings.cancel_on_new_request:
+                    await self.queue.cancel_new_request(self._conn_id)
                     await asyncio.sleep(0)
 
-                await self._run_operational(send_streaming_audio, synthesis_id=syn_id)
+                await self._run_operational(send_streaming_audio, synthesis_id=syn_id, trigger="streaming")
             else:
                 # No text accumulated — still signal end of streaming response.
                 syn_id = new_synthesis_id()
@@ -1568,11 +1443,17 @@ class FakeTtsEventHandler(AsyncEventHandler):
 
         return True
 
-    async def _run_operational(self, operation, synthesis_id: str) -> None:
+    async def _run_operational(self, operation, synthesis_id: str,
+                               trigger: str = "legacy") -> None:
         """Own expected runtime failures and terminate them on the wire."""
         try:
-            await self.queue.run(operation, synthesis_id=synthesis_id,
-                                 connection_id=self._conn_id)
+            request = SpeechRequest(
+                synthesis_id=synthesis_id,
+                connection_id=self._conn_id,
+                text="",  # text is captured by observability layer separately
+                metadata=SpeechMetadata(trigger=trigger),
+            )
+            await self.queue.run(request, operation)
             return
         except asyncio.CancelledError:
             # Queue cancellation is requested by disconnect/barge-in cleanup.
@@ -1609,7 +1490,7 @@ class FakeTtsEventHandler(AsyncEventHandler):
         self._streaming_compat_voice = None
         self._in_streaming_session = False
         if self.settings.cancel_on_client_disconnect:
-            await self.queue.cancel_waiting(self._conn_id)
+            await self.queue.cancel_connection(self._conn_id)
             self.queue.cancel_active_for_connection(self._conn_id)
         obs_log("conn_close", connection_id=self._conn_id)
         await super().disconnect()
@@ -1741,7 +1622,7 @@ async def start_fake_tts_server(
     """
     active_settings = settings or Settings()
     fake_config = config or FakeTtsConfig.from_settings(active_settings)
-    queue = SingleWorkerSynthesisQueue(
+    queue = SpeechScheduler(
         max_size=max_queue_size,
         wait_timeout_sec=active_settings.s2_queue_wait_timeout_sec,
     )

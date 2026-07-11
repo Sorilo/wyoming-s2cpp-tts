@@ -70,9 +70,12 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#streaming-decode-stride-tuning-p
 | Wrapper image | `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-7db26b7` |
 | Wyoming endpoint | `tcp://0.0.0.0:10200` inside container; `192.168.1.45:10200` from Home Assistant |
 | Home Assistant result | Discovery succeeds; `s2-pro` is visible; real speech is audible |
-| Test baseline | 876 passed, 0 failed, 0 skipped after Phase 9 validation |
+| Test baseline | Phase 9B: 940 passed, 0 failed, 0 skipped in the standard suite; 14 Unraid shell-behavior tests remain a separate environment-specific invocation |
 
 ## Current architecture
+
+Phase 9B extracted speech identity, lifecycle, FIFO admission, cancellation, and session cleanup into the focused `app/speech/` package. `SpeechScheduler` owns scheduling state through a public API, while Wyoming handlers remain protocol adapters. This was a source-only refactor: externally observable behavior and the deployed Phase 9 images remain unchanged.
+
 
 The production deployment intentionally separates CPU-only Wyoming protocol handling from GPU inference:
 
@@ -140,7 +143,7 @@ The verified real backend contract is raw `audio/L16; rate=44100; channels=1` wi
 
 ## Testing
 
-Current full-suite baseline: **876 passed, 0 failed, 0 skipped**.
+Current Phase 9B standard-suite baseline: **940 collected, 940 passed, 0 failed, 0 skipped**. The 14 tests in `tests/test_realtime_tuning_unraid.py` are environment-specific shell-behavior checks and remain a separate invocation. The historical Phase 9 acceptance baseline was 876 passed.
 
 Useful focused checks:
 

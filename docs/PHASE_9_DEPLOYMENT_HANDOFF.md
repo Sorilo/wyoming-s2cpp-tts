@@ -107,4 +107,4 @@ Both rollback images were verified local before deployment. After rollback, appl
 
 ## Closeout boundary
 
-Phase 9 implementation, deployment, direct production smoke, Home Assistant production smoke, and log verification are complete. Rollback remains prepared, and Phase 9 is closed. Phase 9B is planning-only in PR #4; no Phase 9B runtime code is part of this closeout.
+Phase 9 implementation, deployment, direct production smoke, Home Assistant production smoke, and log verification are complete. Rollback remains prepared, and Phase 9 is closed. Phase 9B was subsequently implemented as a source-only refactor; no Phase 9B image was published or deployed, so production remains on the verified Phase 9 images.

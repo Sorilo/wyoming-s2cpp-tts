@@ -180,6 +180,18 @@ The current implementation uses single-active-synthesis with a bounded queue (de
 
 Client-disconnect and backend request cancellation are runtime-verified: abandoned requests are recorded once, generation exits promptly, final decode is skipped, and `server_busy` is released. Phase 9 added deterministic bounded FIFO admission, backend-busy retries, queue/synthesis deadlines, and controlled Wyoming failures while preserving one active synthesis.
 
+### Speech domain model (Phase 9B)
+
+Phase 9B extracted the queue and scheduling logic into explicit domain objects in `app/speech/`:
+
+- **`SpeechMetadata`**: immutable dataclass carrying optional descriptive metadata (voice, trigger, text fingerprint) plus reserved inert fields for future semantic priority and replacement.
+- **`SpeechRequest`**: immutable dataclass representing one admitted unit of speech with synthesis/connection IDs, text (plaintext excluded from repr/snapshots/logs), and metadata.
+- **`SpeechScheduler`**: sole owner of admission, FIFO activation, queue depth, active task identity, cancellation, and release. Wyoming handlers are protocol adapters that create `SpeechRequest` objects and submit operations to the scheduler.
+- **`SpeechState`**: closed lifecycle enum (`CREATED → WAITING → ACTIVE → COMPLETED/CANCELLED/TIMED_OUT/FAILED`) with idempotent terminal transitions.
+- **`SynthesisSession`**: per-request protocol state tracking `AudioStart`/`AudioStop` emission, streaming eligibility, disconnect state, and resource cleanup.
+
+Observable behavior is unchanged from Phase 9. No image is published; production remains on wrapper `sha-7db26b7` and backend `sha-6e629d0`.
+
 ## Latency measurement ownership
 
 This repository can directly measure:

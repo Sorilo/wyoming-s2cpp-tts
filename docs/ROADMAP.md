@@ -171,10 +171,11 @@ Finalize templates after real restart/update/persistence/backup validation.
 5. Update `ROADMAP.md`, `TODO.md`, `NEXT_GOAL_PROMPTS.md`, and `CHANGELOG.md` when status changes.
 
 
-## Phase 9B: SpeechRequest Domain Model (next)
+## Phase 9B: SpeechRequest Domain Model ✅
 - SpeechRequest domain model, scheduler-owned lifecycle state machine
 - SpeechScheduler behavior-preserving refactor, SynthesisSession foundation
 - inactive reserved semantic metadata, scheduler admission latency metric
+- Status: Complete. Source-only refactor; no image published/deployed. Production remains on Phase 9 images (wrapper sha-7db26b7, backend sha-6e629d0).
 
 ## Phase 9C: Graceful Shutdown & Admin
 - graceful shutdown, optional admin HTTP port, liveness/readiness/status/metrics

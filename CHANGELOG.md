@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Phase 9 closure: bounded queue admission, backend-busy retry, queue wait and synthesis timeouts, controlled Wyoming errors, and disconnect cleanup are complete. Isolated Unraid validation passed short and long synthesis (RTF ~0.961), FIFO ordering, queue-full rejection/recovery, and three disconnect/recovery cycles without a persistent 503 latch or unobserved task exception. Full suite: **876 passed, 0 failed, 0 skipped**. PR #2 merged as `1a0b93f`. Wrapper `sha-7db26b7` and backend `sha-6e629d0` are deployed and passed per-container production verification; the compact direct/HA smoke remains. See `docs/PHASE_9_DEPLOYMENT_HANDOFF.md`.
+- Phase 9 closure: bounded queue admission, backend-busy retry, queue wait and synthesis timeouts, controlled Wyoming errors, and disconnect cleanup are complete. Isolated Unraid validation passed short and long synthesis (RTF ~0.961), FIFO ordering, queue-full rejection/recovery, and three disconnect/recovery cycles without a persistent 503 latch or unobserved task exception. Full suite: **876 passed, 0 failed, 0 skipped**. PR #2 merged as `1a0b93f`. Wrapper `sha-7db26b7` and backend `sha-6e629d0` are deployed. Final production smoke passed: short and long direct Wyoming requests produced valid 44.1 kHz mono 16-bit PCM (RTF `1.002` and `0.974`), Home Assistant produced audible intelligible speech, queue depth returned to zero, both restart counts remained zero, GPU operation remained active, and the final log scan was clean. Phase 9 is closed. See `docs/PHASE_9_DEPLOYMENT_HANDOFF.md`.
 
 - Phase 8E.1 closure: Q4_K_M runtime tuning complete.  After six benchmark
   phases, the provisional baseline is Q4_K_M at context=32, stride=32,

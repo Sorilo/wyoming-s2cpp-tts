@@ -505,9 +505,9 @@ and an optional read-only admin HTTP server.  183 new tests.  Full standard
 suite: 1112 passed, 0 failed, 0 skipped.  Source-only — no image
 published or deployed.
 
-## Phase 9.5: Progressive Phrase Synthesis — Draft implementation
+## Phase 9.5: Progressive Phrase Synthesis — Complete
 
-Implemented and authoritatively verified on draft branch ``phase/phase-9-5-progressive-phrase-synthesis``; not yet merged, released, or deployed.
+Implemented and authoritatively verified on branch ``phase/phase-9-5-progressive-phrase-synthesis`` and merged through PR #9 as ``ec633bd``; not released or deployed.
 PhraseAccumulator provides bounded deterministic streaming text parsing.
 AudioEnvelope normalizes continuous Wyoming audio across multiple phrase
 synthesis operations. StreamingCoordinator submits phrases through

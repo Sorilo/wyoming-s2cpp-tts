@@ -53,6 +53,27 @@
 - Phase 9 historical test baseline: 876 passed, 0 failed, 0 skipped
 - Phase 9B standard-suite baseline: 940 collected, 940 passed, 0 failed, 0 skipped; 14 Unraid shell-behavior tests remain a separate environment-specific invocation
 - Phase 9 production deployment and final smoke passed: short/long direct Wyoming, audible Home Assistant VM speech, zero restarts, queue depth zero, active GPU inference, and clean logs. Phase 9 is closed.
+## Phase 9C results
+
+- Graceful shutdown lifecycle owner with explicit state machine: ``STARTING`` → ``RUNNING`` → ``DRAINING`` → ``STOPPING`` → ``STOPPED`` / ``FAILED``.
+- SIGTERM/SIGINT initiate shutdown exactly once; repeated signals are idempotent.
+- Shutdown bounded by ``SHUTDOWN_GRACE_TIMEOUT_SEC`` (default 30, validated (0, 300]).
+- Scheduler drain: cancels queued work, allows active synthesis a grace period, force-cancels after expiry.
+- Readiness false immediately on drain; no new Wyoming connections or synthesis admissions accepted.
+- Optional admin HTTP server (disabled by default, loopback ``127.0.0.1:10201``):
+  * ``GET /livez`` — liveness (200 while alive)
+  * ``GET /readyz`` — traffic readiness (200 only RUNNING, 503 otherwise)
+  * ``GET /status`` — sanitized JSON snapshot (state, readiness, uptime, scheduler, counters)
+  * ``GET /metrics`` — sanitized JSON metrics with cumulative counters
+- No plaintext, audio, secrets, tokens, IDs, or mutable objects in admin responses.
+- All admin HTTP parsing uses bounded time/size limits; bind failure non-fatal.
+- No mutating admin endpoints.
+- ``CumulativeCounters``: thread-safe monotonic process-lifetime counters wired through scheduler and admin.
+- Service coordinator owns lifecycle, Wyoming listener start/stop, connection tracking, signal dispatch, admin lifecycle.
+- 183 new Phase 9C tests (lifecycle, coordinator, shutdown behavior, admin HTTP, counters, status/metrics snapshots).
+- Full standard suite: **1112 passed, 0 failed, 0 skipped** (excluding the 14 environment-specific tests in `tests/test_realtime_tuning_unraid.py`, including its fake-`nvidia-smi` cases).
+- Source-only implementation — no image published or deployed. Production remains on Phase 9 images (wrapper ``sha-7db26b7``, backend ``sha-6e629d0``).
+
 ## Phase 9B results
 
 - Source-only domain refactor extracting `SpeechRequest`, `SpeechMetadata`, `SpeechScheduler`, `SpeechState`, `ScheduledSpeech`, and `SynthesisSession` into explicit `app/speech/` domain objects.
@@ -220,7 +241,8 @@
 
 ## Approved remaining v0.1 phases
 
-21. ~~Phase 7.5: wire true progressive backend HTTP audio streaming into the production Wyoming event handler when `S2_STREAM=true`~~ ✅ Phase 7.5A complete
+Phase 9C: graceful shutdown and optional admin HTTP visibility ✅
+22. ~~Phase 7.5: wire true progressive backend HTTP audio streaming into the production Wyoming event handler when `S2_STREAM=true`~~ ✅ Phase 7.5A complete
 23. Phase 8: client disconnect cleanup, open HTTP stream closure, cancellation behavior, and documented backend cancellation limitations
 24. Phase 9: queue capacity, busy handling, backend HTTP 503 handling, queue wait timeout, synthesis timeout, and controlled Wyoming failure behavior
 25. Phase 10: end-to-end barge-in testing with an actual Home Assistant satellite/player, VAD, wake word, playback interruption, and new-request behavior

@@ -177,8 +177,18 @@ Finalize templates after real restart/update/persistence/backup validation.
 - inactive reserved semantic metadata, scheduler admission latency metric
 - Status: Complete. Source-only refactor; no image published/deployed. Production remains on Phase 9 images (wrapper sha-7db26b7, backend sha-6e629d0).
 
-## Phase 9C: Graceful Shutdown & Admin
-- graceful shutdown, optional admin HTTP port, liveness/readiness/status/metrics
+## Phase 9C: Graceful Shutdown & Admin ✅
+
+- ``ServiceCoordinator`` lifecycle owner with explicit ``LifecycleState`` machine (``STARTING`` → ``RUNNING`` → ``DRAINING`` → ``STOPPING`` → ``STOPPED`` / ``FAILED``).
+- SIGTERM/SIGINT initiate shutdown exactly once; idempotent repeated calls.
+- Bounded by ``SHUTDOWN_GRACE_TIMEOUT_SEC`` (default 30, range (0, 300]).
+- Scheduler drain: cancel queued, allow active grace period, force-cancel after expiry.
+- Readiness false immediately on shutdown; no new admissions.
+- Optional admin HTTP server (disabled, ``127.0.0.1:10201`` by default): ``GET /livez`` (200), ``GET /readyz`` (200/503), ``GET /status`` (sanitized JSON), ``GET /metrics`` (sanitized JSON counters).
+- No plaintext, audio, secrets, tokens, or mutating endpoints.
+- ``CumulativeCounters``: thread-safe monotonic counters (admitted, rejected, completed, cancelled-queued, cancelled-active, timed-out, failed, backend-busy-retries).
+- Bind failure non-fatal. Source-only; no image published/deployed. Production remains on Phase 9 images.
+- Full standard suite: **1112 passed, 0 failed, 0 skipped**.
 
 ## Phase 9.5: Progressive Phrase Synthesis
 - per-request phrase accumulator, boundary detection, progressive synthesis

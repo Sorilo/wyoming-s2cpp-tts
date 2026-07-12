@@ -146,6 +146,7 @@ class ScheduledSpeech:
     started_monotonic: float | None = None
     completed_monotonic: float | None = None
     terminal_reason: str | None = None
+    terminal_counted: bool = False  # exactly-once terminal accounting guard
 
     def snapshot(self) -> dict[str, Any]:
         """Return an immutable plaintext-safe summary dict."""

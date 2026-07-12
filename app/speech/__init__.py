@@ -1,7 +1,8 @@
 """Phase 9B / 9.5 speech domain package.
 
 Exports core domain objects: SpeechMetadata, SpeechRequest, SpeechState,
-ScheduledSpeech, SpeechScheduler, error types, and PhraseAccumulator.
+ScheduledSpeech, SpeechScheduler, error types, PhraseAccumulator,
+AudioEnvelope, EnvelopeError, and StreamingCoordinator.
 """
 
 from app.speech.models import (
@@ -11,6 +12,7 @@ from app.speech.models import (
     ScheduledSpeech,
 )
 from app.speech.phrases import PhraseAccumulator
+from app.speech.envelope import AudioEnvelope, EnvelopeError
 from app.speech.scheduler import (
     SpeechScheduler,
     QueueFullError,
@@ -26,4 +28,6 @@ __all__ = [
     "QueueFullError",
     "QueueTimeoutError",
     "PhraseAccumulator",
+    "AudioEnvelope",
+    "EnvelopeError",
 ]

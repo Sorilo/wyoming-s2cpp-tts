@@ -44,6 +44,15 @@ from typing import Any
 # ── Constants ──────────────────────────────────────────────────────
 
 CONFIRMATION_PHRASE = "I-UNDERSTAND-THIS-IS-LIVE"
+DOCKER_CONTAINERS = ("wyoming-s2cpp-tts", "s2cpp-backend")
+DOCKER_INSPECT_FORMAT = (
+    '{"id":{{json .Id}},"name":{{json .Name}},'
+    '"image_name":{{json .Config.Image}},"image_id":{{json .Image}},'
+    '"running":{{json .State.Running}},"state":{{json .State.Status}}}'
+)
+_SSH_HOST_RE = re.compile(r"^[A-Za-z0-9._:-]+$")
+_SSH_USER_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+_SINCE_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.+-]+Z?$")
 
 LISTED_OUTCOMES = frozenset({
     "local_playback_stopped_only",
@@ -656,33 +665,27 @@ async def collect_docker_state(
     container_names: tuple[str, ...],
     subprocess_runner: Any = None,
 ) -> dict[str, Any]:
-    """Collect read-only Docker state for production containers.
-
-    In dry-run mode (subprocess_runner=None), returns empty template.
-    """
+    """Collect exact identity, image provenance, and running state."""
     state: dict[str, Any] = {}
     if subprocess_runner is None:
-        for name in container_names:
-            state[name] = {"found": False, "state": "dry-run", "logs_last_20_lines": []}
-        return state
+        return {name: {"found": False, "state": "dry-run"} for name in container_names}
 
     for name in container_names:
-        container_state: dict[str, Any] = {"found": False, "state": "unknown", "logs": []}
+        container_state: dict[str, Any] = {"found": False, "state": "unknown"}
         try:
-            ps_result = await subprocess_runner.run(
-                ["docker", "ps", "--filter", f"name={name}", "--format", "json"],
+            result = await subprocess_runner.run(
+                ["docker", "inspect", "--type", "container", "--format",
+                 DOCKER_INSPECT_FORMAT, name],
                 capture_output=True, timeout=15,
             )
-            if ps_result.returncode == 0 and ps_result.stdout.strip():
-                for line in ps_result.stdout.decode().strip().split("\n"):
-                    if line:
-                        try:
-                            info = json.loads(line)
-                            container_state["found"] = True
-                            container_state["state"] = info.get("State", "unknown")
-                            container_state["names"] = info.get("Names", name)
-                        except json.JSONDecodeError:
-                            pass
+            if result.returncode == 0 and result.stdout.strip():
+                info = json.loads(result.stdout.decode().strip())
+                info["name"] = str(info.get("name", "")).removeprefix("/")
+                if info["name"] != name:
+                    raise ValueError("container identity mismatch")
+                container_state = {"found": True, **info}
+            elif result.stderr:
+                container_state["error"] = result.stderr.decode(errors="replace").strip()
         except Exception as exc:
             container_state["error"] = str(exc)
         state[name] = container_state
@@ -695,31 +698,24 @@ async def collect_docker_logs(
     tail: int = 200,
     since: str | None = None,
 ) -> dict[str, list[str]]:
-    """Collect docker logs with --timestamps for each container.
-
-    When *since* is provided (ISO 8601 timestamp), uses --since to
-    avoid capturing old unrelated logs.
-
-    Returns dict mapping container_name -> list of log lines.
-    """
+    """Collect bounded timestamped logs for the exact containers."""
     logs: dict[str, list[str]] = {}
     if subprocess_runner is None:
-        for name in container_names:
-            logs[name] = []
-        return logs
+        return {name: [] for name in container_names}
 
     for name in container_names:
         try:
-            log_result = await subprocess_runner.run(
-                ["docker", "logs", "--timestamps", "--tail", str(tail), name],
-                capture_output=True, timeout=15,
-            )
-            if log_result.returncode == 0:
-                decoded = log_result.stdout.decode(errors="replace").strip()
-                lines = decoded.split("\n") if decoded else []
-                logs[name] = lines
+            cmd = ["docker", "logs", "--timestamps", "--tail", str(tail)]
+            if since is not None:
+                cmd.extend(["--since", since])
+            cmd.append(name)
+            result = await subprocess_runner.run(cmd, capture_output=True, timeout=15)
+            if result.returncode == 0:
+                decoded = result.stdout.decode(errors="replace").strip()
+                logs[name] = decoded.split("\n") if decoded else []
             else:
-                logs[name] = [f"ERROR: docker logs failed: {log_result.stderr.decode(errors='replace')}"]
+                err = result.stderr.decode(errors="replace").strip()
+                logs[name] = [f"ERROR: docker logs failed: {err}"]
         except Exception as exc:
             logs[name] = [f"ERROR: {exc}"]
     return logs
@@ -1592,6 +1588,73 @@ async def real_tcp_connector(host: str, port: int):
         await writer.wait_closed()
 
 
+def validate_read_only_docker_command(cmd: list[str]) -> None:
+    """Reject every command outside the exact Phase 10 Docker whitelist."""
+    if not isinstance(cmd, list) or not all(isinstance(v, str) for v in cmd):
+        raise ValueError("command must be a string argument list")
+    if len(cmd) == 7 and cmd[:5] == ["docker", "inspect", "--type", "container", "--format"]:
+        if cmd[5] != DOCKER_INSPECT_FORMAT or cmd[6] not in DOCKER_CONTAINERS:
+            raise ValueError("docker inspect command not whitelisted")
+        return
+    if len(cmd) in (6, 8) and cmd[:4] == ["docker", "logs", "--timestamps", "--tail"]:
+        try:
+            tail = int(cmd[4])
+        except ValueError as exc:
+            raise ValueError("log tail must be an integer") from exc
+        if not 1 <= tail <= 5000:
+            raise ValueError("log tail outside whitelist bounds")
+        if len(cmd) == 6:
+            container = cmd[5]
+        else:
+            if cmd[5] != "--since" or not _SINCE_RE.fullmatch(cmd[6]):
+                raise ValueError("log timestamp not whitelisted")
+            container = cmd[7]
+        if container not in DOCKER_CONTAINERS:
+            raise ValueError("container not whitelisted")
+        return
+    raise ValueError("Docker command not whitelisted")
+
+
+class SshReadOnlyDockerRunner:
+    """Execute only the explicit read-only Docker whitelist over SSH."""
+
+    def __init__(self, host: str, user: str, key_file: str) -> None:
+        key = Path(key_file).expanduser()
+        if not host or not _SSH_HOST_RE.fullmatch(host):
+            raise ValueError("invalid UNRAID_SSH_HOST")
+        if not user or not _SSH_USER_RE.fullmatch(user):
+            raise ValueError("invalid UNRAID_SSH_USER")
+        if not key.is_file():
+            raise ValueError("UNRAID_SSH_KEY_FILE is not a file")
+        self.host, self.user, self.key_file = host, user, key
+        self.commands: list[list[str]] = []
+
+    async def run(self, cmd: list[str], *, capture_output: bool = True,
+                  timeout: float = 30) -> subprocess.CompletedProcess[bytes]:
+        validate_read_only_docker_command(cmd)
+        self.commands.append(list(cmd))
+        ssh_cmd = [
+            "ssh", "-i", str(self.key_file), "-o", "BatchMode=yes",
+            "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=yes",
+            f"{self.user}@{self.host}", "--", *cmd,
+        ]
+        def _run() -> subprocess.CompletedProcess[bytes]:
+            return subprocess.run(ssh_cmd, capture_output=capture_output,
+                                  text=False, timeout=timeout, shell=False)
+        return await asyncio.get_running_loop().run_in_executor(None, _run)
+
+
+def build_live_subprocess_runner() -> Any:
+    """Choose SSH Docker collection only when all three env vars are set."""
+    values = [os.getenv("UNRAID_SSH_HOST", ""), os.getenv("UNRAID_SSH_USER", ""),
+              os.getenv("UNRAID_SSH_KEY_FILE", "")]
+    if any(values) and not all(values):
+        raise ValueError("UNRAID_SSH_HOST, UNRAID_SSH_USER, and UNRAID_SSH_KEY_FILE must all be set")
+    if all(values):
+        return SshReadOnlyDockerRunner(*values)
+    return AsyncSubprocessRunner()
+
+
 class AsyncSubprocessRunner:
     """Real async subprocess adapter for CLI use.
 
@@ -1649,7 +1712,7 @@ def main() -> int:
     print()
 
     # (D) Create real async subprocess runner for live modes
-    subprocess_runner = None if cfg.dry_run else AsyncSubprocessRunner()
+    subprocess_runner = None if cfg.dry_run else build_live_subprocess_runner()
 
     report = asyncio.run(run_validation(
         cfg,

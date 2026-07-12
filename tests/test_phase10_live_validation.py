@@ -1114,3 +1114,119 @@ async def test_async_subprocess_runner_returns_bytes():
     )
     assert isinstance(result.stdout, bytes)
     assert result.stdout.strip() == b"ok"
+
+
+class TestReadOnlyDockerWhitelist:
+    def inspect_cmd(self, name="wyoming-s2cpp-tts"):
+        return ["docker", "inspect", "--type", "container", "--format",
+                p10.DOCKER_INSPECT_FORMAT, name]
+
+    @pytest.mark.parametrize("name", p10.DOCKER_CONTAINERS)
+    def test_accepts_exact_inspect_for_each_container(self, name):
+        p10.validate_read_only_docker_command(self.inspect_cmd(name))
+
+    @pytest.mark.parametrize("name", p10.DOCKER_CONTAINERS)
+    def test_accepts_bounded_timestamped_logs(self, name):
+        p10.validate_read_only_docker_command(
+            ["docker", "logs", "--timestamps", "--tail", "200", name])
+        p10.validate_read_only_docker_command(
+            ["docker", "logs", "--timestamps", "--tail", "200",
+             "--since", "2026-07-12T22:00:00Z", name])
+
+    @pytest.mark.parametrize("cmd", [
+        ["docker", "exec", "wyoming-s2cpp-tts", "true"],
+        ["docker", "restart", "wyoming-s2cpp-tts"],
+        ["docker", "inspect", "s2cpp-backend"],
+        ["docker", "logs", "--timestamps", "--tail", "200", "other"],
+        ["docker", "logs", "--timestamps", "--tail", "0", "s2cpp-backend"],
+        ["docker", "logs", "--timestamps", "--tail", "5001", "s2cpp-backend"],
+        ["docker", "logs", "--timestamps", "--tail", "200", "--since",
+         "now;docker restart x", "s2cpp-backend"],
+    ])
+    def test_rejects_everything_outside_whitelist(self, cmd):
+        with pytest.raises(ValueError):
+            p10.validate_read_only_docker_command(cmd)
+
+
+@pytest.mark.asyncio
+async def test_collect_docker_state_includes_identity_image_and_running():
+    payloads = {}
+    for name in p10.DOCKER_CONTAINERS:
+        payloads[" ".join([
+            "docker", "inspect", "--type", "container", "--format",
+            p10.DOCKER_INSPECT_FORMAT, name,
+        ])] = _FakeProcess(0, json.dumps({
+            "id": "abc123", "name": f"/{name}",
+            "image_name": f"ghcr.io/sorilo/{name}:sha-test",
+            "image_id": "sha256:deadbeef", "running": True, "state": "running",
+        }))
+    result = await p10.collect_docker_state(
+        p10.DOCKER_CONTAINERS, _FakeSubprocess(responses=payloads))
+    for name in p10.DOCKER_CONTAINERS:
+        assert result[name] == {
+            "found": True, "id": "abc123", "name": name,
+            "image_name": f"ghcr.io/sorilo/{name}:sha-test",
+            "image_id": "sha256:deadbeef", "running": True, "state": "running",
+        }
+
+
+def test_build_runner_requires_complete_ssh_configuration(monkeypatch):
+    monkeypatch.setenv("UNRAID_SSH_HOST", "192.168.1.45")
+    monkeypatch.delenv("UNRAID_SSH_USER", raising=False)
+    monkeypatch.delenv("UNRAID_SSH_KEY_FILE", raising=False)
+    with pytest.raises(ValueError, match="must all be set"):
+        p10.build_live_subprocess_runner()
+
+
+def test_build_runner_selects_ssh(monkeypatch, tmp_path):
+    key = tmp_path / "id"
+    key.write_text("test-only")
+    monkeypatch.setenv("UNRAID_SSH_HOST", "192.168.1.45")
+    monkeypatch.setenv("UNRAID_SSH_USER", "root")
+    monkeypatch.setenv("UNRAID_SSH_KEY_FILE", str(key))
+    runner = p10.build_live_subprocess_runner()
+    assert isinstance(runner, p10.SshReadOnlyDockerRunner)
+
+
+def test_ssh_runner_rejects_invalid_identity_inputs(tmp_path):
+    key = tmp_path / "id"
+    key.write_text("test-only")
+    with pytest.raises(ValueError):
+        p10.SshReadOnlyDockerRunner("host;bad", "root", str(key))
+    with pytest.raises(ValueError):
+        p10.SshReadOnlyDockerRunner("host", "root bad", str(key))
+    with pytest.raises(ValueError):
+        p10.SshReadOnlyDockerRunner("host", "root", str(tmp_path / "missing"))
+
+
+@pytest.mark.asyncio
+async def test_ssh_runner_builds_fixed_shell_free_ssh_command(monkeypatch, tmp_path):
+    key = tmp_path / "id"
+    key.write_text("test-only")
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["kwargs"] = kwargs
+        return p10.subprocess.CompletedProcess(cmd, 0, b"{}\n", b"")
+
+    monkeypatch.setattr(p10.subprocess, "run", fake_run)
+    runner = p10.SshReadOnlyDockerRunner("192.168.1.45", "root", str(key))
+    docker_cmd = ["docker", "inspect", "--type", "container", "--format",
+                  p10.DOCKER_INSPECT_FORMAT, "wyoming-s2cpp-tts"]
+    await runner.run(docker_cmd)
+    assert captured["cmd"][-len(docker_cmd):] == docker_cmd
+    assert captured["kwargs"]["shell"] is False
+    assert "BatchMode=yes" in captured["cmd"]
+    assert "StrictHostKeyChecking=yes" in captured["cmd"]
+
+
+@pytest.mark.asyncio
+async def test_ssh_runner_rejects_before_subprocess(monkeypatch, tmp_path):
+    key = tmp_path / "id"
+    key.write_text("test-only")
+    monkeypatch.setattr(p10.subprocess, "run",
+                        lambda *a, **k: pytest.fail("subprocess must not run"))
+    runner = p10.SshReadOnlyDockerRunner("192.168.1.45", "root", str(key))
+    with pytest.raises(ValueError):
+        await runner.run(["docker", "exec", "wyoming-s2cpp-tts", "sh"])

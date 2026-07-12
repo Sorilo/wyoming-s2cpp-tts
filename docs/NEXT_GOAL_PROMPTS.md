@@ -3,29 +3,31 @@
 Run phases one at a time. This file is regenerated from the actual repository
 state after every `/goal` run. Do not copy stale assumptions forward.
 
-## Current state after Phase 9C
+## Current state after Phase 9.5 (2026-07-12)
 
-- Repository: `main`; PR #2 merged as `1a0b93f`.
-- Runtime commit `7db26b7` and documentation commit `105121b` are ancestors of `main`.
-- Phase 9C application-suite baseline: **1112 passed, 0 failed, 0 skipped**, excluding the 14 environment-specific tests in `tests/test_realtime_tuning_unraid.py`.
-- Isolated Unraid validation: **PASS** for short/long synthesis, FIFO,
-  queue-full recovery, and three disconnect/recovery cycles.
-- Production backend: `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-6e629d0`.
-- Production wrapper: `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-7db26b7`.
+- Repository: `main`; PR #2 (Phase 9) merged as `1a0b93f`; PR #9 (Phase 9.5) merged as `ec633bd`.
+- Phase 9.5 authoritative application suite: **1252 passed, 0 failed, 0 skipped**,
+  excluding the 14 environment-specific tests in `tests/test_realtime_tuning_unraid.py`.
+  Phase 9.5 focused affected gate: **208 passed**.
+- Phase 9C application-suite baseline (prior): **1112 passed, 0 failed, 0 skipped**.
+  Phase 9B: source-only domain refactor complete. Phase 9.5: progressive phrase
+  synthesis implemented (PhraseAccumulator, AudioEnvelope, StreamingCoordinator)
+  on draft branch, now merged to `main`.
+- **No Phase 9C, 9.5, or Phase 9B images were built, published, or deployed.**
+  Production remains on recorded Phase 9 images:
+  - Wrapper: `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-7db26b7`
+  - Backend: `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-6e629d0`
 - Production retries: `S2_BACKEND_BUSY_MAX_RETRIES=10`,
-  `S2_BACKEND_BUSY_RETRY_DELAY_MS=500`; timeouts remain `30` and `120`.
-- Final production smoke passed: short/long direct Wyoming requests, audible and
-  intelligible Home Assistant VM speech, queue depth zero, active GPU inference,
-  zero restarts, and clean logs. Phase 9 is closed. Rollback remains backend
-  `sha-edf89bd`, wrapper `sha-12f3bf8`, retries `3` and `200`.
+  `S2_BACKEND_BUSY_RETRY_DELAY_MS=500`; timeouts `30` and `120`.
+- Rollback: backend `sha-edf89bd`, wrapper `sha-7db26b7`.
 
 ## Phase 9B: Speech Scheduler Domain Refactor ✅ Complete
 
 Phase 9B extracted the queue, request identity, lifecycle ownership, and synthesis-session boundaries into explicit `app/speech/` domain objects. `SpeechScheduler` exclusively owns admission, FIFO activation, queue depth, active task identity, cancellation, and release. Wyoming handlers are protocol adapters: they create `SpeechRequest` objects and submit operations. `SingleWorkerSynthesisQueue` compatibility wrapper removed; all tests migrated to `SpeechScheduler`/`SpeechRequest` public API. Observable behavior unchanged. Source-only refactor — no image published or deployed. Production remains on Phase 9 images: wrapper `sha-7db26b7`, backend `sha-6e629d0`.
 
-## Next official phase: Phase 9C — Graceful Shutdown & Admin
+## Next official phase: Phase 9C — Graceful Shutdown & Admin ✅ Complete
 
-Implement graceful shutdown and an optional admin HTTP port with liveness, readiness, status, and metrics endpoints. This is a separate planning/review-first phase.
+Phase 9C is complete (see Phase 9C: Graceful Shutdown & Admin section below).  Source-only — no image published or deployed.
 
 ## Historical prompt: Phase 9 queue, busy handling, and timeout policy
 
@@ -503,20 +505,24 @@ and an optional read-only admin HTTP server.  183 new tests.  Full standard
 suite: 1112 passed, 0 failed, 0 skipped.  Source-only — no image
 published or deployed.
 
-## Phase 9.5: Progressive Phrase Synthesis — Draft implementation
+## Phase 9.5: Progressive Phrase Synthesis — Complete
 
-Implemented and authoritatively verified on draft branch ``phase/phase-9-5-progressive-phrase-synthesis``; not yet merged, released, or deployed.
+Implemented and authoritatively verified on branch ``phase/phase-9-5-progressive-phrase-synthesis`` and merged through PR #9 as ``ec633bd``; not released or deployed.
 PhraseAccumulator provides bounded deterministic streaming text parsing.
 AudioEnvelope normalizes continuous Wyoming audio across multiple phrase
 synthesis operations. StreamingCoordinator submits phrases through
 SpeechScheduler one at a time with bounded backpressure. Handler integration
 supports progressive feeding, compat-synthesize deduplication, disconnect
-cancellation, and generator cleanup. Test baseline: 1250 passed, 0 failed.
+cancellation, and generator cleanup. Test baseline: 1252 passed, 0 failed, 0 skipped.
 
-## Next official phase: Phase 10 — End-to-End Barge-In Testing
+## Next official phase: Phase 10 — End-to-End Barge-In
 
-Test with an actual Home Assistant satellite/player path including VAD, wake
-word, playback interruption, and new-request behavior.
+Phase 10 planning is in progress on branch `planning/phase-10-end-to-end-barge-in`.
+See `docs/PHASE_10_END_TO_END_BARGE_IN_PLAN.md` for the complete barge-in
+contract: layer separation, HA pipeline sequence, validation state model,
+correlation scheme, wrapper tests, 16-case live matrix, evidence schema,
+physical playback stop contract, and implementation decision gates.
+No code or deployment changes in the planning phase.
 
 ## Prompt-generation guidance
 

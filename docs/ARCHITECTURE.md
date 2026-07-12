@@ -317,4 +317,4 @@ STT, LLM, VAD, and actual playback timestamps require Home Assistant or satellit
 
 The service is designed to be barge-in friendly, but true barge-in depends on the full Home Assistant Assist stack: wake word, VAD, satellite behavior, and playback device interrupt support.
 
-Real cancellation cleanup is planned for Phase 8. End-to-end barge-in testing with an actual Home Assistant satellite/player path is planned for Phase 10.
+Client-disconnect and backend cancellation cleanup were implemented and validated through Phase 8B2 and strengthened in Phases 9–9.5. End-to-end barge-in—including pipeline supersession, wrapper cancellation, and proven physical playback stop through the actual Home Assistant satellite/player path—remains Phase 10 work.

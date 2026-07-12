@@ -1620,11 +1620,14 @@ class FakeTtsEventHandler(AsyncEventHandler):
             async for event in coord:
                 try:
                     from wyoming.audio import AudioStart as WAStart, AudioStop as WAStop
+                    from wyoming.error import Error as WError
                     if self._stream_session is not None:
                         if WAStart.is_type(event.type):
                             self._stream_session.mark_audio_start()
                         elif WAStop.is_type(event.type):
                             self._stream_session.mark_audio_stop()
+                        elif WError.is_type(event.type):
+                            self._stream_session.mark_failed()
                     await self.write_event(event)
                 except (BrokenPipeError, ConnectionResetError, TypeError) as disconnect_error:
                     if not self._is_expected_disconnect_error(disconnect_error):

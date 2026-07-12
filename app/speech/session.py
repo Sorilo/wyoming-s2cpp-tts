@@ -34,6 +34,7 @@ class SynthesisSession:
         self._audio_stop_emitted = False
         self._client_connected = True
         self._cancelled = False
+        self._failed = False
         self._cleanup: Callable[[], Awaitable[None]] | None = None
         self._cleanup_done = False
         self._generator: Any = None
@@ -68,7 +69,11 @@ class SynthesisSession:
 
     @property
     def eligible_for_synthesize_stopped(self) -> bool:
-        return self.trigger == "streaming"
+        return self.trigger == "streaming" and not self._failed
+
+    def mark_failed(self) -> None:
+        """Record a terminal synthesis failure for success gating."""
+        self._failed = True
 
     # ── Client state ────────────────────────────────────────────────
 

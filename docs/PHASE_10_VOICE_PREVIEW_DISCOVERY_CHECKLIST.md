@@ -424,3 +424,99 @@ Screenshots: [LIST filenames or links]
 - **Operator name/ID:** `[FILL]`
 - **Date completed:** `[FILL]`
 - **Notes / anomalies observed:** `[FILL]`
+
+
+---
+
+## Appendix A: Phase 10 Live-Validation Harness Commands
+
+The standalone `scripts/phase10_live_validation.py` harness is source-only. It
+does not change wrapper runtime code, deploy containers, alter Home Assistant,
+publish images, or merge a pull request.
+
+### A.1 Credentials and endpoints
+
+Provide credentials only through the process environment or an explicitly
+supplied, gitignored token file. Never put a token on the command line.
+
+```bash
+export HA_URL="http://homeassistant.local:8123"
+export HA_TOKEN_FILE="/path/to/gitignored/ha-token.txt"
+```
+
+The harness is scoped to `wyoming-s2cpp-tts` and `s2cpp-backend`.
+
+### A.2 Zero-I/O dry-run (default)
+
+```bash
+.venv/bin/python scripts/phase10_live_validation.py --mode health --dry-run
+```
+Dry-run performs **no network, Docker, Wyoming, or Home Assistant calls**. It
+writes the complete artifact schema with skipped/planned evidence. It does not
+prove that the containers or endpoints are healthy.
+
+### A.3 Read-only operational health collection
+
+```bash
+.venv/bin/python scripts/phase10_live_validation.py --mode health --run-live
+```
+
+Health mode is read-only and does not produce audio, so it bypasses the typed
+audio-action confirmation. If the admin port is not reachable from the host,
+the harness uses a narrowly scoped, read-only `docker exec` query inside
+`wyoming-s2cpp-tts`; it does not expose a port or change the container.
+
+### A.4 Active modes (two explicit opt-ins)
+
+Every audio-producing or HA-mutating scenario requires both `--run-live` and
+typing `I-UNDERSTAND-THIS-IS-LIVE` at the prompt.
+
+```bash
+.venv/bin/python scripts/phase10_live_validation.py --mode normal --run-live
+.venv/bin/python scripts/phase10_live_validation.py --mode media-stop --run-live
+.venv/bin/python scripts/phase10_live_validation.py --mode direct-disconnect --run-live
+.venv/bin/python scripts/phase10_live_validation.py --mode overlap-recovery --run-live
+.venv/bin/python scripts/phase10_live_validation.py --mode vpe-barge-in --run-live
+```
+
+The `vpe-barge-in` scenario requires a person at the device; the harness does
+not fabricate a barge-in event. No active scenario is run automatically.
+
+### A.5 Artifact contract
+
+Every run, including skipped, partial, denied, or failed runs, writes these flat
+files under `artifacts/phase10/<UTC>/`:
+
+```text
+report.md
+report.json
+timeline.json
+assertions.json
+wrapper.log
+backend.log
+ha_states.json
+wrapper_status_before.json
+wrapper_status_during.json
+wrapper_status_after.json
+```
+
+Artifacts contain correlation evidence for `connection_id`, `synthesis_id`, and
+`text_fp` where available. Sensitive fields and authorization values are
+recursively redacted;synthesis plaintext is not intentionally persisted.
+
+### A.6 Interpretation
+
+A local media stop alone is not proof that wrapper cancellation or backend abort
+occurred. Treat missing correlation evidence as inconclusive, not success. A
+passing recovery requires the queue, pending, and waiting counts to return to
+empty, no active synthesis or stale pending phrase, no persistent busy/503
+state, and a successful next synthesis where required.
+
+### A.7 Mocked verification
+
+```bash
+.venv/bin/python -m pytest tests/test_phase10_live_validation.py tests/test_phase10_cancellation.py -q -o addopts=
+```
+
+These tests inject fake HA, Docker, admin, and Wyoming operations. They make
+no live infrastructure calls.

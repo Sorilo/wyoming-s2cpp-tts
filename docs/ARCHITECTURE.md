@@ -193,6 +193,83 @@ Phase 9B extracted the queue and scheduling logic into explicit domain objects i
 Observable behavior is unchanged from Phase 9. No image is published; production remains on wrapper `sha-7db26b7` and backend `sha-6e629d0`.
 
 
+## Progressive phrase synthesis (Phase 9.5)
+
+Phase 9.5 enables progressive TTS synthesis from streaming LLM text input:
+each complete phrase begins backend synthesis as soon as its terminal
+punctuation arrives, without waiting for the full response.
+
+### Components
+
+- **PhraseAccumulator** (``app/speech/phrases.py``): Purely functional
+  streaming text parser.  Incoming chunks are buffered and split at
+  deterministically confirmed sentence boundaries.  Terminal set:
+  ``.!?。！？``.  Decimal periods (digits on both sides), known
+  abbreviations (case‑insensitive), and ellipsis runs are protected.
+  Configurable bounds: soft fallback 160, maximum phrase 320, retained
+  buffer 640 characters.  Chunking‑invariant: identical output regardless
+  of where chunk boundaries fall.
+
+- **AudioEnvelope** (``app/speech/envelope.py``): Logical Wyoming audio
+  normaliser.  Emits ``AudioStart`` exactly once (first encountered
+  format locked), suppresses internal phrase ``AudioStop`` events,
+  rebuilds chunk timestamps from cumulative emitted PCM frames, validates
+  frame alignment, and closes with one terminal event (``AudioStop`` on
+  success; ``AudioStop`` then Wyoming ``Error`` on failure after partial
+  audio).
+
+- **StreamingCoordinator** (``app/speech/stream_coordinator.py``):
+  Connection‑owned coordinator.  A background synthesis task consumes
+  completed phrases from the accumulator, submits each through
+  ``SpeechScheduler.run()`` one at a time (serial FIFO, no overlapping
+  backend calls), and delivers output events through a bounded capacity‑1
+  async queue.  Supports both progressive text feeding (``feed_text`` /
+  ``feed_done``) and buffered legacy compatibility (``stream()``).
+
+### Handler integration
+
+- ``SynthesizeStart`` → creates coordinator, starts background consumer
+  task.
+- ``SynthesizeChunk`` → feeds text to accumulator immediately; tracks
+  non‑whitespace chunks for compatibility deduplication.
+- ``SynthesizeStop`` → feeds deferred compat text only if no streaming
+  chunks arrived, flushes residual, awaits consumer, emits
+  ``SynthesizeStopped`` if client still connected.
+- Disconnect/cancellation → cancels coordinator, drains pending phrases,
+  closes generators.
+
+### Timeout and counter semantics
+
+- Queue‑wait and synthesis deadlines apply **per phrase** (inherited from
+  ``SpeechScheduler``).  No new total‑stream timeout is added.
+- Cumulative counters (``admitted``, ``completed``, etc.) count individual
+  **phrase operations**, not logical Wyoming requests.  This is intentional
+  and documented — counters previously counted scheduler operations per
+  logical request; progressive streaming creates multiple scheduler
+  operations per request.
+
+### Compatibility deduplication
+
+- Streaming is authoritative once any non‑whitespace chunk is accepted.
+- If no non‑whitespace chunk arrived, the deferred compatibility text is
+  used once on stop.
+- No overlap comparison, prefix matching, or plaintext history.
+- Duplicate ``SynthesizeStart`` returns ``stream_already_active`` error.
+- Orphan chunk/stop events are no‑ops.
+- Legacy standalone ``Synthesize`` path is unchanged.
+
+### Cancellation and drain
+
+- ``cancel()`` atomically marks the session closed, clears accumulator and
+  pending handoff state, cancels the active scheduler connection, cancels
+  and awaits the background task, and puts a sentinel on the output queue
+  to unblock consumers.
+- ``drain()`` prevents later phrases from starting; the currently active
+  phrase (if any) receives the Phase 9C grace behaviour.
+- ``S2_STREAM=false`` selects buffered per‑phrase backend transport; it
+  does **not** disable progressive phrase coordination.
+
+
 ## Graceful shutdown (Phase 9C)
 
 The service has an explicit ServiceCoordinator lifecycle owner with a

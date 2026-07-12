@@ -53,6 +53,10 @@ DOCKER_INSPECT_FORMAT = (
 _SSH_HOST_RE = re.compile(r"^[A-Za-z0-9._:-]+$")
 _SSH_USER_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 _SINCE_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.+-]+Z?$")
+# RFC 3339 prefix pattern for local log filtering (SSH aliases may ignore --since)
+_RFC3339_PREFIX_RE = re.compile(
+    r"^(?P<ts>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))\s"
+)
 
 LISTED_OUTCOMES = frozenset({
     "local_playback_stopped_only",
@@ -72,6 +76,21 @@ LISTED_OUTCOMES = frozenset({
     "playback_continued",
     "recovery_successful",
     "recovery_failed",
+    "client_disconnected",
+    "wrapper_cancel_requested",
+    "wrapper_cancel_observed",
+    "backend_abort_observed",
+    "follow_up_synthesis_succeeded",
+    "wrapper_outcome_classification",
+    "backend_outcome_classification",
+    "follow_up_synthesis_correlated",
+    "original_fp",
+    "follow_up_fp",
+    "original_connection_id",
+    "original_synthesis_id",
+    "original_conn_closed",
+    "follow_up_connection_id",
+    "follow_up_synthesis_id",
 })
 
 REQUIRED_ARTIFACTS = (
@@ -128,6 +147,7 @@ class ValidationConfig:
     tts_voice: str = "cmu_bdl_male_us"
     vpe_media_player: str = "media_player.home_assistant_voice_0acbe7_media_player"
     vpe_assist_satellite: str = "assist_satellite.home_assistant_voice_0acbe7_assist_satellite"
+    disconnect_marker: str | None = None
 
     def __post_init__(self) -> None:
         if self.ha_token_env_var:
@@ -327,6 +347,31 @@ def _extract_json_from_line(line: str) -> dict[str, Any] | None:
     return None
 
 
+def _parse_rfc3339_prefix(line: str) -> str | None:
+    """Extract RFC 3339 timestamp prefix from a log line, if present."""
+    m = _RFC3339_PREFIX_RE.match(line)
+    return m.group("ts") if m else None
+
+
+def _post_filter_logs_since(lines: list[str], since_utc: str) -> list[str]:
+    """Filter log lines >= since_utc using local RFC 3339 prefix parsing.
+
+    SSH aliases return full tails despite --since, so we parse prefixes
+    locally and filter. Lines without a parseable timestamp are included
+    (they may be continuation lines or errors).
+    """
+    if not since_utc:
+        return list(lines)
+    filtered: list[str] = []
+    for line in lines:
+        ts = _parse_rfc3339_prefix(line)
+        if ts is None:
+            filtered.append(line)
+        elif ts >= since_utc:
+            filtered.append(line)
+    return filtered
+
+
 def parse_wrapper_logs(lines: list[str]) -> dict[str, list[dict[str, Any]]]:
     """Parse wrapper JSON log lines, grouped by connection_id."""
     grouped: dict[str, list[dict[str, Any]]] = {}
@@ -513,6 +558,516 @@ def distinguish_outcome(terminal_reason: str) -> str:
     else:
         return "UNKNOWN"
 
+
+
+# ── Phase 10 Direct-Disconnect assertions ──────────────────────────
+
+def assert_client_received_audio_before_disconnect(
+    disc_result: dict[str, Any],
+) -> AssertionResult:
+    """Assert the client received at least one audio chunk before disconnecting."""
+    got_chunk = disc_result.get("got_chunk", False)
+    event_count = disc_result.get("event_count", 0)
+    passed = got_chunk and event_count > 0
+    return AssertionResult(
+        name="client_received_audio_before_disconnect",
+        passed=passed,
+        detail=f"got_chunk={got_chunk}, event_count={event_count}",
+        evidence={"got_chunk": got_chunk, "event_count": event_count},
+    )
+
+
+def assert_client_disconnected(
+    disc_result: dict[str, Any],
+) -> AssertionResult:
+    """Assert the client disconnect outcome was recorded."""
+    outcome = disc_result.get("outcome", "error")
+    passed = outcome == "client_disconnected"
+    return AssertionResult(
+        name="client_disconnected",
+        passed=passed,
+        detail=f"outcome={outcome}",
+        evidence={"outcome": outcome},
+    )
+
+
+def assert_active_state_observed_before_disconnect_or_cleanup(
+    snap_during: dict[str, Any],
+) -> AssertionResult:
+    """Assert active synthesis state was captured during disconnect."""
+    is_active = snap_during.get("is_active", False)
+    has_active = snap_during.get("has_active_synthesis", False)
+    passed = is_active or has_active
+    return AssertionResult(
+        name="active_state_observed_before_disconnect_or_cleanup",
+        passed=passed,
+        detail=f"is_active={is_active}, has_active_synthesis={has_active}",
+        evidence={"is_active": is_active, "has_active_synthesis": has_active},
+    )
+
+
+def assert_original_request_terminal_state_known(
+    wrapper_outcome: str,
+) -> AssertionResult:
+    """Assert the original request's terminal state is known (not unknown)."""
+    passed = wrapper_outcome != "unknown"
+    return AssertionResult(
+        name="original_request_terminal_state_known",
+        passed=passed,
+        detail=f"wrapper_outcome={wrapper_outcome}",
+        evidence={"wrapper_outcome": wrapper_outcome},
+    )
+
+
+def assert_wrapper_cancel_observed(
+    wrapper_outcome: str,
+) -> AssertionResult:
+    """Assert that wrapper cancellation was observed.  Mandatory: fails if
+    cancellation was expected but unobserved.
+    """
+    passed = wrapper_outcome == "cancelled"
+    return AssertionResult(
+        name="wrapper_cancel_observed",
+        passed=passed,
+        detail=f"wrapper_outcome={wrapper_outcome} (expected=cancelled)",
+        evidence={"wrapper_outcome": wrapper_outcome},
+    )
+
+
+def assert_original_completed_normally(
+    wrapper_outcome: str,
+) -> AssertionResult:
+    """Assert the original synthesis completed normally (PARTIAL finding)."""
+    passed = wrapper_outcome == "completed normally"
+    return AssertionResult(
+        name="original_completed_normally",
+        passed=passed,
+        detail=f"wrapper_outcome={wrapper_outcome}",
+        evidence={"wrapper_outcome": wrapper_outcome},
+    )
+
+
+def assert_backend_terminal_state_known(
+    backend_outcome: str,
+) -> AssertionResult:
+    """Assert the backend's terminal state is known (not unknown)."""
+    passed = backend_outcome != "unknown"
+    return AssertionResult(
+        name="backend_terminal_state_known",
+        passed=passed,
+        detail=f"backend_outcome={backend_outcome}",
+        evidence={"backend_outcome": backend_outcome},
+    )
+
+
+def assert_scheduler_returned_to_zero(
+    status: dict[str, Any],
+) -> AssertionResult:
+    """Assert scheduler_depth returned to zero."""
+    depth = status.get("scheduler_depth", -1)
+    passed = depth == 0
+    return AssertionResult(
+        name="scheduler_returned_to_zero",
+        passed=passed,
+        detail=f"scheduler_depth={depth}",
+        evidence={"scheduler_depth": depth},
+    )
+
+
+def assert_pending_returned_to_zero(
+    status: dict[str, Any],
+) -> AssertionResult:
+    """Assert scheduler_pending returned to zero."""
+    pending = status.get("scheduler_pending", -1)
+    passed = pending == 0
+    return AssertionResult(
+        name="pending_returned_to_zero",
+        passed=passed,
+        detail=f"scheduler_pending={pending}",
+        evidence={"scheduler_pending": pending},
+    )
+
+
+def assert_waiting_returned_to_zero(
+    status: dict[str, Any],
+) -> AssertionResult:
+    """Assert scheduler_waiting returned to zero."""
+    waiting = status.get("scheduler_waiting", -1)
+    passed = waiting == 0
+    return AssertionResult(
+        name="waiting_returned_to_zero",
+        passed=passed,
+        detail=f"scheduler_waiting={waiting}",
+        evidence={"scheduler_waiting": waiting},
+    )
+
+
+def assert_active_synthesis_false(
+    status: dict[str, Any],
+) -> AssertionResult:
+    """Assert has_active_synthesis is False."""
+    has_active = status.get("has_active_synthesis", True)
+    passed = not has_active
+    return AssertionResult(
+        name="active_synthesis_false",
+        passed=passed,
+        detail=f"has_active_synthesis={has_active}",
+        evidence={"has_active_synthesis": has_active},
+    )
+
+
+def assert_wrapper_ready(
+    status: dict[str, Any],
+) -> AssertionResult:
+    """Assert wrapper ready flag is True."""
+    ready = status.get("ready", False)
+    passed = ready is True
+    return AssertionResult(
+        name="wrapper_ready",
+        passed=passed,
+        detail=f"ready={ready}",
+        evidence={"ready": ready},
+    )
+
+
+def assert_no_busy_503_latch(
+    status: dict[str, Any],
+) -> AssertionResult:
+    """Assert no persistent 503/busy latch remains."""
+    busy = status.get("busy", False)
+    has_active = status.get("has_active_synthesis", False)
+    pending = status.get("scheduler_pending", 0)
+    passed = not busy and not has_active and pending == 0
+    return AssertionResult(
+        name="no_busy_503_latch",
+        passed=passed,
+        detail=f"busy={busy}, active={has_active}, pending={pending}",
+        evidence={"busy": busy, "has_active_synthesis": has_active, "scheduler_pending": pending},
+    )
+
+
+def assert_follow_up_request_protocol_valid(
+    follow_up_result: dict[str, Any],
+) -> AssertionResult:
+    """Assert follow-up request protocol_valid is True."""
+    protocol_valid = follow_up_result.get("protocol_valid", False)
+    passed = protocol_valid is True
+    return AssertionResult(
+        name="follow_up_request_protocol_valid",
+        passed=passed,
+        detail=f"protocol_valid={protocol_valid}",
+        evidence={"protocol_valid": protocol_valid},
+    )
+
+
+def assert_follow_up_request_pcm_bytes_gt_zero(
+    follow_up_result: dict[str, Any],
+) -> AssertionResult:
+    """Assert follow-up request returned PCM audio bytes > 0."""
+    pcm_bytes = follow_up_result.get("pcm_bytes", 0)
+    passed = pcm_bytes > 0
+    return AssertionResult(
+        name="follow_up_request_pcm_bytes_gt_zero",
+        passed=passed,
+        detail=f"pcm_bytes={pcm_bytes}",
+        evidence={"pcm_bytes": pcm_bytes},
+    )
+
+
+def assert_follow_up_request_completed(
+    followup_correlation: dict[str, Any],
+) -> AssertionResult:
+    """Assert follow-up request was completed (requires correlated terminal event)."""
+    has_events = not followup_correlation.get("wrapper_unknown", True)
+    has_synthesis = followup_correlation.get("has_synthesis_received", False)
+    passed = has_events and has_synthesis
+    return AssertionResult(
+        name="follow_up_request_completed",
+        passed=passed,
+        detail=f"correlated={has_events}, synthesis_received={has_synthesis}",
+        evidence={"wrapper_unknown": followup_correlation.get("wrapper_unknown", True),
+                  "has_synthesis_received": has_synthesis},
+    )
+
+
+def assert_follow_up_scheduler_recovered(
+    status: dict[str, Any],
+) -> AssertionResult:
+    """Assert scheduler recovered after follow-up request."""
+    depth = status.get("scheduler_depth", -1)
+    pending = status.get("scheduler_pending", -1)
+    has_active = status.get("has_active_synthesis", True)
+    passed = depth == 0 and pending == 0 and not has_active
+    return AssertionResult(
+        name="follow_up_scheduler_recovered",
+        passed=passed,
+        detail=f"depth={depth}, pending={pending}, active={has_active}",
+        evidence={"scheduler_depth": depth, "scheduler_pending": pending,
+                  "has_active_synthesis": has_active},
+    )
+
+
+def assert_idle_timeout_not_reached(
+    idle_status: dict[str, Any] | None,
+) -> AssertionResult:
+    """Assert the idle wait did NOT timeout — terminal idle was reached."""
+    passed = idle_status is not None and "error" not in idle_status
+    return AssertionResult(
+        name="idle_timeout_not_reached",
+        passed=passed,
+        detail=f"idle_status={'reached' if passed else 'timeout'}",
+        evidence={"idle_reached": passed},
+    )
+
+
+# ── Phase 10 Direct-Disconnect classification ──────────────────────
+
+def classify_wrapper_outcome(events: list[dict[str, Any]]) -> str:
+    """Classify wrapper synthesis outcome: cancelled / completed normally
+    / failed / timed out / client disconnected / unknown.
+
+    Uses ONLY production event contracts from app/wyoming_server.py:
+      - synthesis_cancelled          -> cancelled
+      - synthesis_cancel_requested   -> cancelled (cancellation initiated)
+      - client_disconnected          -> client disconnected (peer disconnect)
+      - syn_stopped                  -> completed normally
+      - audio_out with status="ok"   -> completed normally
+      - synthesis_error              -> failed
+      - synthesis_timeout            -> timed out
+
+    Precedence:
+      1. Cancellation -> cancelled
+      2. Client disconnect -> client disconnected
+      3. Timeout -> timed out
+      4. Error -> failed
+      5. Normal completion -> completed normally
+      6. Otherwise -> unknown
+    """
+    if not events:
+        return "unknown"
+
+    def _has(*names: str) -> bool:
+        return any(e.get("event") in names for e in events)
+
+    has_cancellation = _has("synthesis_cancelled", "synthesis_cancel_requested")
+    has_client_disconnect = _has("client_disconnected")
+    has_timeout = _has("synthesis_timeout")
+    has_error = _has("synthesis_error")
+    has_completed = (
+        _has("syn_stopped")
+        or any(e.get("event") == "audio_out" and e.get("status") == "ok" for e in events)
+    )
+
+    if has_cancellation:
+        return "cancelled"
+    if has_client_disconnect:
+        return "client disconnected"
+    if has_timeout:
+        return "timed out"
+    if has_error:
+        return "failed"
+    if has_completed:
+        return "completed normally"
+    return "unknown"
+
+
+def classify_backend_outcome(events: list[dict[str, Any]]) -> str:
+    """Classify backend request outcome: aborted early / completed normally
+    / failed / unknown.
+
+    Uses production event contracts:
+      - backend_stream_done status=client_disconnected -> aborted early
+      - backend_done status=client_disconnected         -> aborted early
+      - backend_stream_done status=ok                   -> completed normally
+      - backend_done status=ok                          -> completed normally
+      - backend_stream_done status=error                -> failed
+      - backend_done status=error                       -> failed
+      - backend_request_aborted (legacy)                -> aborted early
+
+    Precedence: abort > error > completed > unknown.
+    """
+    if not events:
+        return "unknown"
+
+    has_abort = any(
+        (e.get("event") in ("backend_stream_done", "backend_done")
+         and e.get("status") == "client_disconnected")
+        or e.get("event") == "backend_request_aborted"
+        for e in events
+    )
+    has_error = any(
+        (e.get("event") in ("backend_stream_done", "backend_done")
+         and e.get("status") == "error")
+        or e.get("event") == "backend_error"
+        for e in events
+    )
+    has_completed = any(
+        (e.get("event") in ("backend_stream_done", "backend_done")
+         and e.get("status") == "ok")
+        or e.get("event") == "backend_completed"
+        for e in events
+    )
+
+    if has_abort:
+        return "aborted early"
+    if has_error:
+        return "failed"
+    if has_completed:
+        return "completed normally"
+    return "unknown"
+
+
+def correlate_disconnect_logs(
+    wrapper_logs: list[str],
+    backend_logs: list[str],
+    original_text_fp: str,
+) -> dict[str, Any]:
+    """Correlate wrapper and backend logs by text_fp, connection_id, synthesis_id.
+
+    Returns a dict with:
+      - connection_id: str | None
+      - synthesis_id: str | None
+      - wrapper_events: list of matched wrapper events
+      - backend_events: list of matched backend events
+      - backend_events_count: int
+      - has_conn_closed: bool
+      - has_synthesis_received: bool
+      - wrapper_unknown: bool (True if no matching events found)
+    """
+    result: dict[str, Any] = {
+        "connection_id": None,
+        "synthesis_id": None,
+        "wrapper_events": [],
+        "backend_events": [],
+        "backend_events_count": 0,
+        "has_conn_closed": False,
+        "has_synthesis_received": False,
+        "wrapper_unknown": True,
+    }
+
+    if not wrapper_logs:
+        return result
+
+    # Parse all wrapper events matching text_fp
+    by_fp = parse_wrapper_logs_by_text_fp(wrapper_logs)
+    wrapper_events = by_fp.get(original_text_fp, [])
+    if not wrapper_events:
+        return result
+
+    result["wrapper_unknown"] = False
+    result["wrapper_events"] = wrapper_events
+
+    # Extract connection_id and synthesis_id from matched events
+    for ev in wrapper_events:
+        if ev.get("connection_id") and not result["connection_id"]:
+            result["connection_id"] = ev["connection_id"]
+        if ev.get("synthesis_id") and not result["synthesis_id"]:
+            result["synthesis_id"] = ev["synthesis_id"]
+        if ev.get("event") == "conn_closed":
+            result["has_conn_closed"] = True
+        if ev.get("event") == "synthesize_received":
+            result["has_synthesis_received"] = True
+
+    # Also scan ALL wrapper events (not just text_fp-matched) for
+    # connection-scoped events like conn_closed that may lack text_fp.
+    conn_id = result["connection_id"]
+    if conn_id:
+        all_events = []
+        for line in wrapper_logs:
+            ev = _extract_json_from_line(line)
+            if ev is not None:
+                all_events.append(ev)
+        for ev in all_events:
+            if ev.get("connection_id") == conn_id:
+                if ev.get("event") == "conn_closed":
+                    result["has_conn_closed"] = True
+                if ev.get("event") == "synthesize_received":
+                    result["has_synthesis_received"] = True
+
+    # Correlate backend events by synthesis_id
+    synthesis_id = result["synthesis_id"]
+    if synthesis_id and backend_logs:
+        backend_parsed = []
+        for line in backend_logs:
+            ev = _extract_json_from_line(line)
+            if ev and ev.get("synthesis_id") == synthesis_id:
+                backend_parsed.append(ev)
+        result["backend_events"] = backend_parsed
+        result["backend_events_count"] = len(backend_parsed)
+
+    return result
+
+
+def verify_follow_up_synthesis(result: dict[str, Any]) -> AssertionResult:
+    """Verify a follow-up synthesis result is valid."""
+    protocol_valid = result.get("protocol_valid", False)
+    pcm_bytes = result.get("pcm_bytes", 0)
+    duration_s = result.get("duration_s", 0.0)
+    errors = result.get("errors", [])
+
+    passed = protocol_valid and pcm_bytes > 0 and len(errors) == 0
+    return AssertionResult(
+        name="follow_up_synthesis_succeeded",
+        passed=passed,
+        detail=f"valid={protocol_valid}, pcm={pcm_bytes}B, dur={duration_s}s, errs={len(errors)}",
+        evidence={"protocol_valid": protocol_valid, "pcm_bytes": pcm_bytes,
+                  "duration_s": duration_s, "errors": errors},
+    )
+
+
+def get_disconnect_texts(cfg: ValidationConfig, *, marker: str | None = None) -> dict[str, Any]:
+    """Return original and follow-up text markers with fingerprints.
+
+    Each call generates a unique per-call nonce (secrets.token_hex(8)) embedded
+    in both texts.  An injectable marker parameter allows deterministic test
+    markers.  The original and follow-up texts are always distinct and unique.
+
+    Plaintext markers are NOT intentionally included in the report — only
+    fingerprints and correlation IDs are recorded.
+    """
+    if marker is None:
+        import secrets
+        marker = secrets.token_hex(8)
+
+    original = f"{cfg.tts_text} [disconnect-validation-{marker}]"
+    follow_up = f"{cfg.tts_text} [recovery-validation-{marker}]"
+    if not original.endswith("."):
+        original = original + "."
+    if not follow_up.endswith("."):
+        follow_up = follow_up + "."
+
+    return {
+        "original": original,
+        "original_fp": _compute_text_fp(original),
+        "follow_up": follow_up,
+        "follow_up_fp": _compute_text_fp(follow_up),
+        "marker": marker,
+    }
+
+
+def build_direct_disconnect_status_snapshot(
+    phase: str,
+    is_active: bool,
+    admin_status: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a flat status snapshot compatible with admin status file output.
+
+    Snapshots must only be marked as 'during' (is_active=True) after
+    audio chunk/activity has been confirmed.
+
+    Returns a flat dict (not nested phase-only) — the admin_status data
+    is merged at the top level so writers that expect flat keys
+    (scheduler_depth, has_active_synthesis, etc.) remain compatible.
+    """
+    snap: dict[str, Any] = {
+        "phase": phase,
+        "is_active": is_active,
+        "timestamp_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    if admin_status is not None:
+        # Merge admin_status fields flat so status files are compatible
+        snap.update(admin_status)
+    return snap
 
 # ── Timeline / report generation ───────────────────────────────────
 
@@ -712,7 +1267,11 @@ async def collect_docker_logs(
             result = await subprocess_runner.run(cmd, capture_output=True, timeout=15)
             if result.returncode == 0:
                 decoded = result.stdout.decode(errors="replace").strip()
-                logs[name] = decoded.split("\n") if decoded else []
+                lines = decoded.split("\n") if decoded else []
+                # Post-filter locally because SSH aliases may ignore --since
+                if since is not None:
+                    lines = _post_filter_logs_since(lines, since)
+                logs[name] = lines
             else:
                 err = result.stderr.decode(errors="replace").strip()
                 logs[name] = [f"ERROR: docker logs failed: {err}"]
@@ -948,8 +1507,14 @@ async def wyoming_disconnect_during_stream(
     port: int = 10200,
     voice: str = "cmu_bdl_male_us",
     timeout: float = 30.0,
+    on_first_audio: Any = None,
 ) -> dict[str, Any]:
     """Connect to Wyoming, start synthesis, then disconnect during active stream.
+
+    If *on_first_audio* is provided, it is an async callable invoked
+    immediately after the first non-empty audio chunk is received but
+    BEFORE the writer is closed — allowing capture_admin_status while
+    the disconnect request is still in flight.
 
     Returns dict with outcome classification.
     """
@@ -979,6 +1544,9 @@ async def wyoming_disconnect_during_stream(
                     chunk = AudioChunk.from_event(ev)
                     if chunk.audio:
                         got_chunk = True
+                        # Invoke callback while disconnect is still in flight
+                        if on_first_audio is not None:
+                            await on_first_audio()
             # Client is now disconnected by context manager exit
 
         return {
@@ -1279,42 +1847,311 @@ async def _run_direct_disconnect_mode(
     connector_factory: Any = None,
     ha_event_watcher: Any = None,
 ) -> ValidationReport:
-    """Direct-disconnect mode: close Wyoming client during active stream."""
+    """Direct-disconnect mode: close Wyoming client during active stream.
+
+    Produces 17+ explicit assertions with unique names (no broad old assertions
+    duplicated).  Classification PARTIAL when original normal completion +
+    cleanup/recovery.  report.passed is False when cancellation expected but
+    unobserved.  Correlation IDs/fps recorded without plaintext.
+    """
+    # 1. Health baseline
     report = await _run_health_mode(cfg, report, artifact_dir,
                                      subprocess_runner=subprocess_runner,
                                      http_client_factory=http_client_factory,
                                      connector_factory=connector_factory,
                                      ha_event_watcher=ha_event_watcher)
 
-    status_before = await capture_admin_status(admin_url=cfg.admin_url,
-                                                http_client_factory=http_client_factory if not cfg.dry_run else None)
-    report.status_snapshots.append(status_before)
+    # 2. Establish UTC baseline for log collection timestamps
+    baseline_utc = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+    # 3. Get unique text markers (per-call nonce)
+    texts = get_disconnect_texts(cfg, marker=cfg.disconnect_marker)
+    original_text = texts["original"]
+    original_fp = texts["original_fp"]
+    follow_up_text = texts["follow_up"]
+    follow_up_fp = texts["follow_up_fp"]
+    marker = texts.get("marker", "unknown")
+
+    # Record fingerprints (no plaintext) in outcomes
+    report.outcomes["original_fp"] = original_fp
+    report.outcomes["follow_up_fp"] = follow_up_fp
+
+    # 4. Take BEFORE snapshot (not active)
+    status_before = await capture_admin_status(
+        admin_url=cfg.admin_url,
+        http_client_factory=http_client_factory if not cfg.dry_run else None,
+        subprocess_runner=subprocess_runner if not cfg.dry_run else None,
+    )
+    snap_before = build_direct_disconnect_status_snapshot(
+        phase="before", is_active=False, admin_status=status_before,
+    )
+    report.status_snapshots.append(snap_before)
 
     if cfg.dry_run:
-        report.outcomes["wrapper_synthesis_cancelled"] = "dry-run"
-    else:
-        disc_result = await wyoming_disconnect_during_stream(
-            text=cfg.tts_text,
-            host=cfg.wyoming_host,
-            port=cfg.wyoming_port,
-            voice=cfg.tts_voice,
+        report.outcomes["client_disconnected"] = "dry-run"
+        report.outcomes["follow_up_synthesis_succeeded"] = "dry-run"
+        report.outcomes["wrapper_cancel_observed"] = "dry-run"
+        report.outcomes["original_fp"] = "dry-run"
+        report.outcomes["follow_up_fp"] = "dry-run"
+        snap_during = build_direct_disconnect_status_snapshot(
+            phase="during", is_active=True, admin_status={"skipped": True},
         )
-        report.outcomes["wrapper_synthesis_cancelled"] = disc_result.get("outcome", "unknown")
-        report.timeline.append({
-            "timestamp": time.monotonic(),
-            "event": "direct_disconnect",
-            "result": disc_result,
-        })
+        report.status_snapshots.append(snap_during)
+        snap_after = build_direct_disconnect_status_snapshot(
+            phase="after", is_active=False, admin_status={"skipped": True},
+        )
+        report.status_snapshots.append(snap_after)
+        return report
 
-    # Recovery: verify scheduler recovers
-    status_after = await capture_admin_status(admin_url=cfg.admin_url,
-                                               http_client_factory=http_client_factory if not cfg.dry_run else None)
-    report.status_snapshots.append(status_after)
+    # ── LIVE PATH ────────────────────────────────────────────────
+
+    # Capture DURING snapshot WHILE disconnect is in flight via callback
+    during_captured: dict[str, Any] | None = None
+
+    async def _capture_during_disconnect() -> None:
+        """Callback: capture admin status after first audio chunk but before close."""
+        nonlocal during_captured
+        during_captured = await capture_admin_status(
+            admin_url=cfg.admin_url,
+            http_client_factory=http_client_factory,
+            subprocess_runner=subprocess_runner,
+        )
+
+    # 5. Execute Wyoming disconnect during active stream with callback
+    disc_result = await wyoming_disconnect_during_stream(
+        text=original_text,
+        host=cfg.wyoming_host,
+        port=cfg.wyoming_port,
+        voice=cfg.tts_voice,
+        on_first_audio=_capture_during_disconnect,
+    )
+    report.timeline.append({
+        "timestamp": time.monotonic(),
+        "event": "direct_disconnect_executed",
+        "result": {k: v for k, v in disc_result.items()
+                    if k in ("outcome", "got_chunk", "event_count")},
+    })
+
+    # Record client disconnect outcome
+    client_outcome = disc_result.get("outcome", "error")
+    report.outcomes["client_disconnected"] = client_outcome
+
+    # ── Explicit disconnect assertions ──
+    report.assertions.append(assert_client_received_audio_before_disconnect(disc_result))
+    report.assertions.append(assert_client_disconnected(disc_result))
+
+    # 6. Take DURING snapshot (active — only proceed after audio chunk confirmed)
+    status_during = during_captured or await capture_admin_status(
+        admin_url=cfg.admin_url,
+        http_client_factory=http_client_factory,
+        subprocess_runner=subprocess_runner,
+    )
+    snap_during = build_direct_disconnect_status_snapshot(
+        phase="during",
+        is_active=disc_result.get("got_chunk", False),
+        admin_status=status_during,
+    )
+    report.status_snapshots.append(snap_during)
+    report.assertions.append(assert_active_state_observed_before_disconnect_or_cleanup(snap_during))
+
+    # 7. Wait for terminal + idle state
+    idle_status = await _wait_for_terminal_idle(cfg, http_client_factory, subprocess_runner, timeout=15.0)
+    # Idle timeout explicit failing assertion
+    report.assertions.append(assert_idle_timeout_not_reached(idle_status))
+
+    # 8. Collect logs since baseline
+    all_logs = await collect_docker_logs(
+        container_names=cfg.container_names,
+        subprocess_runner=subprocess_runner,
+        since=baseline_utc,
+    )
+    wrapper_log_lines = all_logs.get("wyoming-s2cpp-tts", [])
+    backend_log_lines = all_logs.get("s2cpp-backend", [])
+    report.wrapper_logs = wrapper_log_lines
+    report.backend_logs = backend_log_lines
+
+    # 9. Correlate logs and classify outcomes
+    correlation = correlate_disconnect_logs(
+        wrapper_logs=wrapper_log_lines,
+        backend_logs=backend_log_lines,
+        original_text_fp=original_fp,
+    )
+
+    # Record correlation IDs (no plaintext) in outcomes
+    conn_id = correlation.get("connection_id")
+    synth_id = correlation.get("synthesis_id")
+    if conn_id:
+        report.outcomes["original_connection_id"] = conn_id
+    if synth_id:
+        report.outcomes["original_synthesis_id"] = synth_id
+    report.outcomes["original_conn_closed"] = str(correlation.get("has_conn_closed", False))
+
+    # Classify wrapper outcome
+    wrapper_events = correlation.get("wrapper_events", [])
+    wrapper_outcome = classify_wrapper_outcome(wrapper_events)
+
+    # ── Explicit wrapper assertions ──
+    report.assertions.append(assert_original_request_terminal_state_known(wrapper_outcome))
+
+    if wrapper_outcome == "cancelled":
+        report.assertions.append(assert_wrapper_cancel_observed(wrapper_outcome))
+        report.outcomes["wrapper_cancel_observed"] = "true"
+        report.outcomes["wrapper_cancel_requested"] = "true"
+    elif wrapper_outcome == "client disconnected":
+        report.assertions.append(assert_wrapper_cancel_observed(wrapper_outcome))
+        report.outcomes["wrapper_cancel_observed"] = "client_disconnected"
+        report.outcomes["wrapper_cancel_requested"] = "false"
+    elif wrapper_outcome == "completed normally":
+        # PARTIAL classification: normal completion + cleanup/recovery
+        report.assertions.append(assert_wrapper_cancel_observed(wrapper_outcome))
+        report.assertions.append(assert_original_completed_normally(wrapper_outcome))
+        report.outcomes["old_synthesis_completed_normally"] = "true"
+        report.outcomes["wrapper_cancel_requested"] = "PARTIAL (normal completion + recovery)"
+        report.outcomes["wrapper_cancel_observed"] = "PARTIAL (normal completion + recovery)"
+    else:
+        report.assertions.append(assert_wrapper_cancel_observed(wrapper_outcome))
+        report.outcomes["wrapper_cancel_requested"] = "false"
+        if correlation.get("wrapper_unknown", True):
+            report.outcomes["wrapper_cancel_observed"] = "unknown (incomplete logs)"
+
+    # Classify backend outcome
+    backend_events = correlation.get("backend_events", [])
+    backend_outcome = classify_backend_outcome(backend_events)
+    report.assertions.append(assert_backend_terminal_state_known(backend_outcome))
+    report.outcomes["backend_abort_observed"] = (
+        "true" if backend_outcome == "aborted early" else "false"
+    )
+    if not backend_events:
+        report.outcomes["backend_abort_observed"] = "unknown (no backend events correlated)"
+
+    # Record classification details
+    report.outcomes["wrapper_outcome_classification"] = wrapper_outcome
+    report.outcomes["backend_outcome_classification"] = backend_outcome
+
+    # ── Scheduler recovery assertions (narrow, non-duplicated) ──
+    if idle_status is not None and "error" not in idle_status:
+        report.assertions.append(assert_scheduler_returned_to_zero(idle_status))
+        report.assertions.append(assert_pending_returned_to_zero(idle_status))
+        report.assertions.append(assert_waiting_returned_to_zero(idle_status))
+        report.assertions.append(assert_active_synthesis_false(idle_status))
+        report.assertions.append(assert_wrapper_ready(idle_status))
+        report.assertions.append(assert_no_busy_503_latch(idle_status))
+
+    # 10. Execute distinct follow-up Wyoming synthesis through AudioStop
+    follow_up_result = await wyoming_synthesize(
+        text=follow_up_text,
+        host=cfg.wyoming_host,
+        port=cfg.wyoming_port,
+        voice=cfg.tts_voice,
+    )
+    report.timeline.append({
+        "timestamp": time.monotonic(),
+        "event": "follow_up_synthesis_executed",
+        "result": {k: v for k, v in follow_up_result.items()
+                    if k in ("pcm_bytes", "duration_s", "protocol_valid", "errors")},
+    })
+
+    # ── Explicit follow-up assertions ──
+    report.assertions.append(assert_follow_up_request_protocol_valid(follow_up_result))
+    report.assertions.append(assert_follow_up_request_pcm_bytes_gt_zero(follow_up_result))
+    report.assertions.append(verify_follow_up_synthesis(follow_up_result))
+    report.outcomes["follow_up_synthesis_succeeded"] = str(
+        follow_up_result.get("protocol_valid", False)
+    )
+
+    # 10b. Collect logs again after follow-up and correlate separately
+    followup_logs = await collect_docker_logs(
+        container_names=cfg.container_names,
+        subprocess_runner=subprocess_runner,
+        since=baseline_utc,
+    )
+    followup_wrapper = followup_logs.get("wyoming-s2cpp-tts", [])
+    followup_correlation = correlate_disconnect_logs(
+        wrapper_logs=followup_wrapper,
+        backend_logs=followup_logs.get("s2cpp-backend", []),
+        original_text_fp=follow_up_fp,
+    )
+
+    # Record follow-up correlation IDs
+    fw_conn = followup_correlation.get("connection_id")
+    fw_synth = followup_correlation.get("synthesis_id")
+    if fw_conn:
+        report.outcomes["follow_up_connection_id"] = fw_conn
+    if fw_synth:
+        report.outcomes["follow_up_synthesis_id"] = fw_synth
+
+    report.assertions.append(assert_follow_up_request_completed(followup_correlation))
+    report.outcomes["follow_up_synthesis_correlated"] = str(
+        not followup_correlation.get("wrapper_unknown", True)
+    )
+
+    # 11. Take AFTER snapshot (not active)
+    status_after = await capture_admin_status(
+        admin_url=cfg.admin_url,
+        http_client_factory=http_client_factory,
+        subprocess_runner=subprocess_runner,
+    )
+    snap_after = build_direct_disconnect_status_snapshot(
+        phase="after", is_active=False, admin_status=status_after,
+    )
+    report.status_snapshots.append(snap_after)
+
+    # ── Final recovery assertion ──
     if "error" not in status_after:
-        report.assertions.append(assert_queue_pending_zero(status_after))
-        report.assertions.append(assert_no_active_synthesis(status_after))
+        report.assertions.append(assert_follow_up_scheduler_recovered(status_after))
 
     return report
+
+async def _wait_for_terminal_idle(
+    cfg: ValidationConfig,
+    http_client_factory: Any,
+    subprocess_runner: Any,
+    timeout: float = 15.0,
+) -> dict[str, Any] | None:
+    """Wait for the scheduler to reach terminal idle state (quiescent).
+
+    Checks: has_active_synthesis, scheduler_depth, scheduler_pending,
+    scheduler_waiting, ready, busy. Uses retry delta/latch to detect
+    progress. Returns the final status snapshot or None on timeout.
+    """
+    deadline = time.monotonic() + timeout
+    last_pending: int | None = None
+    stall_count = 0
+    while time.monotonic() < deadline:
+        status = await capture_admin_status(
+            admin_url=cfg.admin_url,
+            http_client_factory=http_client_factory,
+            subprocess_runner=subprocess_runner,
+        )
+        if "error" in status:
+            await asyncio.sleep(0.5)
+            continue
+
+        has_active = status.get("has_active_synthesis", False)
+        pending = status.get("scheduler_pending", 0)
+        depth = status.get("scheduler_depth", 0)
+        waiting = status.get("scheduler_waiting", 0)
+        ready = status.get("ready", True)
+        busy = status.get("busy", False)
+
+        # Core idle check: no active, zero depth/pending, not busy
+        if not has_active and pending == 0 and depth == 0 and not busy:
+            return status
+
+        # Retry delta/latch: detect stall
+        if last_pending is not None and pending == last_pending and depth > 0:
+            stall_count += 1
+        else:
+            stall_count = 0
+        last_pending = pending
+
+        # If stalled for > 5 iterations, proceed with what we have
+        if stall_count >= 5:
+            return status
+
+        await asyncio.sleep(0.5)
+    # Timeout — return None, caller proceeds with what we have
+    return None
 
 
 async def _run_overlap_recovery_mode(

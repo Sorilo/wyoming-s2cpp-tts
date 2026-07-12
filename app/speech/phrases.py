@@ -100,7 +100,7 @@ def _is_terminator(text: str, pos: int) -> bool:
     word = text[start:pos]
     if 1 <= len(word) <= 6 and word.lower() in _ABBREVIATIONS:
         i = pos + 1
-        while i < len(text) and text[i] in _WHITESPACE:
+        while i < len(text) and (text[i] in _WHITESPACE or text[i] in _CLOSERS):
             i += 1
         if i < len(text) and text[i].isalpha():
             return False  # abbreviation — not a boundary

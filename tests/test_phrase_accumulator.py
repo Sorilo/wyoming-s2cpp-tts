@@ -271,6 +271,13 @@ def test_abbreviation_mr():
     assert acc.flush() == "Mr. Jones arrived."
 
 
+def test_abbreviation_followed_by_closer_does_not_split():
+    acc = PhraseAccumulator()
+    phrases = acc.feed('Dr." Smith arrived.')
+    assert phrases == []
+    assert acc.flush() == 'Dr." Smith arrived.'
+
+
 def test_abbreviation_mrs():
     acc = PhraseAccumulator()
     phrases = acc.feed("Mrs. Jones arrived.")

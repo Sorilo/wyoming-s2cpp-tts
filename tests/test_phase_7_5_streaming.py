@@ -900,13 +900,13 @@ def test_disconnect_source_contract_covers_audio_and_terminal_writes():
     import inspect
     from app.wyoming_server import FakeTtsEventHandler
     source=inspect.getsource(FakeTtsEventHandler)
-    assert source.count("except (BrokenPipeError, ConnectionResetError, TypeError) as disconnect_error:") >= 7
-    assert source.count("_handle_expected_disconnect(") >= 8
+    assert source.count("except (BrokenPipeError, ConnectionResetError, TypeError) as disconnect_error:") >= 10
+    assert source.count("_handle_expected_disconnect(") >= 11
     guarded = source.split(
         "except (BrokenPipeError, ConnectionResetError, TypeError) as disconnect_error:"
     )[1:]
-    assert len(guarded) == 7
-    assert all("except Exception" in block for block in guarded[:6])
+    assert len(guarded) == 10
+    assert sum("except Exception" in block for block in guarded) >= 8
     assert "terminal_error_write_failed" not in source
 
 

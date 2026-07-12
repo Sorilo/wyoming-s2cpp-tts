@@ -1030,6 +1030,7 @@ class FakeTtsEventHandler(AsyncEventHandler):
         self._stream_consumer_error: Exception | None = None
         self._stream_synthesis_id: str | None = None
         self._stream_session: SynthesisSession | None = None
+        self._streaming_had_chunks: bool = False
 
     async def _synthesize_phrase(self, text: str) -> list[Event]:
         """Synthesize one scheduler-owned phrase using the established backend mode."""
@@ -1330,6 +1331,7 @@ class FakeTtsEventHandler(AsyncEventHandler):
             self._streaming_text_parts = []
             self._streaming_compat_text = ""
             self._streaming_compat_voice = None
+            self._streaming_had_chunks = False
             self._in_streaming_session = True
             # Resolve voice: client-requested > configured default > generic.
             start_data = event.data if event.data else {}
@@ -1379,6 +1381,8 @@ class FakeTtsEventHandler(AsyncEventHandler):
             # Phase 9.5: feed text through coordinator immediately
             if self._stream_coordinator is not None:
                 self._stream_coordinator.feed_text(chunk.text)
+                if chunk.text and chunk.text.strip():
+                    self._streaming_had_chunks = True
             else:
                 self._streaming_text_parts.append(chunk.text)
             return True
@@ -1391,8 +1395,8 @@ class FakeTtsEventHandler(AsyncEventHandler):
 
             # Phase 9.5: progressive path via coordinator
             if self._stream_coordinator is not None:
-                # If no phrases were produced yet, feed deferred compat text
-                if self._stream_coordinator._phrase_count == 0:
+                # Feed deferred compat text only if no non-whitespace chunks arrived
+                if not self._streaming_had_chunks:
                     compat = self._streaming_compat_text.strip()
                     if compat:
                         self._stream_coordinator.feed_text(compat)
@@ -1444,6 +1448,7 @@ class FakeTtsEventHandler(AsyncEventHandler):
                 self._streaming_text_parts = []
                 self._streaming_compat_text = ""
                 self._streaming_compat_voice = None
+                self._streaming_had_chunks = False
                 self._in_streaming_session = False
                 return True
 
@@ -1626,12 +1631,29 @@ class FakeTtsEventHandler(AsyncEventHandler):
                     if self._stream_session is not None:
                         await self._stream_session.disconnect()
                     await self._handle_expected_disconnect("streaming")
+                    self._stream_consumer_error = disconnect_error
+                    # Cancel coordinator to stop synthesis loop
+                    if self._stream_coordinator is not None:
+                        try:
+                            await self._stream_coordinator.cancel()
+                        except Exception:
+                            pass
                     break
                 except Exception:
                     obs_log("synthesis_error",
                             connection_id=self._conn_id,
                             synthesis_id="streaming",
                             error="unexpected_write_event_failure")
+                    if self._stream_session is not None:
+                        try:
+                            await self._stream_session.disconnect()
+                        except Exception:
+                            pass
+                    if self._stream_coordinator is not None:
+                        try:
+                            await self._stream_coordinator.cancel()
+                        except Exception:
+                            pass
                     raise
         except asyncio.CancelledError:
             self._stream_consumer_error = asyncio.CancelledError("coordinator consumer cancelled")
@@ -1715,6 +1737,7 @@ class FakeTtsEventHandler(AsyncEventHandler):
         self._stream_consumer_error = None
         self._stream_synthesis_id = None
         self._stream_session = None
+        self._streaming_had_chunks = False
         if self.settings.cancel_on_client_disconnect:
             await self.queue.cancel_connection(self._conn_id)
             self.queue.cancel_active_for_connection(self._conn_id)

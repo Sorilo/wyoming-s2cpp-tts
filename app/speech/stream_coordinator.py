@@ -286,7 +286,7 @@ class StreamingCoordinator:
         # Attempt envelope close (best-effort)
         try:
             self._envelope.close(on_success=False)
-        except EnvelopeError:
+        except (EnvelopeError, RuntimeError):
             pass
 
     async def drain(self) -> None:
@@ -361,6 +361,6 @@ class StreamingCoordinator:
                 self._cancelled = True
             try:
                 self._envelope.close(on_success=False)
-            except EnvelopeError:
+            except (EnvelopeError, RuntimeError):
                 pass
             raise

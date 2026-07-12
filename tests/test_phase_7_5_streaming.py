@@ -900,13 +900,13 @@ def test_disconnect_source_contract_covers_audio_and_terminal_writes():
     import inspect
     from app.wyoming_server import FakeTtsEventHandler
     source=inspect.getsource(FakeTtsEventHandler)
-    assert source.count("except (BrokenPipeError, ConnectionResetError, TypeError) as disconnect_error:") >= 7
-    assert source.count("_handle_expected_disconnect(") >= 8
+    assert source.count("except (BrokenPipeError, ConnectionResetError, TypeError) as disconnect_error:") >= 10
+    assert source.count("_handle_expected_disconnect(") >= 11
     guarded = source.split(
         "except (BrokenPipeError, ConnectionResetError, TypeError) as disconnect_error:"
     )[1:]
-    assert len(guarded) == 7
-    assert all("except Exception" in block for block in guarded[:6])
+    assert len(guarded) == 10
+    assert sum("except Exception" in block for block in guarded) >= 8
     assert "terminal_error_write_failed" not in source
 
 
@@ -1027,3 +1027,41 @@ async def test_operational_error_write_uses_disconnect_cleanup(monkeypatch):
     monkeypatch.setattr(handler.queue,"run",queue_run); monkeypatch.setattr(handler,"write_event",write)
     await handler._run_operational(lambda:None,"id")
     assert writer.close_calls==1 and sum(n=="client_disconnected" for n,_ in logs)==1
+
+
+@pytest.mark.asyncio
+async def test_progressive_partial_failure_never_emits_synthesize_stopped(monkeypatch):
+    """Handler must terminate partial audio as AudioStop, Error only."""
+    from wyoming.error import Error
+
+    handler, _, queue, _, _ = _handler(monkeypatch, "streaming")
+    calls = 0
+
+    async def synthesize_phrase(_text):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return _audio_events()
+        raise RuntimeError("second phrase failed")
+
+    written = []
+
+    async def write(event):
+        written.append(event)
+
+    monkeypatch.setattr(handler, "_synthesize_phrase", synthesize_phrase)
+    monkeypatch.setattr(handler, "write_event", write)
+
+    await _invoke(handler, "session", "First. Second.")
+
+    terminal_types = [
+        event.type
+        for event in written
+        if AudioStop.is_type(event.type)
+        or Error.is_type(event.type)
+        or SynthesizeStopped.is_type(event.type)
+    ]
+    assert len([event for event in written if AudioStop.is_type(event.type)]) == 1
+    assert terminal_types == [AudioStop().event().type, Error(text="", code="").event().type]
+    assert calls == 2
+    assert queue.snapshot()["depth"] == queue.snapshot()["pending"] == 0

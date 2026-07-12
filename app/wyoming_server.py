@@ -45,7 +45,7 @@ from app.observability import (
     obs_log,
     text_fingerprint,
 )
-from app.speech import SpeechScheduler, SpeechRequest, SpeechMetadata, QueueFullError, QueueTimeoutError
+from app.speech import SpeechScheduler, SpeechRequest, SpeechMetadata, QueueFullError, QueueTimeoutError, StreamingCoordinator
 from app.speech.session import SynthesisSession
 
 from app.voice_discovery import discover_voices
@@ -1024,6 +1024,34 @@ class FakeTtsEventHandler(AsyncEventHandler):
         self._transport_close_requested = False
         self._closed_audio_generators: set[int] = set()
         self._disconnected = False
+        # Phase 9.5: progressive streaming coordinator
+        self._stream_coordinator: StreamingCoordinator | None = None
+        self._stream_consumer_task: asyncio.Task[None] | None = None
+        self._stream_consumer_error: Exception | None = None
+        self._stream_synthesis_id: str | None = None
+        self._stream_session: SynthesisSession | None = None
+        self._streaming_had_chunks: bool = False
+
+    async def _synthesize_phrase(self, text: str) -> list[Event]:
+        """Synthesize one scheduler-owned phrase using the established backend mode."""
+        sid = self._stream_synthesis_id or new_synthesis_id()
+        if self.settings.tts_backend == "s2cpp" and self.settings.s2_stream:
+            events: list[Event] = []
+            audio_generator = self._synthesize_text_streaming(
+                text, voice=self._requested_voice, trigger="streaming",
+                synthesis_id=sid,
+            )
+            if self._stream_session is not None:
+                self._stream_session.set_generator(audio_generator)
+                self._stream_session.set_cleanup(lambda: audio_generator.aclose())
+            async for event in audio_generator:
+                events.append(event)
+            return events
+
+        return await self._synthesize_text(
+            text, voice=self._requested_voice, trigger="streaming",
+            synthesis_id=sid,
+        )
 
     def _is_expected_disconnect_error(self, error: Exception) -> bool:
         """Recognize network teardown, including Python 3.13 selector RST state."""
@@ -1149,9 +1177,6 @@ class FakeTtsEventHandler(AsyncEventHandler):
                 fp = text_fingerprint(synthesize.text)
 
                 # Voice consistency check.
-                # When both the compat event and the session specify a voice,
-                # they must agree.  When the compat event has a voice but the
-                # session does not, adopt the compat voice.
                 if resolved:
                     if self._requested_voice and resolved != self._requested_voice:
                         obs_log("compatibility_synthesize_deferred",
@@ -1166,6 +1191,21 @@ class FakeTtsEventHandler(AsyncEventHandler):
                             "streaming session voice '%s'"
                             % (resolved, self._requested_voice)
                         )
+
+                # Phase 9.5: defer compat text; feed only at stop if no
+                # non-whitespace streaming chunks arrived
+                if self._stream_coordinator is not None:
+                    self._streaming_compat_text = synthesize.text
+                    self._streaming_compat_voice = resolved
+                    if resolved and not self._requested_voice:
+                        self._requested_voice = resolved
+                    obs_log("compatibility_synthesize_deferred",
+                            connection_id=self._conn_id,
+                            text_fp=fp,
+                            text_len=len(synthesize.text),
+                            voice=resolved or "generic",
+                            status="deferred")
+                    return True
 
                 self._streaming_compat_text = synthesize.text
                 self._streaming_compat_voice = resolved
@@ -1279,9 +1319,19 @@ class FakeTtsEventHandler(AsyncEventHandler):
 
         # ── Streaming TTS: synthesize-start ──────────────────────────
         if SynthesizeStart.is_type(event.type):
+            # Phase 9.5: duplicate start detection
+            if self._in_streaming_session or self._stream_coordinator is not None:
+                # Duplicate SynthesizeStart — controlled error, preserve session
+                await self.write_event(Error(
+                    text="Streaming synthesis already active",
+                    code="stream_already_active",
+                ).event())
+                return True
+
             self._streaming_text_parts = []
             self._streaming_compat_text = ""
             self._streaming_compat_voice = None
+            self._streaming_had_chunks = False
             self._in_streaming_session = True
             # Resolve voice: client-requested > configured default > generic.
             start_data = event.data if event.data else {}
@@ -1299,21 +1349,112 @@ class FakeTtsEventHandler(AsyncEventHandler):
                 self._requested_voice = _resolve_voice_from_synthesize(
                     Synthesize(text=""), self.settings
                 )
+
+            # Phase 9.5: shared synthesis ID for the streaming session
+            self._stream_synthesis_id = new_synthesis_id()
+            self._stream_session = SynthesisSession(
+                request=SpeechRequest(
+                    synthesis_id=self._stream_synthesis_id,
+                    connection_id=self._conn_id,
+                    text="",
+                ),
+                trigger="streaming",
+            )
+            # Phase 9.5: create and start progressive streaming coordinator
+            self._stream_coordinator = StreamingCoordinator(
+                scheduler=self.queue,
+                synthesize_fn=self._synthesize_phrase,
+                connection_id=self._conn_id,
+            )
+            await self._stream_coordinator.start()
+            # Start consumer task immediately so it's ready for events
+            self._stream_consumer_task = asyncio.create_task(
+                self._consume_coordinator_events()
+            )
             return True
 
         # ── Streaming TTS: synthesize-chunk ──────────────────────────
         if SynthesizeChunk.is_type(event.type):
             chunk = SynthesizeChunk.from_event(event)
-            if self._in_streaming_session:
+            if not self._in_streaming_session:
+                return True
+            # Phase 9.5: feed text through coordinator immediately
+            if self._stream_coordinator is not None:
+                self._stream_coordinator.feed_text(chunk.text)
+                if chunk.text and chunk.text.strip():
+                    self._streaming_had_chunks = True
+            else:
                 self._streaming_text_parts.append(chunk.text)
             return True
+
 
         # ── Streaming TTS: synthesize-stop ───────────────────────────
         if SynthesizeStop.is_type(event.type):
             if not self._in_streaming_session:
                 return True
 
-            accumulated = " ".join(self._streaming_text_parts).strip()
+            # Phase 9.5: progressive path via coordinator
+            if self._stream_coordinator is not None:
+                # Feed deferred compat text only if no non-whitespace chunks arrived
+                if not self._streaming_had_chunks:
+                    compat = self._streaming_compat_text.strip()
+                    if compat:
+                        self._stream_coordinator.feed_text(compat)
+
+                self._stream_coordinator.feed_done()
+
+                # Wait for consumer task to finish
+                if self._stream_consumer_task is not None:
+                    try:
+                        await self._stream_consumer_task
+                    except asyncio.CancelledError:
+                        pass
+
+                # Check if coordinator succeeded
+                consumer_error = self._stream_consumer_error
+                if consumer_error is not None:
+                    # Synthesis failed — send error
+                    try:
+                        await self.write_event(Error(
+                            text="Progressive synthesis failed",
+                            code="stream_synthesis_failed",
+                        ).event())
+                    except (BrokenPipeError, ConnectionResetError, TypeError) as disconnect_error:
+                        if not self._is_expected_disconnect_error(disconnect_error):
+                            raise
+                        await self._handle_expected_disconnect("streaming")
+                elif (
+                    self._stream_session is not None
+                    and self._stream_session.eligible_for_synthesize_stopped
+                    and self._stream_session.client_connected
+                ):
+                    # Success — write SynthesizeStopped
+                    try:
+                        await self.write_event(SynthesizeStopped().event())
+                        obs_log("syn_stopped",
+                                connection_id=self._conn_id,
+                                synthesis_id=self._stream_synthesis_id,
+                                trigger="streaming")
+                    except (BrokenPipeError, ConnectionResetError, TypeError) as disconnect_error:
+                        if not self._is_expected_disconnect_error(disconnect_error):
+                            raise
+                        await self._handle_expected_disconnect("streaming")
+
+                # Clean up
+                self._stream_coordinator = None
+                self._stream_consumer_task = None
+                self._stream_consumer_error = None
+                self._stream_synthesis_id = None
+                self._stream_session = None
+                self._streaming_text_parts = []
+                self._streaming_compat_text = ""
+                self._streaming_compat_voice = None
+                self._streaming_had_chunks = False
+                self._in_streaming_session = False
+                return True
+
+            # Legacy path: accumulate all chunks, synthesize at once
+            accumulated = "".join(self._streaming_text_parts).strip()
             compat_text = self._streaming_compat_text.strip()
             self._streaming_text_parts = []
             self._streaming_compat_text = ""
@@ -1464,6 +1605,71 @@ class FakeTtsEventHandler(AsyncEventHandler):
 
         return True
 
+    async def _consume_coordinator_events(self) -> None:
+        """Consume coordinator output events and write them to the client.
+
+        Runs as a background task started on SynthesizeStart.
+        Writes audio events progressively as phrases are synthesized.
+        Stores any exception in ``self._stream_consumer_error`` so the
+        stop handler can observe failures.
+        """
+        try:
+            coord = self._stream_coordinator
+            if coord is None:
+                return
+            async for event in coord:
+                try:
+                    from wyoming.audio import AudioStart as WAStart, AudioStop as WAStop
+                    from wyoming.error import Error as WError
+                    if self._stream_session is not None:
+                        if WAStart.is_type(event.type):
+                            self._stream_session.mark_audio_start()
+                        elif WAStop.is_type(event.type):
+                            self._stream_session.mark_audio_stop()
+                        elif WError.is_type(event.type):
+                            self._stream_session.mark_failed()
+                    await self.write_event(event)
+                except (BrokenPipeError, ConnectionResetError, TypeError) as disconnect_error:
+                    if not self._is_expected_disconnect_error(disconnect_error):
+                        raise
+                    if self._stream_session is not None:
+                        await self._stream_session.disconnect()
+                    await self._handle_expected_disconnect("streaming")
+                    self._stream_consumer_error = disconnect_error
+                    # Cancel coordinator to stop synthesis loop
+                    if self._stream_coordinator is not None:
+                        try:
+                            await self._stream_coordinator.cancel()
+                        except Exception:
+                            pass
+                    break
+                except Exception:
+                    obs_log("synthesis_error",
+                            connection_id=self._conn_id,
+                            synthesis_id="streaming",
+                            error="unexpected_write_event_failure")
+                    if self._stream_session is not None:
+                        try:
+                            await self._stream_session.disconnect()
+                        except Exception:
+                            pass
+                    if self._stream_coordinator is not None:
+                        try:
+                            await self._stream_coordinator.cancel()
+                        except Exception:
+                            pass
+                    raise
+        except asyncio.CancelledError:
+            self._stream_consumer_error = asyncio.CancelledError("coordinator consumer cancelled")
+        except Exception as exc:
+            self._stream_consumer_error = exc
+            obs_log("synthesis_error",
+                    connection_id=self._conn_id,
+                    synthesis_id="streaming",
+                    error="coordinator_consumer_exception")
+
+
+
     async def _run_operational(self, operation, synthesis_id: str,
                                trigger: str = "legacy") -> None:
         """Own expected runtime failures and terminate them on the wire."""
@@ -1518,6 +1724,24 @@ class FakeTtsEventHandler(AsyncEventHandler):
         self._streaming_compat_text = ""
         self._streaming_compat_voice = None
         self._in_streaming_session = False
+        # Phase 9.5: cancel coordinator and consumer
+        if self._stream_coordinator is not None:
+            try:
+                await self._stream_coordinator.cancel()
+            except Exception:
+                pass
+            self._stream_coordinator = None
+        if self._stream_consumer_task is not None and not self._stream_consumer_task.done():
+            self._stream_consumer_task.cancel()
+            try:
+                await self._stream_consumer_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._stream_consumer_task = None
+        self._stream_consumer_error = None
+        self._stream_synthesis_id = None
+        self._stream_session = None
+        self._streaming_had_chunks = False
         if self.settings.cancel_on_client_disconnect:
             await self.queue.cancel_connection(self._conn_id)
             self.queue.cancel_active_for_connection(self._conn_id)

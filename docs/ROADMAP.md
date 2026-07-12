@@ -131,15 +131,15 @@ Requires separate goal and controlled backend-image builds.
 ### Phase 9: queue, busy handling, and timeout policy ✅
 Implemented deterministic bounded FIFO admission, backend HTTP 503 retry, queue-wait and synthesis deadlines, controlled Wyoming failure behavior, and disconnect recovery. PR #2 merged as `1a0b93f`; 876 tests and isolated Unraid validation passed. Validated images are deployed. Short and long direct Wyoming smoke and audible Home Assistant VM smoke passed with zero restarts, queue depth zero, active GPU inference, and clean logs. Phase 9 is closed.
 
-### Phase 9.5: progressive LLM text-to-TTS phrase pipeline
+### Phase 9.5: progressive LLM text-to-TTS phrase pipeline ✅
 
-Home Assistant sends streaming TTS input via synthesize-start/chunk/stop.
-The wrapper currently accumulates all chunks until synthesize-stop, so TTS
-does not begin while the LLM is still generating.  This phase should add
-phrase-boundary accumulation, serialized phrase synthesis, continuous
-Wyoming audio timestamps, cancellation, queueing, and barge-in-safe
-behavior.  Must preserve one active s2.cpp synthesis at a time and avoid
-double-synthesizing the backwards-compatibility full-message event.
+Implemented source-only progressive phrase synthesis for Wyoming
+synthesize-start/chunk/stop input. Complete phrases enter the existing FIFO
+scheduler before synthesize-stop, while one logical AudioStart/AudioStop
+envelope preserves continuous timestamps across backend phrase operations.
+Compatibility authority, bounded buffering, cancellation, timeout, drain,
+and cleanup behavior are covered by deterministic tests. No image was built
+or deployed; production remains on the recorded Phase 9 image pins.
 
 ### Phase 10: end-to-end barge-in testing with HA satellite/player
 Test with an actual Home Assistant satellite/player path including VAD, wake word, playback interruption, and new-request behavior.
@@ -190,9 +190,43 @@ Finalize templates after real restart/update/persistence/backup validation.
 - Bind failure non-fatal. Source-only; no image published/deployed. Production remains on Phase 9 images.
 - Full standard suite: **1112 passed, 0 failed, 0 skipped**.
 
-## Phase 9.5: Progressive Phrase Synthesis
-- per-request phrase accumulator, boundary detection, progressive synthesis
-- continuous Wyoming audio stream, active/queued phrase cancellation
+## Phase 9.5: Progressive Phrase Synthesis — Complete
+
+Implemented per-request bounded deterministic phrase accumulation, continuous Wyoming audio streaming, and progressive phrase-by-phrase synthesis through the SpeechScheduler.
+
+**Architecture**:
+- ``PhraseAccumulator`` (``app/speech/phrases.py``): Bounded streaming text parser with deterministic terminal-punctuation boundaries (`.!?。！？`), decimal protection, abbreviation awareness, ellipsis handling, and fallback splitting at configurable soft/phrase/retained limits (default 160/320/640 characters).
+- ``AudioEnvelope`` (``app/speech/envelope.py``): Logical audio normalizer that emits AudioStart exactly once per Wyoming response, validates format consistency across phrases, suppresses internal AudioStop events, rebuilds AudioChunk timestamps from cumulative emitted PCM frames, and closes with exactly one terminal event (AudioStop on success, AudioStop then Error on failure).
+- ``StreamingCoordinator`` (``app/speech/stream_coordinator.py``): Connection-owned coordinator that feeds text chunks to the accumulator, submits completed phrases through SpeechScheduler one at a time (FIFO fairness), and delivers output events via a bounded capacity-1 async queue (backpressure). Supports both progressive feeding and buffered legacy compatibility mode.
+
+**Handler integration** (``app/wyoming_server.py``):
+- ``SynthesizeStart`` creates a ``StreamingCoordinator`` and starts a background consumer task that writes audio events progressively.
+- ``SynthesizeChunk`` feeds text to the accumulator immediately; tracks whether non-whitespace chunks arrived for correct compatibility-synthesize deduplication.
+- ``SynthesizeStop`` feeds deferred compat text only when no streaming chunks arrived, flushes remaining text, and awaits the consumer task. SynthesizeStopped is emitted only if the client is still connected (prevents post-disconnect leak).
+- Disconnect/cancellation cancels the coordinator, drains pending phrases, and closes the consumer task. Generator cleanup (aclose) is verified.
+
+**Test baseline**: 1250 passed, 0 failed, 0 skipped (excluding 14 environment-specific Unraid tests). Full suite includes 218 focused tests across synthesis session, streaming protocol, compatibility, Wyoming streaming, coordinator/envelope, scheduler/drain, shutdown/lifecycle, and backend.
+
+**Commits** (on branch ``phase/phase-9-5-progressive-phrase-synthesis``):
+1. ``d12dc27`` — docs: add reviewed progressive synthesis plan
+2. ``680a042`` — feat: add bounded deterministic phrase accumulator
+3. ``3f3a24b`` — fix: preserve phrase closers and decimal boundaries
+4. ``86b4ca0`` — feat: add logical audio-envelope normalizer with frame accounting
+5. ``ce70297`` — feat: add explicit streaming coordinator with progressive phrase synthesis
+6. ``8e7c160`` — fix: redesign StreamingCoordinator to be truly progressive
+7. ``61b0e63`` — fix: avoid terminal audio for empty streams
+8. ``e0b8dbc`` — feat: integrate progressive Wyoming synthesis
+9. ``799952f`` — fix: harden progressive stream cleanup
+10. ``feaec8c`` — fix: gate terminal success after disconnect
+11. ``be4d1c0`` — fix: unblock coordinator consumers on cancellation
+12. ``fa8ac46`` — docs: document progressive synthesis draft
+13. ``51226af`` — docs: describe progressive synthesis architecture
+
+**Known limitations**:
+- Timeout and deadline budgets apply per-phrase (inherited from SpeechScheduler), not to the entire logical streaming request.
+- Counters (admitted, completed, etc.) count individual phrase operations, not logical requests — this is intentional and documented.
+- No backend image changes; wrapper-only phase. Production deployment deferred pending Phase 10 (barge-in) integration testing.
+- Phrase-level progressive coordination activates for every Wyoming streaming session. ``S2_STREAM=false`` selects buffered per-phrase backend transport; it does not disable phrase-level coordination. The standalone legacy ``Synthesize`` path remains unchanged outside a streaming session.
 
 ## Phase 10: Barge-In
 - service cancellation contract, physical playback interruption, wake word detection

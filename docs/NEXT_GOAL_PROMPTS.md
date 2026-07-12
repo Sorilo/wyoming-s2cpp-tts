@@ -503,15 +503,20 @@ and an optional read-only admin HTTP server.  183 new tests.  Full standard
 suite: 1112 passed, 0 failed, 0 skipped.  Source-only — no image
 published or deployed.
 
-## Next official phase: Phase 9.5 — Progressive Phrase Synthesis
+## Phase 9.5: Progressive Phrase Synthesis — Draft implementation
 
-Home Assistant sends streaming TTS input via synthesize-start/chunk/stop.
-The wrapper currently accumulates all chunks until synthesize-stop, so TTS
-does not begin while the LLM is still generating.  Phase 9.5 should add
-phrase-boundary accumulation, serialized phrase synthesis, continuous
-Wyoming audio timestamps, cancellation, queueing, and barge-in-safe
-behavior.  Must preserve one active s2.cpp synthesis at a time and avoid
-double-synthesizing the backwards-compatibility full-message event.
+Implemented and authoritatively verified on draft branch ``phase/phase-9-5-progressive-phrase-synthesis``; not yet merged, released, or deployed.
+PhraseAccumulator provides bounded deterministic streaming text parsing.
+AudioEnvelope normalizes continuous Wyoming audio across multiple phrase
+synthesis operations. StreamingCoordinator submits phrases through
+SpeechScheduler one at a time with bounded backpressure. Handler integration
+supports progressive feeding, compat-synthesize deduplication, disconnect
+cancellation, and generator cleanup. Test baseline: 1250 passed, 0 failed.
+
+## Next official phase: Phase 10 — End-to-End Barge-In Testing
+
+Test with an actual Home Assistant satellite/player path including VAD, wake
+word, playback interruption, and new-request behavior.
 
 ## Prompt-generation guidance
 

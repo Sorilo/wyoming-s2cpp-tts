@@ -123,9 +123,12 @@ Review and verification:
 * Correct blocking findings in separate commits without rewriting prior implementation commits.
 * Run focused phrase, streaming, scheduler, disconnect, timeout, lifecycle, coordinator, admin, metrics, and shutdown test sets.
 * Run the authoritative application suite:
-    .venv/bin/python -m pytest tests/ 
-    –ignore=tests/test_realtime_tuning_unraid.py 
-    -q -o addopts=
+
+    ```bash
+    .venv/bin/python -m pytest tests/ \
+      --ignore=tests/test_realtime_tuning_unraid.py \
+      -q -o addopts=
+    ```
 * Require zero failures, zero unexpected skips, no leaked-task warnings, no unclosed stream/session warnings, no unobserved task exceptions, and clean git diff checks.
 * Invoke the Unraid-specific suite separately and report its result without treating host-environment timeouts as authoritative application failures.
 * Correct stale Phase 9C documentation references from 1,112 passed to the final reviewed baseline of 1,113 passed where applicable.

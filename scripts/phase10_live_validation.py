@@ -1633,10 +1633,13 @@ class SshReadOnlyDockerRunner:
                   timeout: float = 30) -> subprocess.CompletedProcess[bytes]:
         validate_read_only_docker_command(cmd)
         self.commands.append(list(cmd))
+        container = cmd[-1]
+        prefix = "wrapper" if container == "wyoming-s2cpp-tts" else "backend"
+        alias = f"{prefix}-inspect" if cmd[1] == "inspect" else f"{prefix}-logs"
         ssh_cmd = [
             "ssh", "-i", str(self.key_file), "-o", "BatchMode=yes",
             "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=yes",
-            f"{self.user}@{self.host}", "--", *cmd,
+            f"{self.user}@{self.host}", alias,
         ]
         def _run() -> subprocess.CompletedProcess[bytes]:
             return subprocess.run(ssh_cmd, capture_output=capture_output,

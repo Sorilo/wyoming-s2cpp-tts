@@ -1215,7 +1215,7 @@ async def test_ssh_runner_builds_fixed_shell_free_ssh_command(monkeypatch, tmp_p
     docker_cmd = ["docker", "inspect", "--type", "container", "--format",
                   p10.DOCKER_INSPECT_FORMAT, "wyoming-s2cpp-tts"]
     await runner.run(docker_cmd)
-    assert captured["cmd"][-len(docker_cmd):] == docker_cmd
+    assert captured["cmd"][-1] == "wrapper-inspect"
     assert captured["kwargs"]["shell"] is False
     assert "BatchMode=yes" in captured["cmd"]
     assert "StrictHostKeyChecking=yes" in captured["cmd"]
@@ -1230,3 +1230,29 @@ async def test_ssh_runner_rejects_before_subprocess(monkeypatch, tmp_path):
     runner = p10.SshReadOnlyDockerRunner("192.168.1.45", "root", str(key))
     with pytest.raises(ValueError):
         await runner.run(["docker", "exec", "wyoming-s2cpp-tts", "sh"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("docker_cmd", "alias"), [
+    (["docker", "inspect", "--type", "container", "--format",
+      p10.DOCKER_INSPECT_FORMAT, "wyoming-s2cpp-tts"], "wrapper-inspect"),
+    (["docker", "inspect", "--type", "container", "--format",
+      p10.DOCKER_INSPECT_FORMAT, "s2cpp-backend"], "backend-inspect"),
+    (["docker", "logs", "--timestamps", "--tail", "200",
+      "wyoming-s2cpp-tts"], "wrapper-logs"),
+    (["docker", "logs", "--timestamps", "--tail", "200",
+      "s2cpp-backend"], "backend-logs"),
+])
+async def test_ssh_runner_maps_only_validated_commands_to_fixed_aliases(
+        monkeypatch, tmp_path, docker_cmd, alias):
+    key = tmp_path / "id"
+    key.write_text("test-only")
+    captured = []
+    def fake_run(cmd, **kwargs):
+        captured.append(cmd)
+        return p10.subprocess.CompletedProcess(cmd, 0, b"{}\n", b"")
+    monkeypatch.setattr(p10.subprocess, "run", fake_run)
+    runner = p10.SshReadOnlyDockerRunner("192.168.1.45", "root", str(key))
+    await runner.run(docker_cmd)
+    assert captured[0][-1] == alias
+    assert "docker" not in captured[0]

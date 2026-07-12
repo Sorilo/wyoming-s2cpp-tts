@@ -127,6 +127,52 @@ Set ADMIN_HTTP_ENABLED=true and publish port 10201 only if needed.
 Use loopback binding or firewall rules to avoid exposing admin endpoints
 broadly.
 
+
+## Progressive phrase synthesis (Phase 9.5)
+
+The wrapper now synthesises streaming LLM text **progressively** — each complete
+phrase begins backend synthesis as soon as its terminal punctuation arrives,
+without waiting for the full LLM response.  Audio continuity (one ``AudioStart``,
+continuous timestamps, one ``AudioStop``) and scheduler serialisation are preserved.
+
+### How it works
+
+- ``PhraseAccumulator`` (``app/speech/phrases.py``) incrementally parses incoming
+  text chunks at deterministic phrase boundaries (``.!?。！？``) with decimal,
+  abbreviation, and ellipsis protection plus bounded fallback (default limits 160
+  / 320 / 640 characters).
+- ``AudioEnvelope`` (``app/speech/envelope.py``) normalises the logical Wyoming
+  audio response: one ``AudioStart`` forwarded, internal ``AudioStop`` suppressed,
+  chunk timestamps rebuilt from cumulative emitted PCM frames, exactly one
+  terminal event (``AudioStop`` on success; ``AudioStop`` then ``Error`` on
+  failure after partial audio).
+- ``StreamingCoordinator`` (``app/speech/stream_coordinator.py``) owns the
+  pipeline per connection: feeds chunks to the accumulator, submits completed
+  phrases through ``SpeechScheduler`` one at a time (no overlapping backend
+  calls), and delivers output events through a bounded capacity‑1 queue.
+- Cancellation clears pending phrases, cancels the active scheduler connection,
+  awaits the background synthesis task, and unblocks waiting consumers.
+
+### Phase 9.5 at a glance
+
+| Aspect | Behaviour |
+|---|---|
+| Timeout budgets | Per‑phrase (scheduler‑inherited) |
+| Counters | Count individual phrase operations |
+| Legacy ``Synthesize`` | Unchanged outside a streaming session |
+| Compatibility dedup | Streaming authoritative once any non‑whitespace chunk arrives |
+| Drain | Clears pending; currently‑active phrase may finish |
+| Overlapping synthesis | Never — scheduler enforces max‑active=1 |
+
+### Known limitations
+
+- No total‑stream deadline — each phrase independently observes the existing
+  queue‑wait and synthesis timeouts.
+- Counter values count phrase operations, not logical Wyoming requests.
+- ``S2_STREAM=false`` selects buffered per‑phrase backend transport; it does
+  **not** disable progressive phrase coordination.
+
+
 ## Running locally for development
 
 The repository default remains the safe fake backend:
@@ -177,7 +223,7 @@ The verified real backend contract is raw `audio/L16; rate=44100; channels=1` wi
 
 ## Testing
 
-Current Phase 9C application-suite baseline: **1112 passed, 0 failed, 0 skipped**, excluding the 14 tests in `tests/test_realtime_tuning_unraid.py`. Those environment-specific shell-behavior checks—including fake-`nvidia-smi` cases—remain a separate invocation. The historical Phase 9 acceptance baseline was 876 passed.
+Current Phase 9.5 application-suite baseline: **1250 passed, 0 failed, 0 skipped**, excluding the 14 tests in `tests/test_realtime_tuning_unraid.py`. Those environment-specific shell-behavior checks—including fake-`nvidia-smi` cases—remain a separate invocation. The historical Phase 9 acceptance baseline was 876 passed.
 
 Useful focused checks:
 

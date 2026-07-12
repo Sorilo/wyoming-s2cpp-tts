@@ -74,6 +74,41 @@
 - Full standard suite: **1112 passed, 0 failed, 0 skipped** (excluding the 14 environment-specific tests in `tests/test_realtime_tuning_unraid.py`, including its fake-`nvidia-smi` cases).
 - Source-only implementation — no image published or deployed. Production remains on Phase 9 images (wrapper ``sha-7db26b7``, backend ``sha-6e629d0``).
 
+## Phase 9.5 results
+
+- Progressive phrase synthesis implemented: ``PhraseAccumulator`` for bounded
+  deterministic phrase parsing, ``AudioEnvelope`` for logical Wyoming audio
+  normalisation, and ``StreamingCoordinator`` for connection-owned progressive
+  synthesis pipeline.
+- Text streaming chunks are parsed at deterministic terminal-punctuation
+  boundaries (``.!?。！？``) with decimal, abbreviation, and ellipsis
+  protection plus bounded fallback (default 160/320/640 character limits).
+- ``AudioEnvelope`` emits exactly one ``AudioStart`` per logical Wyoming
+  response, suppresses internal phrase ``AudioStop`` events, rebuilds chunk
+  timestamps from cumulative emitted PCM frames, and closes with one terminal
+  event (``AudioStop`` on success; ``AudioStop`` then Error on failure).
+- ``StreamingCoordinator`` runs a background synthesis task that submits
+  completed phrases through ``SpeechScheduler`` one at a time — no backend
+  calls overlap.  Output events arrive through a bounded capacity‑1 queue
+  with backpressure.
+- Cancellation clears pending phrases, cancels the active scheduler
+  connection, and unblocks waiting consumers.
+- Timeout and deadline budgets apply per‑phrase (inherited from
+  ``SpeechScheduler``).  Counters count individual phrase operations.
+- Legacy ``Synthesize`` path unchanged outside a streaming session.
+  Compatibility deduplication: streaming authoritative once any non‑whitespace
+  chunk arrives.
+- Backend‑busy, queue‑full, queue‑timeout, and synthesis‑failure handling
+  preserved from Phase 9/9B/9C.
+- Focused/adjacent integration gate: **218 passed**. Coordinator/cancellation
+  coverage gate: **33 passed**.
+- Full suite: **1250 passed, 0 failed, 0 skipped** (excluding 14
+  environment‑specific tests in ``tests/test_realtime_tuning_unraid.py``).
+- Source‑only implementation — no image published or deployed. Production
+  remains on Phase 9 images (wrapper ``sha-7db26b7``, backend ``sha-6e629d0``).
+- Draft branch: ``phase/phase-9-5-progressive-phrase-synthesis``; not merged, released, or deployed.
+
+
 ## Phase 9B results
 
 - Source-only domain refactor extracting `SpeechRequest`, `SpeechMetadata`, `SpeechScheduler`, `SpeechState`, `ScheduledSpeech`, and `SynthesisSession` into explicit `app/speech/` domain objects.

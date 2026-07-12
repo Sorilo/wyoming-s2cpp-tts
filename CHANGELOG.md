@@ -2,6 +2,50 @@
 
 ## Unreleased
 
+- Phase 9.5: progressive phrase synthesis for streaming Wyoming TTS input.
+  Implemented three new components in ``app/speech/``:
+
+  * ``PhraseAccumulator`` — bounded deterministic streaming text parser that
+    identifies complete phrases at terminal-punctuation boundaries (``.!?。！？``)
+    with decimal, abbreviation, and ellipsis protection plus configurable
+    soft/phrase/retained fallback limits (default 160/320/640 characters).
+    TDD coverage proves chunking invariance across normal, CJK, decimal,
+    abbreviation, and edge-case inputs.
+
+  * ``AudioEnvelope`` — logical audio normaliser that emits ``AudioStart``
+    exactly once per Wyoming response, validates format consistency across
+    phrases, suppresses internal ``AudioStop`` events, rebuilds chunk
+    timestamps from cumulative emitted PCM frames, and closes with one
+    terminal event (``AudioStop`` on success; ``AudioStop`` then ``Error``
+    on failure after partial audio).
+
+  * ``StreamingCoordinator`` — connection-owned coordinator that feeds text
+    chunks to the accumulator, submits completed phrases through
+    ``SpeechScheduler`` one at a time (no overlapping backend calls), and
+    delivers output events through a bounded capacity‑1 async queue.
+    Supports both progressive feeding and legacy buffered compatibility.
+    Tests cover cancellation during active synthesis and between phrases,
+    queue-full/timeout/backend-busy propagation, drain
+    semantics, and generator/task cleanup verification.
+
+  Handler integration (``app/wyoming_server.py``): ``SynthesizeStart``
+  creates and starts the coordinator plus a background consumer task;
+  ``SynthesizeChunk`` feeds text immediately; ``SynthesizeStop`` flushes
+  residual text, awaits the consumer, and emits ``SynthesizeStopped`` only
+  when the client remains connected.  Disconnect/cancellation cleans up
+  coordinator and generators.
+
+  Timeout budgets apply per‑phrase (scheduler‑inherited).  Counters count
+  individual phrase operations, not logical Wyoming requests.  Legacy
+  ``Synthesize`` path unchanged outside a streaming session.
+
+  Full suite: **1250 passed, 0 failed, 0 skipped** (excluding 14
+  environment‑specific tests in ``tests/test_realtime_tuning_unraid.py``).
+  Focused/adjacent integration gate: 218 passed; coordinator/cancellation
+  gate: 33 passed. Source-only — no image published or deployed. Draft branch:
+  ``phase/phase-9-5-progressive-phrase-synthesis``.
+
+
 - Phase 9C: graceful shutdown and optional admin HTTP visibility. Added a
   single ``ServiceCoordinator`` lifecycle owner with explicit ``LifecycleState``
   machine (``STARTING`` → ``RUNNING`` → ``DRAINING`` → ``STOPPING`` →

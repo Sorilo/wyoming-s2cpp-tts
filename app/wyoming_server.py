@@ -1424,8 +1424,9 @@ class FakeTtsEventHandler(AsyncEventHandler):
                             raise
                         await self._handle_expected_disconnect("streaming")
                 elif (
-                    self._stream_session is None
-                    or self._stream_session.eligible_for_synthesize_stopped
+                    self._stream_session is not None
+                    and self._stream_session.eligible_for_synthesize_stopped
+                    and self._stream_session.client_connected
                 ):
                     # Success — write SynthesizeStopped
                     try:

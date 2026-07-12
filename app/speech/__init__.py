@@ -13,6 +13,7 @@ from app.speech.models import (
 )
 from app.speech.phrases import PhraseAccumulator
 from app.speech.envelope import AudioEnvelope, EnvelopeError
+from app.speech.stream_coordinator import StreamingCoordinator
 from app.speech.scheduler import (
     SpeechScheduler,
     QueueFullError,
@@ -30,4 +31,5 @@ __all__ = [
     "PhraseAccumulator",
     "AudioEnvelope",
     "EnvelopeError",
+    "StreamingCoordinator",
 ]

@@ -315,9 +315,10 @@ class StreamingCoordinator:
                 # Wait for phrases to become available
                 if not self._pending_phrases:
                     if self._done:
-                        # All done — success close
-                        for event in self._envelope.close(on_success=True):
-                            await self._output.put(event)
+                        # All done — close envelope only if phrases were processed
+                        if self._phrase_count > 0:
+                            for event in self._envelope.close(on_success=True):
+                                await self._output.put(event)
                         await self._output.put(None)  # sentinel
                         return
 

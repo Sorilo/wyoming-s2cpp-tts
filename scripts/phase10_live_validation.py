@@ -35,6 +35,7 @@ import os
 import re
 import sys
 import time
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -1578,7 +1579,18 @@ def build_config_from_args(args: argparse.Namespace) -> ValidationConfig:
     )
 
 
-# ── Async subprocess runner (D) ────────────────────────────────────
+# ── Live CLI adapters ──────────────────────────────────────────────
+
+@asynccontextmanager
+async def real_tcp_connector(host: str, port: int):
+    """Open and deterministically close one real TCP connection."""
+    reader, writer = await asyncio.open_connection(host, port)
+    try:
+        yield reader, writer
+    finally:
+        writer.close()
+        await writer.wait_closed()
+
 
 class AsyncSubprocessRunner:
     """Real async subprocess adapter for CLI use.
@@ -1603,7 +1615,7 @@ class AsyncSubprocessRunner:
             return subprocess.run(
                 cmd,
                 capture_output=capture_output,
-                text=True,
+                text=False,
                 timeout=timeout,
             )
 
@@ -1642,6 +1654,7 @@ def main() -> int:
     report = asyncio.run(run_validation(
         cfg,
         subprocess_runner=subprocess_runner,
+        connector_factory=real_tcp_connector if not cfg.dry_run else None,
     ))
 
     print(f"\nValidation complete ({report.duration_sec}s)")

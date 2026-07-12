@@ -1067,3 +1067,50 @@ async def test_dry_run_reports_skipped_checks_without_failure(tmp_path):
     assert report.assertions
     assert all(a.passed and "SKIPPED" in a.detail for a in report.assertions)
     assert [s["phase"] for s in report.status_snapshots] == ["before", "during", "after"]
+
+
+@pytest.mark.asyncio
+async def test_real_tcp_connector_opens_and_closes(monkeypatch):
+    calls = []
+
+    class Writer:
+        def close(self):
+            calls.append("close")
+
+        async def wait_closed(self):
+            calls.append("wait_closed")
+
+    async def fake_open(host, port):
+        calls.append((host, port))
+        return object(), Writer()
+
+    monkeypatch.setattr(p10.asyncio, "open_connection", fake_open)
+    async with p10.real_tcp_connector("example.invalid", 10200):
+        calls.append("inside")
+    assert calls == [("example.invalid", 10200), "inside", "close", "wait_closed"]
+
+
+def test_live_main_supplies_real_connector(monkeypatch, tmp_path):
+    captured = {}
+
+    async def fake_run_validation(cfg, **kwargs):
+        captured.update(kwargs)
+        return p10.ValidationReport(mode="health", utc_timestamp="20260712T000000Z", dry_run=False)
+
+    monkeypatch.setattr(p10, "run_validation", fake_run_validation)
+    monkeypatch.setattr(p10.sys, "argv", [
+        "phase10_live_validation.py", "--mode", "health", "--run-live",
+        "--artifact-dir", str(tmp_path),
+    ])
+    assert p10.main() == 0
+    assert captured["connector_factory"] is p10.real_tcp_connector
+    assert isinstance(captured["subprocess_runner"], p10.AsyncSubprocessRunner)
+
+
+@pytest.mark.asyncio
+async def test_async_subprocess_runner_returns_bytes():
+    result = await p10.AsyncSubprocessRunner().run(
+        [sys.executable, "-c", "print('ok')"]
+    )
+    assert isinstance(result.stdout, bytes)
+    assert result.stdout.strip() == b"ok"

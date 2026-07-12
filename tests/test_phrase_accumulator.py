@@ -572,6 +572,162 @@ def test_retained_max_must_be_greater_than_phrase_max():
         PhraseAccumulator(soft_max=50, phrase_max=100, retained_max=80)
 
 
+# ── Closing quote/bracket attachment ────────────────────────────────────
+
+
+def test_closing_straight_double_quote_attached():
+    """Terminal punctuation followed immediately by closing " must stay attached."""
+    acc = PhraseAccumulator()
+    phrases = acc.feed('"Hello."')
+    assert phrases == []  # period at buffer end, deferred
+    assert acc.flush() == '"Hello."'
+
+
+def test_closing_straight_single_quote_attached():
+    """Terminal punctuation followed immediately by closing ' must stay attached."""
+    acc = PhraseAccumulator()
+    phrases = acc.feed("'Hello.'")
+    assert phrases == []  # period at end, deferred
+    assert acc.flush() == "'Hello.'"
+
+
+def test_closing_curly_double_quote_attached():
+    """Terminal punctuation followed immediately by closing \u201d must stay attached."""
+    acc = PhraseAccumulator()
+    text = '\u201cHello.\u201d'
+    phrases = acc.feed(text)
+    assert phrases == []  # period at end, deferred
+    assert acc.flush() == text
+
+
+def test_closing_curly_single_quote_attached():
+    """Terminal punctuation followed immediately by closing \u2019 must stay attached."""
+    acc = PhraseAccumulator()
+    text = '\u2018Hello.\u2019'
+    phrases = acc.feed(text)
+    assert phrases == []  # period at end, deferred
+    assert acc.flush() == text
+
+
+def test_closing_paren_attached():
+    """Terminal punctuation followed by ) must stay attached."""
+    acc = PhraseAccumulator()
+    phrases = acc.feed("(Hello.)")
+    assert phrases == []  # period at end, deferred
+    assert acc.flush() == "(Hello.)"
+
+
+def test_closing_bracket_attached():
+    """Terminal punctuation followed by ] must stay attached."""
+    acc = PhraseAccumulator()
+    phrases = acc.feed("[Hello.]")
+    assert phrases == []  # period at end, deferred
+    assert acc.flush() == "[Hello.]"
+
+
+def test_closing_brace_attached():
+    """Terminal punctuation followed by } must stay attached."""
+    acc = PhraseAccumulator()
+    phrases = acc.feed("{Hello.}")
+    assert phrases == []  # period at end, deferred
+    assert acc.flush() == "{Hello.}"
+
+
+def test_closing_quote_not_orphaned_mid_text():
+    """Closing quote after terminal should attach, not be orphaned between phrases."""
+    acc = PhraseAccumulator()
+    phrases = acc.feed('"Hello." More text.')
+    assert phrases == ['"Hello."']
+    assert acc.flush() == "More text."
+
+
+def test_closing_run_multiple():
+    """Multiple closers after terminal punctuation should all attach."""
+    acc = PhraseAccumulator()
+    phrases = acc.feed('"Hello.")')
+    assert phrases == []
+    assert acc.flush() == '"Hello.")'
+
+
+def test_closing_quote_chunk_split():
+    """Closing quote arriving in a later chunk must still attach."""
+    acc = PhraseAccumulator()
+    p1 = acc.feed('"Hello.')
+    assert p1 == []
+    p2 = acc.feed('"')
+    assert p2 == []
+    assert acc.flush() == '"Hello."'
+
+
+def test_closing_quote_exclamation():
+    """Closing quote after ! must stay attached."""
+    acc = PhraseAccumulator()
+    phrases = acc.feed('"Hello!"')
+    assert phrases == ['"Hello!"']
+
+
+def test_closing_quote_question():
+    """Closing quote after ? must stay attached."""
+    acc = PhraseAccumulator()
+    phrases = acc.feed('"Hello?"')
+    assert phrases == ['"Hello?"']
+
+
+def test_closing_quote_cjk():
+    """Closing quote after CJK full stop must stay attached."""
+    acc = PhraseAccumulator()
+    text = '\u201c\u4f60\u597d\u3002\u201d'
+    phrases = acc.feed(text)
+    assert phrases == [text]
+
+
+# ── Decimal boundary (strict immediate digits only) ────────────────────
+
+
+def test_decimal_no_space_protected():
+    """3.14 without space is protected as decimal."""
+    acc = PhraseAccumulator()
+    phrases = acc.feed("The value is 3.14.")
+    assert phrases == []  # period at end, deferred
+    assert acc.flush() == "The value is 3.14."
+
+
+def test_decimal_with_space_splits():
+    """3. 14 with a space after period must split — digit must be immediate."""
+    acc = PhraseAccumulator()
+    phrases = acc.feed("Number 3. 14 more.")
+    assert phrases == ["Number 3."]
+    assert acc.flush() == "14 more."
+
+
+def test_decimal_with_space_chunk_split():
+    """Chunk-split across the spaced decimal boundary must still split."""
+    acc = PhraseAccumulator()
+    p1 = acc.feed("Number 3.")
+    assert p1 == []  # period at end, deferred
+    p2 = acc.feed(" 14 more.")
+    assert p2 == ["Number 3."]
+    assert acc.flush() == "14 more."
+
+
+def test_decimal_immediate_digit_eof():
+    """3.14 at EOF without trailing period should not split."""
+    acc = PhraseAccumulator()
+    phrases = acc.feed("The value is 3.14")
+    assert phrases == []
+    assert acc.flush() == "The value is 3.14"
+
+
+def test_decimal_immediate_digit_plus_sentence():
+    """3.14 followed by a real sentence boundary should protect the decimal."""
+    acc = PhraseAccumulator()
+    phrases = acc.feed("Pi is 3.14. That is correct.")
+    assert phrases == ["Pi is 3.14."]
+    assert acc.flush() == "That is correct."
+
+
+
+
 # ── Deterministic reproducibility ──────────────────────────────────────
 
 

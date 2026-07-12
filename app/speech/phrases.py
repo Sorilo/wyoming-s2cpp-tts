@@ -41,6 +41,8 @@ _ABBREVIATIONS: frozenset[str] = frozenset({
 
 _WHITESPACE: frozenset[str] = frozenset({" ", "\t", "\n", "\r"})
 
+_CLOSERS: frozenset[str] = frozenset({'"', "'", "”", "’", ")", "]", "}"})
+
 
 def _period_can_resolve(text: str, pos: int) -> bool:
     """A period at *pos* can be resolved when there's content after it
@@ -51,14 +53,14 @@ def _period_can_resolve(text: str, pos: int) -> bool:
     if pos >= len(text) or text[pos] != ".":
         return True  # not a period, no resolution needed
 
-    # Scan past the period for significant content
+    # Scan past the period for significant content (skip whitespace and closers)
     i = pos + 1
-    while i < len(text) and text[i] in _WHITESPACE:
+    while i < len(text) and (text[i] in _WHITESPACE or text[i] in _CLOSERS):
         i += 1
-    # If we hit EOF before finding a non-whitespace char, defer
+    # If we hit EOF before finding a significant char, defer
     if i >= len(text):
         return False
-    # A non-whitespace char exists — we can resolve
+    # A significant char exists — we can resolve
     return True
 
 
@@ -81,12 +83,9 @@ def _is_terminator(text: str, pos: int) -> bool:
     if not _period_can_resolve(text, pos):
         return False
 
-    # Decimal: digits on both sides
+    # Decimal: digit immediately on each side (no whitespace skip)
     if pos > 0 and text[pos - 1].isdigit():
-        i = pos + 1
-        while i < len(text) and text[i] in _WHITESPACE:
-            i += 1
-        if i < len(text) and text[i].isdigit():
+        if pos + 1 < len(text) and text[pos + 1].isdigit():
             return False  # decimal — not a boundary
 
     # Ellipsis: adjacent dot
@@ -165,6 +164,11 @@ class PhraseAccumulator:
             if boundary is not None:
                 phrase = buf[:boundary]
                 j = boundary
+                # Consume closing quote/bracket chars (attach to phrase)
+                while j < buf_len and buf[j] in _CLOSERS:
+                    j += 1
+                phrase = buf[:j]
+                # Then consume inter-phrase whitespace
                 while j < buf_len and buf[j] in _WHITESPACE:
                     j += 1
                 buf = buf[j:]

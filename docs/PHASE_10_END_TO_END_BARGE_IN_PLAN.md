@@ -199,8 +199,8 @@ QUEUED ──► SYNTHESIZING ──► STREAMING ──► PLAYING ──► CO
   ├── INTERRUPT_REQUESTED ◄─────┴─────────────┘            │             │
   │            │                                            │             │
   │            ▼                                            │             │
-  │     SYNTHESIS_CANCELLED                                 │             │
-  │            │                                            │             │
+  │     SYNTHESIS_CANCELLED ───────────────► REPLACED        │             │
+  │            │       (if no audio reached player)          │             │
   │            ▼                                            │             │
   │     PLAYBACK_STOP_REQUESTED                             │             │
   │            │                                            │             │
@@ -219,7 +219,8 @@ QUEUED ──► SYNTHESIZING ──► STREAMING ──► PLAYING ──► CO
 - **PLAYING → COMPLETED**: Normal end of TTS response; pipeline ends
 - **Any non-terminal → INTERRUPT_REQUESTED**: New wake word; pipeline cancelled
 - **INTERRUPT_REQUESTED → SYNTHESIS_CANCELLED**: Wrapper observes disconnect/cancellation
-- **SYNTHESIS_CANCELLED → PLAYBACK_STOP_REQUESTED**: Satellite receives stop signal
+- **SYNTHESIS_CANCELLED → REPLACED**: Original request was cancelled before any audio reached the player; no playback stop exists to request
+- **SYNTHESIS_CANCELLED → PLAYBACK_STOP_REQUESTED**: Audio may have reached the player, so the proven satellite/player stop mechanism is invoked
 - **PLAYBACK_STOP_REQUESTED → PLAYBACK_STOPPED**: Speaker silent
 - **PLAYBACK_STOPPED → REPLACED**: New response begins
 - **REPLACED → COMPLETED**: Replacement response finishes normally
@@ -348,9 +349,9 @@ Based on source-code inspection:
 
 | Primitive | Location | Function |
 |-----------|----------|----------|
-| `S2StreamResult.cancel()` | `app/s2_client.py:292` | Unblocks blocked `read()` workers |
+| `S2StreamResult.cancel()` | `app/s2_client.py:342` | Unblocks blocked `read()` workers |
 | `SpeechScheduler.cancel_connection()` | `app/speech/scheduler.py:377` | Cancels all queued work for a connection |
-| `SpeechScheduler.cancel_active_for_connection()` | `app/speech/scheduler.py` | Cancels active work for a connection |
+| `SpeechScheduler.cancel_active_for_connection()` | `app/speech/scheduler.py:402` | Cancels active work for a connection |
 | `SpeechScheduler.cancel_synthesis()` | `app/speech/scheduler.py:391` | Cancels by synthesis_id |
 | `StreamingCoordinator.cancel()` | `app/speech/stream_coordinator.py:257` | Cancels pending, active, and consumer task |
 | Wyoming handler `connection_closed()` | `app/wyoming_server.py` | Disconnect-triggered cleanup |
@@ -430,7 +431,7 @@ Based on ESPHome `voice_assistant.cpp` source:
 | P1 | Which playback path does the target use? (USE_SPEAKER, USE_MEDIA_PLAYER, or both?) | Check ESPHome YAML; observe entity types in HA |
 | P2 | Can ESPHome `voice_assistant_stop` service stop playback mid-stream? | Test via HA Developer Tools → Services |
 | P3 | Does a new TTS URL automatically stop prior playback on the media_player? | Test: send new TTS while playing; observe |
-| P4 | How much audio is buffered in the speaker buffer (SPEAKER_BUFFER_SIZE = 16KB)? | Calculate: 16KB / (44100 Hz × 2 bytes) ≈ 185 ms |
+| P4 | How much audio is buffered in the ESPHome voice-assistant speaker buffer (`SPEAKER_BUFFER_SIZE = 16 KiB`)? | For the source snapshot's 16 kHz mono s16le path: 16,384 / (16,000 × 2) ≈ 512 ms maximum buffer duration; verify the target build and measure actual drain |
 | P5 | Is there buffering in HA's TTS pipeline, Wyoming client, or ALSA/PulseAudio? | Check HA TTS provider code; check satellite OS |
 | P6 | Can the microphone hear the speaker (AEC quality)? | Test: play TTS, speak wake word, see if detected |
 | P7 | Is the microphone muted during playback? | Test: observe mic state during TTS playback |
@@ -746,7 +747,7 @@ implementation PR.
 | # | Question | Answer |
 |---|----------|--------|
 | Q21 | Audio path: wrapper → HA → satellite? Any intermediate buffers? | |
-| Q22 | Speaker buffer size? (Default: SPEAKER_BUFFER_SIZE=16KB ≈ 185ms @ 44100Hz 16-bit mono) | |
+| Q22 | Target speaker buffer size and actual drain time? (The source snapshot uses 16 KiB at 16 kHz mono s16le, a maximum ≈512 ms buffer duration; verify the target build.) | |
 | Q23 | Can satellite listen while playing? (Full duplex?) | |
 | Q24 | Is mic muted during playback? | |
 | Q25 | Does AEC exist? Hardware or software? | |
@@ -780,7 +781,7 @@ were checked and found accurate as-is:
 - `docs/ROADMAP.md`: Already lists Phase 10 correctly
 - `TODO.md`: Already lists Phase 10 correctly
 - `CHANGELOG.md`: Already documents Phase 9.5 as Unreleased
-- `docs/ARCHITECTURE.md`: No stale sections requiring update
+- `docs/ARCHITECTURE.md`: Reconciled stale Phase 8 cancellation-cleanup wording; Phase 10 remains unverified end-to-end work
 - `README.md`: No stale sections requiring update
 
 ---

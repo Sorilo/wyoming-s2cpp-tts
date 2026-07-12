@@ -6,9 +6,9 @@ state after every `/goal` run. Do not copy stale assumptions forward.
 ## Current state after Phase 9.5 (2026-07-12)
 
 - Repository: `main`; PR #2 (Phase 9) merged as `1a0b93f`; PR #9 (Phase 9.5) merged as `ec633bd`.
-- Phase 9.5 authoritative application suite: **1250 passed, 0 failed, 0 skipped**,
+- Phase 9.5 authoritative application suite: **1252 passed, 0 failed, 0 skipped**,
   excluding the 14 environment-specific tests in `tests/test_realtime_tuning_unraid.py`.
-  Phase 9.5 focused affected gate: **208 passed**. Coordinator/cancellation gate: **33 passed**.
+  Phase 9.5 focused affected gate: **208 passed**.
 - Phase 9C application-suite baseline (prior): **1112 passed, 0 failed, 0 skipped**.
   Phase 9B: source-only domain refactor complete. Phase 9.5: progressive phrase
   synthesis implemented (PhraseAccumulator, AudioEnvelope, StreamingCoordinator)
@@ -513,7 +513,7 @@ AudioEnvelope normalizes continuous Wyoming audio across multiple phrase
 synthesis operations. StreamingCoordinator submits phrases through
 SpeechScheduler one at a time with bounded backpressure. Handler integration
 supports progressive feeding, compat-synthesize deduplication, disconnect
-cancellation, and generator cleanup. Test baseline: 1250 passed, 0 failed.
+cancellation, and generator cleanup. Test baseline: 1252 passed, 0 failed, 0 skipped.
 
 ## Next official phase: Phase 10 — End-to-End Barge-In
 

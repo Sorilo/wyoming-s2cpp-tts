@@ -131,15 +131,15 @@ Requires separate goal and controlled backend-image builds.
 ### Phase 9: queue, busy handling, and timeout policy ✅
 Implemented deterministic bounded FIFO admission, backend HTTP 503 retry, queue-wait and synthesis deadlines, controlled Wyoming failure behavior, and disconnect recovery. PR #2 merged as `1a0b93f`; 876 tests and isolated Unraid validation passed. Validated images are deployed. Short and long direct Wyoming smoke and audible Home Assistant VM smoke passed with zero restarts, queue depth zero, active GPU inference, and clean logs. Phase 9 is closed.
 
-### Phase 9.5: progressive LLM text-to-TTS phrase pipeline
+### Phase 9.5: progressive LLM text-to-TTS phrase pipeline ✅
 
-Home Assistant sends streaming TTS input via synthesize-start/chunk/stop.
-The wrapper currently accumulates all chunks until synthesize-stop, so TTS
-does not begin while the LLM is still generating.  This phase should add
-phrase-boundary accumulation, serialized phrase synthesis, continuous
-Wyoming audio timestamps, cancellation, queueing, and barge-in-safe
-behavior.  Must preserve one active s2.cpp synthesis at a time and avoid
-double-synthesizing the backwards-compatibility full-message event.
+Implemented source-only progressive phrase synthesis for Wyoming
+synthesize-start/chunk/stop input. Complete phrases enter the existing FIFO
+scheduler before synthesize-stop, while one logical AudioStart/AudioStop
+envelope preserves continuous timestamps across backend phrase operations.
+Compatibility authority, bounded buffering, cancellation, timeout, drain,
+and cleanup behavior are covered by deterministic tests. No image was built
+or deployed; production remains on the recorded Phase 9 image pins.
 
 ### Phase 10: end-to-end barge-in testing with HA satellite/player
 Test with an actual Home Assistant satellite/player path including VAD, wake word, playback interruption, and new-request behavior.
@@ -190,7 +190,7 @@ Finalize templates after real restart/update/persistence/backup validation.
 - Bind failure non-fatal. Source-only; no image published/deployed. Production remains on Phase 9 images.
 - Full standard suite: **1112 passed, 0 failed, 0 skipped**.
 
-## Phase 9.5: Progressive Phrase Synthesis — Draft implementation
+## Phase 9.5: Progressive Phrase Synthesis — Complete
 
 Implemented per-request bounded deterministic phrase accumulation, continuous Wyoming audio streaming, and progressive phrase-by-phrase synthesis through the SpeechScheduler.
 
@@ -217,6 +217,10 @@ Implemented per-request bounded deterministic phrase accumulation, continuous Wy
 7. ``61b0e63`` — fix: avoid terminal audio for empty streams
 8. ``e0b8dbc`` — feat: integrate progressive Wyoming synthesis
 9. ``799952f`` — fix: harden progressive stream cleanup
+10. ``feaec8c`` — fix: gate terminal success after disconnect
+11. ``be4d1c0`` — fix: unblock coordinator consumers on cancellation
+12. ``fa8ac46`` — docs: document progressive synthesis draft
+13. ``51226af`` — docs: describe progressive synthesis architecture
 
 **Known limitations**:
 - Timeout and deadline budgets apply per-phrase (inherited from SpeechScheduler), not to the entire logical streaming request.

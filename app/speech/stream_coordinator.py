@@ -283,11 +283,19 @@ class StreamingCoordinator:
             except asyncio.CancelledError:
                 pass
 
-        # Attempt envelope close (best-effort)
+        # Attempt envelope close (best-effort). Cancellation is connection
+        # teardown, so discard pending wire output and unblock the consumer;
+        # do not promise delivery of new terminal audio to a closed client.
         try:
             self._envelope.close(on_success=False)
         except (EnvelopeError, RuntimeError):
             pass
+        while not self._output.empty():
+            try:
+                self._output.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+        self._output.put_nowait(None)
 
     async def drain(self) -> None:
         """Prevent new phrases from starting.

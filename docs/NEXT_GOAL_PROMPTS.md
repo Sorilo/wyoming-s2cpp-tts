@@ -511,7 +511,7 @@ AudioEnvelope normalizes continuous Wyoming audio across multiple phrase
 synthesis operations. StreamingCoordinator submits phrases through
 SpeechScheduler one at a time with bounded backpressure. Handler integration
 supports progressive feeding, compat-synthesize deduplication, disconnect
-cancellation, and generator cleanup. Test baseline: 1236 passed, 0 failed.
+cancellation, and generator cleanup. Test baseline: 1250 passed, 0 failed.
 
 ## Next official phase: Phase 10 — End-to-End Barge-In Testing
 

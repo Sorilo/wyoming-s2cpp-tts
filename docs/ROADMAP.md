@@ -205,7 +205,7 @@ Implemented per-request bounded deterministic phrase accumulation, continuous Wy
 - ``SynthesizeStop`` feeds deferred compat text only when no streaming chunks arrived, flushes remaining text, and awaits the consumer task. SynthesizeStopped is emitted only if the client is still connected (prevents post-disconnect leak).
 - Disconnect/cancellation cancels the coordinator, drains pending phrases, and closes the consumer task. Generator cleanup (aclose) is verified.
 
-**Test baseline**: 1236 passed, 0 failed, 0 skipped (excluding 14 environment-specific Unraid tests). Full suite includes 218 focused tests across synthesis session, streaming protocol, compatibility, Wyoming streaming, coordinator/envelope, scheduler/drain, shutdown/lifecycle, and backend.
+**Test baseline**: 1250 passed, 0 failed, 0 skipped (excluding 14 environment-specific Unraid tests). Full suite includes 218 focused tests across synthesis session, streaming protocol, compatibility, Wyoming streaming, coordinator/envelope, scheduler/drain, shutdown/lifecycle, and backend.
 
 **Commits** (on branch ``phase/phase-9-5-progressive-phrase-synthesis``):
 1. ``d12dc27`` — docs: add reviewed progressive synthesis plan

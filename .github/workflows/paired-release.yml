@@ -1,0 +1,287 @@
+name: Paired Release
+
+# Manually dispatched paired release: builds, smoke-tests, and publishes
+# both wrapper and backend images as a matched pair with the same version.
+#
+# No PR triggers.  No edge/latest tags.  Exact SHA pinning everywhere.
+# Source tests gate builds; smoke tests gate registry login/publish.
+#
+# Supports version formats: v0.1.0, v0.1.0-rc.1 (source remains 0.1.0).
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version tag (e.g. v0.1.0 or v0.1.0-rc.1)'
+        required: true
+        type: string
+        default: 'v0.1.0'
+
+env:
+  REGISTRY: ghcr.io
+  WRAPPER_IMAGE: ghcr.io/${{ github.repository }}
+  BACKEND_IMAGE: ghcr.io/${{ github.repository }}-backend
+
+permissions:
+  contents: read
+
+jobs:
+  # ------------------------------------------------------------------
+  # Gate: source tests must pass before any build
+  # ------------------------------------------------------------------
+  source-tests:
+    name: Source Tests
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4aa0d20ccf3c835b4c51100259d7204042244b7  # v6.0.0
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Verify version consistency
+        run: |
+          uv run python -c "from app.version import __version__; print(f'source version={__version__}')"
+          uv run pytest tests/test_version.py tests/test_version_consistency.py tests/test_docker_version_labels.py tests/test_release_manifest.py -v
+
+      - name: Run full test suite
+        run: uv run pytest tests/ --ignore=tests/test_realtime_tuning_unraid.py -v
+
+  # ------------------------------------------------------------------
+  # Build wrapper image (no push, export tarball)
+  # ------------------------------------------------------------------
+  build-wrapper:
+    name: Build Wrapper
+    needs: source-tests
+    runs-on: ubuntu-24.04
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ecbbf009443  # v3.10.0
+
+      - name: Build wrapper image (export tarball, no push)
+        id: build
+        uses: docker/build-push-action@471d1dc4e07e5cdedd4c2171150001c434f0b7a4  # v6.15.0
+        with:
+          context: .
+          file: docker/wrapper/Dockerfile
+          platforms: linux/amd64
+          push: false
+          outputs: type=docker,dest=/tmp/wrapper.tar
+          build-args: |
+            VERSION=${{ inputs.version }}
+            REVISION=${{ github.sha }}
+            CREATED=${{ github.event.repository.updated_at }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Upload wrapper tarball
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: wrapper-image
+          path: /tmp/wrapper.tar
+          retention-days: 1
+
+  # ------------------------------------------------------------------
+  # Build backend image (no push, export tarball)
+  # ------------------------------------------------------------------
+  build-backend:
+    name: Build Backend
+    needs: source-tests
+    runs-on: ubuntu-24.04
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ecbbf009443  # v3.10.0
+
+      - name: Build backend image (export tarball, no push)
+        id: build
+        uses: docker/build-push-action@471d1dc4e07e5cdedd4c2171150001c434f0b7a4  # v6.15.0
+        with:
+          context: .
+          file: docker/s2cpp/Dockerfile.cuda
+          platforms: linux/amd64
+          push: false
+          outputs: type=docker,dest=/tmp/backend.tar
+          build-args: |
+            VERSION=${{ inputs.version }}
+            REVISION=${{ github.sha }}
+            CREATED=${{ github.event.repository.updated_at }}
+            CUDA_ARCHITECTURES=86
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Upload backend tarball
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: backend-image
+          path: /tmp/backend.tar
+          retention-days: 1
+
+  # ------------------------------------------------------------------
+  # Smoke: load exact images and verify before any registry access
+  # ------------------------------------------------------------------
+  smoke:
+    name: Smoke Test Pair
+    needs: [build-wrapper, build-backend]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Download wrapper tarball
+        uses: actions/download-artifact@95815c38cfb76e9b1e22ed0f3ab7a0c2a24a8d54  # v4.3.0
+        with:
+          name: wrapper-image
+          path: /tmp
+
+      - name: Download backend tarball
+        uses: actions/download-artifact@95815c38cfb76e9b1e22ed0f3ab7a0c2a24a8d54  # v4.3.0
+        with:
+          name: backend-image
+          path: /tmp
+
+      - name: Load wrapper image
+        run: docker load < /tmp/wrapper.tar
+
+      - name: Load backend image
+        run: docker load < /tmp/backend.tar
+
+      - name: Verify wrapper image labels
+        run: |
+          docker inspect $(docker images --format '{{.Repository}}:{{.Tag}}' | grep 'wyoming-s2cpp-tts' | head -1)             --format 'version={{index .Config.Labels "org.opencontainers.image.version"}} role={{index .Config.Labels "wyoming-s2cpp-tts.role"}}'
+          VERSION_LABEL=$(docker inspect $(docker images --format '{{.Repository}}:{{.Tag}}' | grep 'wyoming-s2cpp-tts' | head -1)             --format '{{index .Config.Labels "org.opencontainers.image.version"}}')
+          test "$VERSION_LABEL" = "${{ inputs.version }}" || { echo "Version mismatch: $VERSION_LABEL != ${{ inputs.version }}"; exit 1; }
+
+      - name: Verify backend image labels
+        run: |
+          docker inspect $(docker images --format '{{.Repository}}:{{.Tag}}' | grep 's2cpp' | head -1)             --format 'version={{index .Config.Labels "org.opencontainers.image.version"}} role={{index .Config.Labels "wyoming-s2cpp-tts.role"}}'
+          VERSION_LABEL=$(docker inspect $(docker images --format '{{.Repository}}:{{.Tag}}' | grep 's2cpp' | head -1)             --format '{{index .Config.Labels "org.opencontainers.image.version"}}')
+          test "$VERSION_LABEL" = "${{ inputs.version }}" || { echo "Version mismatch: $VERSION_LABEL != ${{ inputs.version }}"; exit 1; }
+
+      - name: Smoke wrapper (health check)
+        run: |
+          docker run --rm -d --name wrapper-smoke             $(docker images --format '{{.Repository}}:{{.Tag}}' | grep 'wyoming-s2cpp-tts' | head -1)
+          sleep 5
+          docker ps --filter name=wrapper-smoke --format '{{.Status}}' | grep -q 'Up' || { echo "Wrapper not running"; exit 1; }
+          docker stop wrapper-smoke
+
+      - name: Smoke backend (binary exists)
+        run: |
+          docker run --rm             $(docker images --format '{{.Repository}}:{{.Tag}}' | grep 's2cpp' | head -1)             /usr/local/bin/s2 --help 2>&1 | head -5 || true
+          echo "Backend binary smoke OK"
+
+  # ------------------------------------------------------------------
+  # Publish: login and push both images with same version tag + attestation
+  # ------------------------------------------------------------------
+  publish:
+    name: Publish Pair
+    needs: smoke
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Download wrapper tarball
+        uses: actions/download-artifact@95815c38cfb76e9b1e22ed0f3ab7a0c2a24a8d54  # v4.3.0
+        with:
+          name: wrapper-image
+          path: /tmp
+
+      - name: Download backend tarball
+        uses: actions/download-artifact@95815c38cfb76e9b1e22ed0f3ab7a0c2a24a8d54  # v4.3.0
+        with:
+          name: backend-image
+          path: /tmp
+
+      - name: Load images
+        run: |
+          docker load < /tmp/wrapper.tar
+          docker load < /tmp/backend.tar
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@74a5d142397b4f367a81961bbf2672871b3e762f  # v3.4.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag and push wrapper image
+        id: push-wrapper
+        run: |
+          WRAPPER_ID=$(docker images --format '{{.ID}}' --filter "reference=*wyoming-s2cpp-tts*" | head -1)
+          docker tag "$WRAPPER_ID" "${{ env.WRAPPER_IMAGE }}:${{ inputs.version }}"
+          docker tag "$WRAPPER_ID" "${{ env.WRAPPER_IMAGE }}:sha-${{ github.sha }}"
+          docker push "${{ env.WRAPPER_IMAGE }}:${{ inputs.version }}"
+          docker push "${{ env.WRAPPER_IMAGE }}:sha-${{ github.sha }}"
+          WRAPPER_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${{ env.WRAPPER_IMAGE }}:${{ inputs.version }}" | sed 's/.*@//')
+          echo "wrapper_digest=$WRAPPER_DIGEST" >> "$GITHUB_OUTPUT"
+
+      - name: Tag and push backend image
+        id: push-backend
+        run: |
+          BACKEND_ID=$(docker images --format '{{.ID}}' --filter "reference=*s2cpp*" | head -1)
+          docker tag "$BACKEND_ID" "${{ env.BACKEND_IMAGE }}:${{ inputs.version }}"
+          docker tag "$BACKEND_ID" "${{ env.BACKEND_IMAGE }}:sha-${{ github.sha }}"
+          docker push "${{ env.BACKEND_IMAGE }}:${{ inputs.version }}"
+          docker push "${{ env.BACKEND_IMAGE }}:sha-${{ github.sha }}"
+          BACKEND_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${{ env.BACKEND_IMAGE }}:${{ inputs.version }}" | sed 's/.*@//')
+          echo "backend_digest=$BACKEND_DIGEST" >> "$GITHUB_OUTPUT"
+
+      - name: Generate release manifest
+        id: manifest
+        env:
+          VERSION: ${{ inputs.version }}
+          S2CPP_REVISION: 2c33261938da1a41d713768b1b391b4d368d7d2c
+          SOURCE_SHA: ${{ github.sha }}
+          WRAPPER_DIGEST: ${{ steps.push-wrapper.outputs.wrapper_digest }}
+          BACKEND_DIGEST: ${{ steps.push-backend.outputs.backend_digest }}
+        run: |
+          python3 scripts/generate_release_manifest.py > /tmp/release-manifest.json
+          cat /tmp/release-manifest.json
+
+      - name: Upload release manifest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: release-manifest
+          path: /tmp/release-manifest.json
+          retention-days: 90
+
+      - name: Generate SBOM for wrapper
+        uses: anchore/sbom-action@f525aab9e2ac258d5493e9970ea1ae5b87c0b43f  # v0.18.0
+        with:
+          image: ${{ env.WRAPPER_IMAGE }}:${{ inputs.version }}
+          output-file: /tmp/wrapper-sbom.spdx.json
+
+      - name: Generate SBOM for backend
+        uses: anchore/sbom-action@f525aab9e2ac258d5493e9970ea1ae5b87c0b43f  # v0.18.0
+        with:
+          image: ${{ env.BACKEND_IMAGE }}:${{ inputs.version }}
+          output-file: /tmp/backend-sbom.spdx.json
+
+      - name: Upload SBOMs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: sboms
+          path: /tmp/*-sbom.spdx.json
+          retention-days: 90

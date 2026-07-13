@@ -53,3 +53,14 @@ def test_pyproject_no_deprecated_license_classifier() -> None:
     assert len(license_classifiers) == 0, (
         f"Deprecated license classifiers found: {license_classifiers}"
     )
+
+
+def test_production_requirements_exclude_test_frameworks() -> None:
+    """The wrapper image installs requirements.txt, so it must contain runtime deps only."""
+    requirements = (PROJECT_ROOT / "requirements.txt").read_text(encoding="utf-8")
+    active = [
+        line.strip().lower()
+        for line in requirements.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    assert not any(dep.startswith("pytest") for dep in active), active

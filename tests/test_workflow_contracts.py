@@ -187,9 +187,9 @@ def test_paired_release_smoke_before_publish():
 
 
 def test_publish_depends_on_smoke():
-    """Publish job needs smoke."""
+    """Publish job directly needs source outputs and the completed smoke gate."""
     text = _read(PAIRED_RELEASE)
-    assert "needs: smoke" in text
+    assert "needs: [source-tests, smoke]" in text
 
 
 def test_login_after_smoke_job():
@@ -732,3 +732,21 @@ def test_source_tests_use_module_invocation_for_project_imports():
     assert "uv run python -m pytest tests/ --ignore=tests/test_realtime_tuning_unraid.py -v" in pr
     assert "uv run python -m pytest tests/ --ignore=tests/test_realtime_tuning_unraid.py -v" in release
     assert "uv run python -m pytest tests/test_version.py" in release
+
+
+def test_every_needs_output_reference_declares_direct_job_dependency():
+    """GitHub exposes outputs only for jobs listed directly in a job's needs."""
+    text = _read(PAIRED_RELEASE).split("jobs:\n", 1)[1]
+    starts = list(re.finditer(r"^  ([a-z][a-z0-9-]+):\s*$", text, re.MULTILINE))
+    assert starts
+    for index, start in enumerate(starts):
+        end = starts[index + 1].start() if index + 1 < len(starts) else len(text)
+        name = start.group(1)
+        block = text[start.end():end]
+        references = set(re.findall(r"needs\.([a-z][a-z0-9-]+)\.", block))
+        needs_match = re.search(r"^    needs:\s*(.+)$", block, re.MULTILINE)
+        declared = set(re.findall(r"[a-z][a-z0-9-]+", needs_match.group(1))) if needs_match else set()
+        assert references <= declared, (
+            f"job {name!r} references undeclared needs jobs: "
+            f"{sorted(references - declared)}"
+        )

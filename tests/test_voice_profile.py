@@ -1025,3 +1025,13 @@ class TestReviewRegression_SignedFieldValidity:
         struct.pack_into("<i", raw, 24, -4096)
         with pytest.raises(VoiceProfileError):
             parse_s2voice(bytes(raw))
+
+
+def test_jsonschema_is_declared_in_canonical_package_metadata():
+    """Clean `uv sync` installs the runtime validator used by voice tooling."""
+    import tomllib
+
+    pyproject_path = Path(__file__).resolve().parent.parent / "pyproject.toml"
+    pyproject = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+    dependencies = pyproject["project"]["dependencies"]
+    assert any(dep.split(">=", 1)[0].lower() == "jsonschema" for dep in dependencies)

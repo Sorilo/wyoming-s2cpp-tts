@@ -283,6 +283,22 @@ def test_follow_up_requires_correlated_completed_terminal():
     assert p10.assert_follow_up_request_completed(complete).passed is True
 
 
+def test_live_event_in_marks_follow_up_synthesis_received():
+    import scripts.phase10_live_validation as p10
+    fp = "afe09bca8086"
+    wrapper_logs = [
+        f'2026-07-13T03:15:06Z {{"connection_id":"c1","event":"event_in",'
+        f'"event_type":"synthesize","text_fp":"{fp}"}}',
+        f'2026-07-13T03:15:06Z {{"connection_id":"c1","event":"syn_trigger",'
+        f'"synthesis_id":"s1","text_fp":"{fp}"}}',
+        f'2026-07-13T03:15:09Z {{"connection_id":"c1","event":"synthesis_terminal",'
+        f'"synthesis_id":"s1","terminal_state":"completed","text_fp":"{fp}"}}',
+    ]
+    correlation = p10.correlate_disconnect_logs(wrapper_logs, [], fp)
+    assert correlation["has_synthesis_received"] is True
+    assert p10.assert_follow_up_request_completed(correlation).passed is True
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Test 4: Backend native log parser
 # ═══════════════════════════════════════════════════════════════════════════
@@ -324,6 +340,20 @@ class TestBackendNativeLogParser:
         assert result["reason"] == "client_disconnect"
         assert result["point"] == "content_provider_wait"
         assert result["request_id"] == "s-1"
+
+    def test_parse_timestamped_backend_native_cancellation_line(self):
+        """Exact docker --timestamps output must retain native cancellation evidence."""
+        import scripts.phase10_live_validation as p10
+
+        line = (
+            "2026-07-13T03:15:06.404233771Z "
+            "[CANCEL] backend_cancel_detected reason=client_disconnect "
+            "point=content_provider_wait request_id=1eb6c032"
+        )
+        result = p10.parse_backend_native_line(line)
+        assert result is not None
+        assert result["event"] == "backend_cancel_detected"
+        assert result["request_id"] == "1eb6c032"
 
     def test_parse_backend_native_generation_cancel_line(self):
         import scripts.phase10_live_validation as p10

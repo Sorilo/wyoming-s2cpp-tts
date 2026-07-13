@@ -372,12 +372,19 @@ def parse_backend_native_line(line: str) -> dict[str, Any] | None:
         [CANCEL] backend_cancel_detected reason=client_disconnect \
             point=content_provider_wait request_id=s-1
 
+    Docker --timestamps output may prefix the native line with an RFC 3339
+    timestamp, so we strip that prefix before parsing.
+
     Returns a dict with ``event`` and parsed key=value pairs, or *None*
     if the line does not match the known backend native format.
     """
     stripped = line.strip()
     if not stripped:
         return None
+
+    ts_prefix = _parse_rfc3339_prefix(stripped)
+    if ts_prefix is not None:
+        stripped = stripped[len(ts_prefix):].lstrip()
 
     # Only handle [CANCEL] prefixed lines; JSON goes through _extract_json_from_line
     if not stripped.startswith(_CANCEL_PREFIX):
@@ -1101,7 +1108,9 @@ def correlate_disconnect_logs(
     for ev in wrapper_events:
         if ev.get("event") == "conn_closed":
             result["has_conn_closed"] = True
-        if ev.get("event") == "synthesize_received":
+        if ev.get("event") == "synthesize_received" or (
+            ev.get("event") == "event_in" and ev.get("event_type") == "synthesize"
+        ) or ev.get("event") == "syn_trigger":
             result["has_synthesis_received"] = True
 
     # Also scan ALL wrapper events (not just text_fp-matched) for
@@ -1117,7 +1126,9 @@ def correlate_disconnect_logs(
             if ev.get("connection_id") == conn_id:
                 if ev.get("event") == "conn_closed":
                     result["has_conn_closed"] = True
-                if ev.get("event") == "synthesize_received":
+                if ev.get("event") == "synthesize_received" or (
+                    ev.get("event") == "event_in" and ev.get("event_type") == "synthesize"
+                ) or ev.get("event") == "syn_trigger":
                     result["has_synthesis_received"] = True
 
     # Correlate backend events by synthesis_id
@@ -1441,6 +1452,20 @@ async def collect_docker_logs(
         except Exception as exc:
             logs[name] = [f"ERROR: {exc}"]
     return logs
+
+
+def preserve_latest_docker_logs(
+    report: ValidationReport,
+    latest_logs: dict[str, list[str]],
+) -> None:
+    """Update report log payloads with the latest collected Docker logs."""
+    wrapper_logs = latest_logs.get("wyoming-s2cpp-tts")
+    if wrapper_logs is not None:
+        report.wrapper_logs = list(wrapper_logs)
+
+    backend_logs = latest_logs.get("s2cpp-backend")
+    if backend_logs is not None:
+        report.backend_logs = list(backend_logs)
 
 
 async def check_wyoming_port(
@@ -2254,6 +2279,7 @@ async def _run_direct_disconnect_mode(
         subprocess_runner=subprocess_runner,
         since=baseline_utc,
     )
+    preserve_latest_docker_logs(report, followup_logs)
     followup_wrapper = followup_logs.get("wyoming-s2cpp-tts", [])
     followup_correlation = correlate_disconnect_logs(
         wrapper_logs=followup_wrapper,

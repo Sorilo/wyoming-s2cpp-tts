@@ -404,6 +404,18 @@ class TestDockerLogTimestamps:
             "before": "wrapper-id", "after": None,
         }
 
+    def test_latest_log_collection_replaces_artifact_payload(self):
+        report = p10.ValidationReport(
+            mode="direct-disconnect", utc_timestamp="20260713T031504Z", dry_run=False,
+            wrapper_logs=["original-only"], backend_logs=["backend-original"],
+        )
+        p10.preserve_latest_docker_logs(report, {
+            "wyoming-s2cpp-tts": ["original-only", "follow-up"],
+            "s2cpp-backend": ["backend-original", "backend-follow-up"],
+        })
+        assert report.wrapper_logs == ["original-only", "follow-up"]
+        assert report.backend_logs == ["backend-original", "backend-follow-up"]
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Test 5: Token sanitization — recursive, strings/headers

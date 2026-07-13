@@ -665,13 +665,16 @@ def test_paired_release_emits_and_uses_short_sha_tag():
 
 def test_paired_release_rc_validation_accepts_multi_digit_positive_rc():
     text = _read(PAIRED_RELEASE)
-    assert r"(-rc\.[1-9][0-9]*)?" in text
+    assert '"v${CANONICAL}-rc."*' in text
+    assert '"$RC_NUMBER" =~ ^[1-9][0-9]*$' in text
 
 
-def test_sbom_uses_normalized_release_image_tags():
+def test_sbom_uses_exact_prepublication_candidate_images():
     text = _read(PAIRED_RELEASE)
-    assert "image: ${{ env.WRAPPER_IMAGE }}:${{ needs.source-tests.outputs.release_version }}" in text
-    assert "image: ${{ env.BACKEND_IMAGE }}:${{ needs.source-tests.outputs.release_version }}" in text
+    assert "image: local/wrapper:candidate" in text
+    assert "image: local/backend:candidate" in text
+    assert text.index("image: local/wrapper:candidate") < text.index("  publish:")
+    assert text.index("image: local/backend:candidate") < text.index("  publish:")
 
 
 def test_pr_ci_uses_verified_setup_uv_sha():
@@ -683,3 +686,38 @@ def test_pr_ci_uses_verified_setup_uv_sha():
 def test_workflows_use_locked_dependency_sync():
     assert "uv sync --locked --group dev" in _read(PR_CI)
     assert "uv sync --locked --group dev" in _read(PAIRED_RELEASE)
+
+
+def test_preflight_compares_canonical_version_as_literal_string():
+    text = _read(PAIRED_RELEASE)
+    assert '[ "$VERSION_INPUT" = "v${CANONICAL}" ]' in text
+    assert '"v${CANONICAL}-rc."*' in text
+    assert 'RC_NUMBER="${VERSION_INPUT#v${CANONICAL}-rc.}"' in text
+    assert '"$RC_NUMBER" =~ ^[1-9][0-9]*$' in text
+    assert '^v${CANONICAL}(' not in text
+
+
+def test_candidate_sboms_are_generated_before_publish():
+    text = _read(PAIRED_RELEASE)
+    smoke = text.index("  smoke:")
+    wrapper = text.index("image: local/wrapper:candidate")
+    backend = text.index("image: local/backend:candidate")
+    publish = text.index("  publish:")
+    assert smoke < wrapper < publish
+    assert smoke < backend < publish
+
+
+def test_publish_always_reports_pair_integrity_and_fails_partial_state():
+    text = _read(PAIRED_RELEASE)
+    assert "Verify paired publication integrity" in text
+    assert "if: ${{ always()" in text
+    assert 'docker manifest inspect "$wrapper_ref"' in text
+    assert 'docker manifest inspect "$backend_ref"' in text
+    assert "partial paired publication; do not deploy" in text
+    assert "GITHUB_STEP_SUMMARY" in text
+
+
+def test_non_push_build_jobs_do_not_declare_empty_digest_outputs():
+    text = _read(PAIRED_RELEASE)
+    prefix = text[:text.index("  smoke:")]
+    assert "steps.build.outputs.digest" not in prefix

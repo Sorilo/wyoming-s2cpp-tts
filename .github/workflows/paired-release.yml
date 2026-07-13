@@ -78,8 +78,17 @@ jobs:
           CANONICAL=$(uv run python -c "from app.version import __version__; print(__version__)")
           echo "Canonical source version: ${CANONICAL}"
 
-          # Validate: exact stable tag or a positive, unbounded RC number.
-          if [[ ! "$VERSION_INPUT" =~ ^v${CANONICAL}(-rc\.[1-9][0-9]*)?$ ]]; then
+          # Compare the canonical version as a literal string, never as regex.
+          VALID_VERSION=false
+          if [ "$VERSION_INPUT" = "v${CANONICAL}" ]; then
+            VALID_VERSION=true
+          elif [[ "$VERSION_INPUT" == "v${CANONICAL}-rc."* ]]; then
+            RC_NUMBER="${VERSION_INPUT#v${CANONICAL}-rc.}"
+            if [[ "$RC_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+              VALID_VERSION=true
+            fi
+          fi
+          if [ "$VALID_VERSION" != true ]; then
             echo "ERROR: version '${VERSION_INPUT}' does not match canonical ${CANONICAL}"
             echo "       Must be v${CANONICAL} or v${CANONICAL}-rc.N (N>=1)"
             exit 1
@@ -115,8 +124,6 @@ jobs:
     name: Build Wrapper
     needs: source-tests
     runs-on: ubuntu-24.04
-    outputs:
-      digest: ${{ steps.build.outputs.digest }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
@@ -155,8 +162,6 @@ jobs:
     name: Build Backend
     needs: source-tests
     runs-on: ubuntu-24.04
-    outputs:
-      digest: ${{ steps.build.outputs.digest }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
@@ -290,6 +295,25 @@ jobs:
           ignore-unfixed: true
           exit-code: '1'
 
+      - name: Generate SBOM for wrapper candidate
+        uses: anchore/sbom-action@f325610c9f50a54015d37c8d16cb3b0e2c8f4de0  # verified
+        with:
+          image: local/wrapper:candidate
+          output-file: /tmp/wrapper-sbom.spdx.json
+
+      - name: Generate SBOM for backend candidate
+        uses: anchore/sbom-action@f325610c9f50a54015d37c8d16cb3b0e2c8f4de0  # verified
+        with:
+          image: local/backend:candidate
+          output-file: /tmp/backend-sbom.spdx.json
+
+      - name: Upload candidate SBOMs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: sboms
+          path: /tmp/*-sbom.spdx.json
+          retention-days: 90
+
   # ------------------------------------------------------------------
   # Publish: login and push both images with same version tag + attestation
   # ------------------------------------------------------------------
@@ -400,22 +424,25 @@ jobs:
           name: release-manifest
           path: /tmp/release-manifest.json
           retention-days: 90
-
-      - name: Generate SBOM for wrapper
-        uses: anchore/sbom-action@f325610c9f50a54015d37c8d16cb3b0e2c8f4de0  # verified
-        with:
-          image: ${{ env.WRAPPER_IMAGE }}:${{ needs.source-tests.outputs.release_version }}
-          output-file: /tmp/wrapper-sbom.spdx.json
-
-      - name: Generate SBOM for backend
-        uses: anchore/sbom-action@f325610c9f50a54015d37c8d16cb3b0e2c8f4de0  # verified
-        with:
-          image: ${{ env.BACKEND_IMAGE }}:${{ needs.source-tests.outputs.release_version }}
-          output-file: /tmp/backend-sbom.spdx.json
-
-      - name: Upload SBOMs
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
-        with:
-          name: sboms
-          path: /tmp/*-sbom.spdx.json
-          retention-days: 90
+      - name: Verify paired publication integrity
+        if: ${{ always() && (steps.push-wrapper.outcome != 'skipped' || steps.push-backend.outcome != 'skipped') }}
+        env:
+          RELEASE_VERSION: ${{ needs.source-tests.outputs.release_version }}
+        run: |
+          set -euo pipefail
+          wrapper_ref="${{ env.WRAPPER_IMAGE }}:${RELEASE_VERSION}"
+          backend_ref="${{ env.BACKEND_IMAGE }}:${RELEASE_VERSION}"
+          wrapper_status=missing
+          backend_status=missing
+          if docker manifest inspect "$wrapper_ref" >/dev/null 2>&1; then wrapper_status=present; fi
+          if docker manifest inspect "$backend_ref" >/dev/null 2>&1; then backend_status=present; fi
+          {
+            echo "## Paired publication integrity"
+            echo "- Wrapper semantic tag: ${wrapper_status}"
+            echo "- Backend semantic tag: ${backend_status}"
+            echo "- Deployable only if this entire workflow succeeds and manifest/SBOM artifacts exist."
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$wrapper_status" != present ] || [ "$backend_status" != present ]; then
+            echo "ERROR: partial paired publication; do not deploy this release." >&2
+            exit 1
+          fi

@@ -31,7 +31,7 @@ Before tagging a release:
 
 - [ ] `docs/INSTALL.md` is tested on a clean clone.
 
-- [ ] No real server IPs, tokens, or credentials in any tracked file.
+- [ ] Release-facing install/security docs contain no real server IPs, tokens, or credentials; historical evidence remains preserved.
 
 - [ ] Container images are built and published to `ghcr.io/sorilo/`:
   - Wrapper: `ghcr.io/sorilo/wyoming-s2cpp-tts:0.1.0` +
@@ -83,3 +83,16 @@ See `docs/UPGRADE_ROLLBACK.md` for the rollback procedure.
 - Full Unraid template persistence, restart, update, and backup validation is
   deferred to Phase 14.
 - Hardware-upgrade benchmarking is post-v0.1 work.
+
+## Failure and partial-publication policy
+
+Publishing two GHCR repositories is not an atomic transaction. The workflow therefore
+builds, smoke-tests, vulnerability-scans, and generates SBOMs for both exact candidate
+images before registry login. After push it always verifies that both semantic tags are
+present and writes the paired status to the GitHub Actions job summary.
+
+A release is **not deployable** unless the entire paired-release workflow succeeds and
+its release-manifest and SBOM artifacts are present. If a push, attestation, manifest,
+or final integrity step fails, treat any visible tag as an incomplete attempt; do not
+deploy it. Correct the failure and rerun the same approved release candidate. Never
+move `latest`, `edge`, or `prod` tags as a recovery shortcut.

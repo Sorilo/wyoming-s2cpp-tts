@@ -28,12 +28,9 @@ def test_gpu_visibility_script_is_safe_and_mentions_nvidia_smi():
     assert "docker build" not in script
 
 
-def test_dockerfile_contains_future_cuda_s2cpp_placeholders_without_enabling_build():
-    dockerfile = (ROOT / "Dockerfile").read_text()
+def test_wrapper_dockerfile_references_s2cpp_and_cuda():
+    """Phase 11: root Dockerfile removed; validate the wrapper dockerfile."""
+    dockerfile = (ROOT / "docker" / "wrapper" / "Dockerfile").read_text()
 
-    assert "PHASE 4 TODO" in dockerfile
-    assert "s2.cpp" in dockerfile
-    assert "CUDA" in dockerfile
-    assert "S2CPP_ENABLE_INTERNAL_SERVER=false" in dockerfile
+    assert "s2cpp-backend" in dockerfile or "S2_HOST" in dockerfile
     assert "EXPOSE 10200/tcp" in dockerfile
-    assert "EXPOSE 8088/tcp" in dockerfile

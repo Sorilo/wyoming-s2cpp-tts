@@ -1,6 +1,6 @@
 # Unraid install notes — v0.1.0
 
-The v0.1.0 deployment uses two Docker containers linked through a private Docker bridge network.
+The v0.1.0 deployment uses two Docker containers linked through a shared Docker bridge whose backend port is not host-published.
 
 For the generic Docker Compose setup (recommended for v0.1.0), see `compose.yaml` and `docs/INSTALL.md`.
 These Unraid notes complement the Compose approach for users who prefer Unraid'''s Docker UI templates.
@@ -11,7 +11,7 @@ These Unraid notes complement the Compose approach for users who prefer Unraid''
 
 - **Wrapper container** (`wyoming-s2cpp-tts`): CPU-only Wyoming Protocol TCP server.
 - **Backend container** (`s2cpp-backend`): CUDA s2.cpp HTTP inference server.
-- **Network**: private Docker bridge (`s2cpp-net` or your custom `NETWORK_NAME`). The backend HTTP port (3030) is **not published to the host** — only the wrapper Wyoming port (10200) is exposed.
+- **Network**: shared Docker bridge (`s2cpp-net` or your custom `NETWORK_NAME`). The backend HTTP port (3030) is **not published to the host** — only the wrapper Wyoming port (10200) is exposed.
 - Home Assistant connects to the wrapper at `<your-docker-host>:10200`.
 
 ## Compose-based setup (recommended)
@@ -44,7 +44,7 @@ The `compose.yaml` configures:
 |---------|--------------------------|
 | Image | `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:0.1.0` (pin to `sha-*` for production) |
 | Container name | `s2cpp-backend` |
-| Network | `s2cpp-net` (private bridge) |
+| Network | `s2cpp-net` (shared bridge; backend port unpublished) |
 | Internal HTTP port | `3030` (not published) |
 | Model mount | `<your-models-dir>` → `/models` (read-only) |
 | Voice mount | `<your-voices-dir>` → `/voices` (read-write for backend) |
@@ -60,7 +60,7 @@ The backend `POST /generate` endpoint expects `multipart/form-data`. Do not send
 |---------|--------------------------|
 | Image | `ghcr.io/sorilo/wyoming-s2cpp-tts:0.1.0` (pin to `sha-*` for production) |
 | Container name | `wyoming-s2cpp-tts` |
-| Network | Same private bridge as backend (`s2cpp-net`) |
+| Network | Same shared bridge as backend (`s2cpp-net`) |
 | Host Wyoming port | `10200` |
 | `TTS_BACKEND` | `s2cpp` |
 | `S2_HOST` | `s2cpp-backend` |

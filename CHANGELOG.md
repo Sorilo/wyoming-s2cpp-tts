@@ -18,7 +18,7 @@
   checklist, tagging, rollback criteria).  Updated
   `docs/UNRAID_INSTALL.md` and `docs/HOME_ASSISTANT_SETUP.md` with
   sanitized IP placeholders, v0.1.0 Compose-first guidance,
-  backup/rollback links, private backend network documentation, and
+  backup/rollback links, host-unpublished backend port documentation, and
   the exact stock HA 2026.7.2 / Voice PE 26.6.0 one-wake NOT PASS
   limitation.  Added 37 contract tests enforcing documentation and
   security invariants (`.env.example` tracking, Compose no-host-backend-port,

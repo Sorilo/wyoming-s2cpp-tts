@@ -34,7 +34,7 @@ See [compose.yaml](compose.yaml) and [.env.example](.env.example) for the full c
 
 - Server: Unraid home server
 - Home Assistant VM
-- Docker network: `s2cpp-net` (private bridge)
+- Docker network: `s2cpp-net` (shared bridge; backend port 3030 is not host-published)
 - GPU target: NVIDIA RTX 3080 10 GB
 - CPU: Intel i9-13900K
 - RAM: 96 GB DDR4

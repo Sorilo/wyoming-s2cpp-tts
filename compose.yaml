@@ -10,7 +10,7 @@
 #
 # The backend HTTP port (3030) is NOT published to the host — only the
 # wrapper Wyoming port (10200) is exposed. Internal communication happens
-# on the private 's2cpp-net' bridge network.
+# on the shared project-scoped 's2cpp-net' bridge network.
 # =============================================================================
 
 services:

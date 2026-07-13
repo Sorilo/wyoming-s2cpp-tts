@@ -2,7 +2,7 @@
 
 ## Deployment overview
 
-The Wyoming TTS service is deployed as two Docker containers on a private Docker bridge network:
+The Wyoming TTS service is deployed as two Docker containers on a shared Docker bridge (backend port 3030 is not host-published):
 
 - **Wrapper:** `wyoming-s2cpp-tts` (CPU-only), Wyoming port 10200
 - **Backend:** `s2cpp-backend` (CUDA), HTTP port 3030 (private network only; not published to host)
@@ -106,7 +106,7 @@ Fixed as of Phase 6C. The handler supports the full Wyoming streaming TTS lifecy
 
 ### No audio / connection errors
 
-- Verify both containers are running on the private Docker bridge network (`s2cpp-net`).
+- Verify both containers are running on the shared Docker bridge network (`s2cpp-net`).
 - Verify the wrapper image is pinned to a v0.1.0 `sha-*` tag.
 - Verify the backend image is pinned to a v0.1.0 `sha-*` tag.
 - Check that the backend is reachable from the wrapper at `http://s2cpp-backend:3030/generate`.

@@ -2,20 +2,20 @@
 
 ## Goal
 
-A Home Assistant-compatible Wyoming Protocol TTS service backed by Fish Speech S2 Pro through `s2.cpp` GGUF models running on an NVIDIA RTX 3080, deployed as two Docker containers on the Unraid `sorilonet` network.
+A Home Assistant-compatible Wyoming Protocol TTS service backed by Fish Speech S2 Pro through `s2.cpp` GGUF models running on an NVIDIA RTX 3080, deployed as two Docker containers on a shared `s2cpp-net` bridge.
 
 ## Deployed service flow (verified)
 
 ```text
-Home Assistant (192.168.1.233)
-  └─ Wyoming Protocol TCP → 192.168.1.45:10200
-       └─ wyoming-s2cpp-tts wrapper container (CPU-only, sorilonet)
+Home Assistant (<ha-host>)
+  └─ Wyoming Protocol TCP → <docker-host>:10200
+       └─ wyoming-s2cpp-tts wrapper container (CPU-only, s2cpp-net)
             ├─ Wyoming TCP server on tcp://0.0.0.0:10200
             ├─ Wyoming streaming TTS lifecycle:
             │    synthesize-start → synthesize-chunk(s) → synthesize-stop
             │    → AudioStart → AudioChunk(s) → AudioStop → synthesize-stopped
             └─ HTTP multipart/form-data → http://s2cpp-backend:3030/generate
-                 └─ s2cpp-backend container (CUDA, sorilonet)
+                 └─ s2cpp-backend container (CUDA, s2cpp-net)
                       ├─ s2.cpp HTTP server on 0.0.0.0:3030
                       ├─ Fish Speech S2 Pro GGUF model
                       ├─ /voices persistent voice-profile mount
@@ -24,7 +24,7 @@ Home Assistant (192.168.1.233)
 
 ## Container design
 
-The architecture uses **two separate containers** on the `sorilonet` Docker network.
+The architecture uses **two separate containers** on the `s2cpp-net` Docker network.
 
 ### s2cpp-backend (CUDA)
 
@@ -50,7 +50,7 @@ The architecture uses **two separate containers** on the `sorilonet` Docker netw
 
 ## Home Assistant / Wyoming role
 
-Home Assistant discovers the service at `192.168.1.45:10200` via the Wyoming Protocol integration. It does not need to know about the s2.cpp backend, Fish Speech, GGUF files, or CUDA.
+Home Assistant discovers the service at `<docker-host>:10200` via the Wyoming Protocol integration. It does not need to know about the s2.cpp backend, Fish Speech, GGUF files, or CUDA.
 
 The service currently advertises:
 
@@ -333,7 +333,7 @@ to an announcement-aware upstream lifecycle or Cortex-Satellite. See
 The following operational documents define the v0.1.0 deployment, security,
 and lifecycle posture:
 
-- **`docs/SECURITY.md`** — security model: private backend network,
+- **`docs/SECURITY.md`** — security model: shared bridge with host-unpublished backend port,
   no-secrets-in-images policy, admin HTTP safety, image pinning.
 - **`docs/UPGRADE_ROLLBACK.md`** — upgrade paths, backup procedures,
   immutable image pins, supported version transitions.

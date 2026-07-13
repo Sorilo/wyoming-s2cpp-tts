@@ -44,9 +44,26 @@ class TestComposeNoHostBackendPort:
         compose = (ROOT / "compose.yaml").read_text()
         assert ":10200" in compose  # env-var or literal port mapping
 
-    def test_internal_network_reference(self):
+    def test_shared_bridge_and_host_unpublished_backend_are_described_accurately(self):
         compose = (ROOT / "compose.yaml").read_text()
         assert "s2cpp-net" in compose
+        assert "internal: false" in compose
+        assert "private 's2cpp-net'" not in compose
+
+        current_docs = [
+            ROOT / "README.md",
+            ROOT / "CHANGELOG.md",
+            ROOT / "TODO.md",
+            DOCS / "ARCHITECTURE.md",
+            DOCS / "HOME_ASSISTANT_SETUP.md",
+            DOCS / "ROADMAP.md",
+            DOCS / "SECURITY.md",
+            DOCS / "UNRAID_INSTALL.md",
+        ]
+        for path in current_docs:
+            content = path.read_text().lower()
+            assert "private backend network" not in content, path
+            assert "private docker bridge" not in content, path
 
     def test_backend_healthcheck_is_bounded_and_never_synthesizes(self):
         compose = (ROOT / "compose.yaml").read_text()

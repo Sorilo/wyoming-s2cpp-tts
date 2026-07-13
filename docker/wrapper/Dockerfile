@@ -14,6 +14,10 @@
 # ---------------------------------------------------------------------------
 
 FROM python:3.12-slim
+# Release image build arguments (passed by CI, not developer defaults).
+ARG VERSION=0.1.0
+ARG REVISION
+ARG CREATED
 
 # System dependencies for health check (netcat-openbsd provides nc).
 RUN apt-get update \
@@ -55,7 +59,9 @@ RUN mkdir -p /app/data && chown wyoming:wyoming /app/data
 LABEL org.opencontainers.image.title="wyoming-s2cpp-tts" \
       org.opencontainers.image.description="CPU-only Wyoming Protocol TTS wrapper for s2.cpp backend" \
       org.opencontainers.image.source="https://github.com/sorilo/wyoming-s2cpp-tts" \
-      org.opencontainers.image.version="0.1.0-alpha" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${REVISION}" \
+      org.opencontainers.image.created="${CREATED}" \
       wyoming-s2cpp-tts.role="wrapper-only"
 
 # Expose the Wyoming TCP port.

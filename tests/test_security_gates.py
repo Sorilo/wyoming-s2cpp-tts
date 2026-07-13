@@ -74,3 +74,14 @@ def test_gitleaks_ignore_is_exact_and_has_no_patterns():
     assert lines == EXPECTED_FALSE_POSITIVES
     assert all("*" not in line and "?" not in line for line in lines)
     assert all(":generic-api-key:" in line for line in lines)
+
+
+def test_gitleaks_receives_automatic_github_token_in_both_workflows():
+    """Gitleaks v3 requires the automatic token for pull-request API access."""
+    expected = (
+        f"uses: gitleaks/gitleaks-action@{EXPECTED_GITLEAKS}  # v3.0.0\n"
+        "        env:\n"
+        "          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}"
+    )
+    assert expected in PR
+    assert expected in RELEASE

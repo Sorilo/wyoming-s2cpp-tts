@@ -217,11 +217,37 @@ class TestOrchestratorSyntax:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Live artifact integrity
+# Live artifact integrity (explicit opt-in only)
 # ═══════════════════════════════════════════════════════════════════════════
+#
+# These tests validate the historical Phase 8D quant benchmark artifact
+# that lives under verification_artifacts/quant_benchmark/20260710_050806.
+# The artifact is gitignored and not carried in clean clones.
+# Set WYOMING_S2CPP_LIVE_ARTIFACT_CHECK=1 to opt in when the artifact is
+# present on disk (e.g. in the original development worktree).
 
+_LIVE_ARTIFACT_ENV = "WYOMING_S2CPP_LIVE_ARTIFACT_CHECK"
+_ARTIFACT_DIR = _PROJECT / "verification_artifacts" / "quant_benchmark" / "20260710_050806"
+
+
+def _live_artifact_present() -> bool:
+    """Return True only when the artifact is present AND the env var is set."""
+    return bool(os.environ.get(_LIVE_ARTIFACT_ENV) and _ARTIFACT_DIR.is_dir())
+
+
+skip_live = pytest.mark.skipif(
+    not _live_artifact_present(),
+    reason=(
+        "Historical quant benchmark artifact not present on disk or "
+        f"{_LIVE_ARTIFACT_ENV} not set. "
+        "Set WYOMING_S2CPP_LIVE_ARTIFACT_CHECK=1 when the artifact is available."
+    ),
+)
+
+
+@skip_live
 class TestLiveArtifactIntegrity:
-    ARTIFACT = _PROJECT / "verification_artifacts" / "quant_benchmark" / "20260710_050806"
+    ARTIFACT = _ARTIFACT_DIR
 
     def test_combined_json_exists(self):
         assert (self.ARTIFACT / "combined_results.json").exists()

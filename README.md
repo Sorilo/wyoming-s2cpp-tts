@@ -50,14 +50,14 @@ The current verified RTX 3080 runtime baseline is `/models/s2-pro-q4_k_m.gguf` w
 | Component | Value |
 | --- | --- |
 | Backend container | `s2cpp-backend` |
-| Backend image | `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-6e629d0` |
+| Backend image | `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-75936bc` |
 | Backend endpoint | `http://s2cpp-backend:3030/generate` |
 | Backend contract | `multipart/form-data` only; raw `audio/L16; rate=44100; channels=1` |
 | Wrapper container | `wyoming-s2cpp-tts` |
-| Wrapper image | `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-7db26b7` |
+| Wrapper image | `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-75936bc` |
 | Wyoming endpoint | `tcp://0.0.0.0:10200` inside container; `<host>:10200` from Home Assistant |
 | Home Assistant result | Discovery succeeds; `s2-pro` is visible; real speech is audible |
-| Test baseline | 1505 pass, 0 fail, 7 skip (LiveArtifactIntegrity opt-in) |
+| Test baseline | 1,873 passed, 0 failed, 7 skipped (`LiveArtifactIntegrity`, opt-in historical deployment artifacts) |
 
 ## Current architecture
 

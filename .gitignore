@@ -13,7 +13,8 @@ env/
 
 # Local environment/config
 .env
-.env.*
+.env.* 
+!.env.example
 *.local
 /config/*
 !/config/.gitkeep

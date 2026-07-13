@@ -1940,7 +1940,13 @@ class TestExplicitDisconnectAssertions:
         assert r.passed is False
 
     def test_assert_follow_up_request_completed_pass(self):
-        corr = {"wrapper_unknown": False, "has_synthesis_received": True}
+        corr = {
+            "wrapper_unknown": False,
+            "has_synthesis_received": True,
+            "wrapper_events": [
+                {"event": "synthesis_terminal", "terminal_state": "completed"},
+            ],
+        }
         r = p10.assert_follow_up_request_completed(corr)
         assert r.passed is True
         assert r.name == "follow_up_request_completed"

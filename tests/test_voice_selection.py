@@ -48,7 +48,7 @@ class RecordingS2Client:
         )
         self.requests = []
 
-    def generate_multipart(self, request):
+    def generate_multipart(self, request, **kwargs):
         self.requests.append(request)
         return S2GenerateResult(
             audio=self.audio,

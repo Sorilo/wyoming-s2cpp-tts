@@ -484,7 +484,8 @@ class S2Client:
         )
         return self._read_generate_response(http_request)
 
-    def generate_stream(self, request, files=None, boundary=None):
+    def generate_stream(self, request, files=None, boundary=None,
+                       synthesis_id=None):
         """POST multipart/form-data and yield audio chunks progressively.
 
         Phase 5B: builds a canonical multipart request with streaming params
@@ -494,9 +495,17 @@ class S2Client:
 
         The caller must consume the iterator inside a ``with`` block::
 
-            with client.generate_stream(request) as stream:
+            with client.generate_stream(request, synthesis_id="s-001") as stream:
                 for chunk in stream:
                     ...
+
+        Args:
+            request: The generation request payload.
+            files: Optional multipart file parts.
+            boundary: Optional custom multipart boundary.
+            synthesis_id: Optional stable correlation ID passed as
+                ``X-Synthesis-ID`` header to the backend for
+                cross-system observability.
 
         Real backend streaming remains unverified until a real s2.cpp
         backend is tested.
@@ -522,14 +531,17 @@ class S2Client:
             files=_files,
             boundary=boundary,
         )
+        headers = {
+            "Content-Type": content_type,
+            "Accept": "audio/L16, audio/wav, application/octet-stream, */*",
+        }
+        if synthesis_id:
+            headers["X-Synthesis-ID"] = synthesis_id
         http_request = urllib.request.Request(
             self.endpoint.generate_url,
             data=body,
             method="POST",
-            headers={
-                "Content-Type": content_type,
-                "Accept": "audio/L16, audio/wav, application/octet-stream, */*",
-            },
+            headers=headers,
         )
         return S2StreamResult(http_request, self.timeout_seconds)
 
@@ -538,6 +550,7 @@ class S2Client:
         request: S2GenerateRequest,
         files: MultipartFiles | None = None,
         boundary: str | None = None,
+        synthesis_id: str | None = None,
     ) -> S2GenerateResult:
         """POST multipart/form-data to ``/generate`` and return raw audio bytes.
 
@@ -549,6 +562,14 @@ class S2Client:
         When reference audio is provided, ``reference_text`` (or the
         ``prompt_text`` field on the request) is required — a
         ``ValueError`` is raised otherwise.
+
+        Args:
+            request: The generation request payload.
+            files: Optional multipart file parts.
+            boundary: Optional custom multipart boundary.
+            synthesis_id: Optional stable correlation ID passed as
+                ``X-Synthesis-ID`` header to the backend for
+                cross-system observability.
 
         This method still buffers the backend response and does not
         implement streaming.
@@ -574,13 +595,16 @@ class S2Client:
             files=_files,
             boundary=boundary,
         )
+        headers = {
+            "Content-Type": content_type,
+            "Accept": "audio/L16, audio/wav, application/octet-stream, */*",
+        }
+        if synthesis_id:
+            headers["X-Synthesis-ID"] = synthesis_id
         http_request = urllib.request.Request(
             self.endpoint.generate_url,
             data=body,
             method="POST",
-            headers={
-                "Content-Type": content_type,
-                "Accept": "audio/L16, audio/wav, application/octet-stream, */*",
-            },
+            headers=headers,
         )
         return self._read_generate_response(http_request)

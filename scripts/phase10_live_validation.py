@@ -91,6 +91,10 @@ LISTED_OUTCOMES = frozenset({
     "original_conn_closed",
     "follow_up_connection_id",
     "follow_up_synthesis_id",
+    "cancellation_requested",
+    "cancellation_propagated",
+    "synthesis_terminal",
+    "follow_up_completed",
 })
 
 REQUIRED_ARTIFACTS = (
@@ -345,6 +349,85 @@ def _extract_json_from_line(line: str) -> dict[str, Any] | None:
         except json.JSONDecodeError:
             pass
     return None
+
+
+# ── Backend native log parsing (text key=value format) ──────────────
+
+_CANCEL_PREFIX = "[CANCEL] "
+_CANCEL_EVENT_RE = re.compile(
+    r"^\[CANCEL\]\s+"
+    r"(?P<event>backend_cancel_detected|generation_cancel_observed|"
+    r"final_decode_skipped|backend_request_cancelled|"
+    r"backend_request_cleanup_done)"
+    r"(?:\s+(?P<fields>.*))?$"
+)
+
+
+def parse_backend_native_line(line: str) -> dict[str, Any] | None:
+    """Parse backend native cancellation log line (text key=value format).
+
+    Backend native logs use::
+
+        [CANCEL] backend_cancel_detected reason=client_disconnect \
+            point=content_provider_wait request_id=s-1
+
+    Returns a dict with ``event`` and parsed key=value pairs, or *None*
+    if the line does not match the known backend native format.
+    """
+    stripped = line.strip()
+    if not stripped:
+        return None
+
+    # Only handle [CANCEL] prefixed lines; JSON goes through _extract_json_from_line
+    if not stripped.startswith(_CANCEL_PREFIX):
+        return None
+
+    m = _CANCEL_EVENT_RE.match(stripped)
+    if m is None:
+        return None
+
+    event_name = m.group("event")
+    result: dict[str, Any] = {"event": event_name}
+    fields_str = m.group("fields") or ""
+
+    # Parse key=value pairs, handling both unquoted and quoted values
+    pos = 0
+    while pos < len(fields_str):
+        # Skip whitespace
+        while pos < len(fields_str) and fields_str[pos].isspace():
+            pos += 1
+        if pos >= len(fields_str):
+            break
+        # Find key
+        eq_pos = fields_str.find("=", pos)
+        if eq_pos == -1:
+            break
+        key = fields_str[pos:eq_pos].strip()
+        if not key:
+            break
+        pos = eq_pos + 1
+        # Find value
+        if pos < len(fields_str) and fields_str[pos] == '"':
+            # Quoted value
+            pos += 1
+            quote_end = fields_str.find('"', pos)
+            if quote_end == -1:
+                break
+            value = fields_str[pos:quote_end]
+            pos = quote_end + 1
+        else:
+            # Unquoted value — go until whitespace or end
+            space_pos = len(fields_str)
+            for i in range(pos, len(fields_str)):
+                if fields_str[i].isspace():
+                    space_pos = i
+                    break
+            value = fields_str[pos:space_pos]
+            pos = space_pos
+        if key:
+            result[key] = value
+
+    return result
 
 
 def _parse_rfc3339_prefix(line: str) -> str | None:
@@ -780,13 +863,20 @@ def assert_follow_up_request_completed(
     """Assert follow-up request was completed (requires correlated terminal event)."""
     has_events = not followup_correlation.get("wrapper_unknown", True)
     has_synthesis = followup_correlation.get("has_synthesis_received", False)
-    passed = has_events and has_synthesis
+    terminal_completed = any(
+        event.get("event") == "synthesis_terminal"
+        and event.get("terminal_state") == "completed"
+        for event in followup_correlation.get("wrapper_events", [])
+    )
+    passed = has_events and has_synthesis and terminal_completed
     return AssertionResult(
         name="follow_up_request_completed",
         passed=passed,
-        detail=f"correlated={has_events}, synthesis_received={has_synthesis}",
+        detail=(f"correlated={has_events}, synthesis_received={has_synthesis}, "
+                f"terminal_completed={terminal_completed}"),
         evidence={"wrapper_unknown": followup_correlation.get("wrapper_unknown", True),
-                  "has_synthesis_received": has_synthesis},
+                  "has_synthesis_received": has_synthesis,
+                  "terminal_completed": terminal_completed},
     )
 
 
@@ -826,22 +916,26 @@ def classify_wrapper_outcome(events: list[dict[str, Any]]) -> str:
     """Classify wrapper synthesis outcome: cancelled / completed normally
     / failed / timed out / client disconnected / unknown.
 
-    Uses ONLY production event contracts from app/wyoming_server.py:
+    Uses production event contracts from app/wyoming_server.py:
       - synthesis_cancelled          -> cancelled
-      - synthesis_cancel_requested   -> cancelled (cancellation initiated)
+      - synthesis_cancel_requested   -> cancelled
+      - cancellation_requested       -> cancelled (structured lifecycle)
+      - cancellation_propagated      -> cancelled (structured lifecycle)
       - client_disconnected          -> client disconnected (peer disconnect)
       - syn_stopped                  -> completed normally
       - audio_out with status="ok"   -> completed normally
+      - synthesis_terminal           -> use terminal_state field
       - synthesis_error              -> failed
       - synthesis_timeout            -> timed out
 
     Precedence:
-      1. Cancellation -> cancelled
-      2. Client disconnect -> client disconnected
-      3. Timeout -> timed out
-      4. Error -> failed
-      5. Normal completion -> completed normally
-      6. Otherwise -> unknown
+      1. synthesis_terminal explicit state (highest authority)
+      2. Cancellation -> cancelled
+      3. Client disconnect -> client disconnected
+      4. Timeout -> timed out
+      5. Error -> failed
+      6. Normal completion -> completed normally
+      7. Otherwise -> unknown
     """
     if not events:
         return "unknown"
@@ -849,12 +943,30 @@ def classify_wrapper_outcome(events: list[dict[str, Any]]) -> str:
     def _has(*names: str) -> bool:
         return any(e.get("event") in names for e in events)
 
-    has_cancellation = _has("synthesis_cancelled", "synthesis_cancel_requested")
+    # 1. Check synthesis_terminal explicit state first (highest authority)
+    for e in events:
+        if e.get("event") == "synthesis_terminal":
+            state = e.get("terminal_state", "unknown")
+            if state == "cancelled":
+                return "cancelled"
+            elif state == "completed":
+                return "completed normally"
+            elif state == "failed":
+                return "failed"
+            elif state == "timed_out":
+                return "timed out"
+            else:
+                return "unknown"
+
+    has_cancellation = _has(
+        "synthesis_cancelled", "synthesis_cancel_requested",
+        "cancellation_requested", "cancellation_propagated",
+    )
     has_client_disconnect = _has("client_disconnected")
     has_timeout = _has("synthesis_timeout")
     has_error = _has("synthesis_error")
     has_completed = (
-        _has("syn_stopped")
+        _has("syn_stopped", "follow_up_completed")
         or any(e.get("event") == "audio_out" and e.get("status") == "ok" for e in events)
     )
 
@@ -883,6 +995,7 @@ def classify_backend_outcome(events: list[dict[str, Any]]) -> str:
       - backend_stream_done status=error                -> failed
       - backend_done status=error                       -> failed
       - backend_request_aborted (legacy)                -> aborted early
+      - backend_abort_observed                          -> aborted early (structured)
 
     Precedence: abort > error > completed > unknown.
     """
@@ -892,7 +1005,11 @@ def classify_backend_outcome(events: list[dict[str, Any]]) -> str:
     has_abort = any(
         (e.get("event") in ("backend_stream_done", "backend_done")
          and e.get("status") == "client_disconnected")
-        or e.get("event") == "backend_request_aborted"
+        or e.get("event") in (
+            "backend_request_aborted", "backend_request_cancelled",
+            "backend_cancel_detected", "generation_cancel_observed",
+            "final_decode_skipped", "backend_abort_observed",
+        )
         for e in events
     )
     has_error = any(
@@ -943,6 +1060,7 @@ def correlate_disconnect_logs(
         "has_conn_closed": False,
         "has_synthesis_received": False,
         "wrapper_unknown": True,
+        "correlation_error": None,
     }
 
     if not wrapper_logs:
@@ -954,15 +1072,22 @@ def correlate_disconnect_logs(
     if not wrapper_events:
         return result
 
+    correlated_events = [
+        ev for ev in wrapper_events
+        if ev.get("connection_id") and ev.get("synthesis_id") and ev.get("text_fp")
+    ]
+    connection_ids = {ev["connection_id"] for ev in correlated_events}
+    synthesis_ids = {ev["synthesis_id"] for ev in correlated_events}
+    if not correlated_events or len(connection_ids) != 1 or len(synthesis_ids) != 1:
+        result["correlation_error"] = "missing_or_mismatched_wrapper_identifiers"
+        return result
+
     result["wrapper_unknown"] = False
     result["wrapper_events"] = wrapper_events
+    result["connection_id"] = next(iter(connection_ids))
+    result["synthesis_id"] = next(iter(synthesis_ids))
 
-    # Extract connection_id and synthesis_id from matched events
     for ev in wrapper_events:
-        if ev.get("connection_id") and not result["connection_id"]:
-            result["connection_id"] = ev["connection_id"]
-        if ev.get("synthesis_id") and not result["synthesis_id"]:
-            result["synthesis_id"] = ev["synthesis_id"]
         if ev.get("event") == "conn_closed":
             result["has_conn_closed"] = True
         if ev.get("event") == "synthesize_received":
@@ -989,8 +1114,13 @@ def correlate_disconnect_logs(
     if synthesis_id and backend_logs:
         backend_parsed = []
         for line in backend_logs:
-            ev = _extract_json_from_line(line)
-            if ev and ev.get("synthesis_id") == synthesis_id:
+            ev = _extract_json_from_line(line) or parse_backend_native_line(line)
+            event_synthesis_id = ev.get("synthesis_id") if ev else None
+            if ev and event_synthesis_id is None:
+                event_synthesis_id = ev.get("request_id")
+            if ev and event_synthesis_id == synthesis_id:
+                ev = dict(ev)
+                ev.setdefault("synthesis_id", synthesis_id)
                 backend_parsed.append(ev)
         result["backend_events"] = backend_parsed
         result["backend_events_count"] = len(backend_parsed)
@@ -1989,6 +2119,19 @@ async def _run_direct_disconnect_mode(
     # Classify wrapper outcome
     wrapper_events = correlation.get("wrapper_events", [])
     wrapper_outcome = classify_wrapper_outcome(wrapper_events)
+    report.outcomes["cancellation_requested"] = str(any(
+        event.get("event") == "cancellation_requested" for event in wrapper_events
+    )).lower()
+    report.outcomes["cancellation_propagated"] = str(any(
+        event.get("event") == "cancellation_propagated" for event in wrapper_events
+    )).lower()
+    terminal_events = [
+        event for event in wrapper_events if event.get("event") == "synthesis_terminal"
+    ]
+    report.outcomes["synthesis_terminal"] = (
+        str(terminal_events[-1].get("terminal_state", "unknown"))
+        if terminal_events else "unknown"
+    )
 
     # ── Explicit wrapper assertions ──
     report.assertions.append(assert_original_request_terminal_state_known(wrapper_outcome))
@@ -2080,7 +2223,9 @@ async def _run_direct_disconnect_mode(
     if fw_synth:
         report.outcomes["follow_up_synthesis_id"] = fw_synth
 
-    report.assertions.append(assert_follow_up_request_completed(followup_correlation))
+    follow_up_completed = assert_follow_up_request_completed(followup_correlation)
+    report.assertions.append(follow_up_completed)
+    report.outcomes["follow_up_completed"] = str(follow_up_completed.passed).lower()
     report.outcomes["follow_up_synthesis_correlated"] = str(
         not followup_correlation.get("wrapper_unknown", True)
     )

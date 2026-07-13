@@ -65,6 +65,7 @@ index 08fea2d..c2255a7 100644
 +    std::chrono::steady_clock::time_point cancel_time{};
 +    std::chrono::steady_clock::time_point generation_cancel_time{};
 +    std::chrono::steady_clock::time_point request_start{};
++    std::string request_id;  // From X-Synthesis-ID header
 +    std::atomic<int32_t> generated_frames{0};
 +    std::atomic<int32_t> last_frame_index{-1};
 +    std::atomic<int32_t> decoded_frames{0};
@@ -85,6 +86,7 @@ index 08fea2d..c2255a7 100644
 +            S2_LOG_INFO_STREAM("[CANCEL] backend_cancel_detected"
 +                << " reason=" << reason
 +                << " point=" << detection_point
++                << " request_id=" << (request_id.empty() ? "none" : request_id)
 +                << std::endl);
 +            return true;
 +        }
@@ -144,6 +146,7 @@ index 08fea2d..c2255a7 100644
 +        S2_LOG_INFO_STREAM("[CANCEL] generation_cancel_observed"
 +            << " reason=" << ctx_->cancel_reason
 +            << " point=" << ctx_->cancel_detection_point
++            << " request_id=" << (ctx_->request_id.empty() ? "none" : ctx_->request_id)
 +            << " total_frames=" << total_frames
 +            << " frame_index=" << frame_index
 +            << " detection_to_generation_cancel_ms=" << elapsed
@@ -161,6 +164,7 @@ index 08fea2d..c2255a7 100644
 +        S2_LOG_INFO_STREAM("[CANCEL] final_decode_skipped"
 +            << " reason=" << ctx_->cancel_reason
 +            << " point=" << ctx_->cancel_detection_point
++            << " request_id=" << (ctx_->request_id.empty() ? "none" : ctx_->request_id)
 +            << " generated_frames=" << generated_frames
 +            << " elapsed_ms=" << ctx_->detection_elapsed_ms(now)
 +            << std::endl);
@@ -208,9 +212,24 @@ index 08fea2d..c2255a7 100644
                      }
                  );
 
++                // Extract stable correlation ID from X-Synthesis-ID header
++                // before spawning the synthesis thread (req is the HTTP request).
++                std::string synth_synthesis_id;
++                auto syn_id_it = req.headers.find("X-Synthesis-ID");
++                if (syn_id_it != req.headers.end()) {
++                    synth_synthesis_id = syn_id_it->second;
++                }
++                // Log the extracted synthesis ID for observability
++                if (!synth_synthesis_id.empty()) {
++                    S2_LOG_INFO_STREAM("[ID] synthesis_id=" << synth_synthesis_id << std::endl);
++                }
++
                  std::thread synth_thread([pipeline, pipelineParams, ref_audio, sink, server_busy,
 -                                          segment_sentences, segmented_texts, sentence_pause_ms]() mutable {
-+                                          segment_sentences, segmented_texts, sentence_pause_ms, ctx]() mutable {
++                                          segment_sentences, segmented_texts, sentence_pause_ms, ctx, syn_sid = synth_synthesis_id]() mutable {
++                    if (!syn_sid.empty()) {
++                        ctx->request_id = syn_sid;
++                    }
 +                    ServerBusyGuard busy_guard{server_busy};
 +                    ctx->request_start = std::chrono::steady_clock::now();
 +                    try {
@@ -227,6 +246,7 @@ index 08fea2d..c2255a7 100644
 +                        S2_LOG_INFO_STREAM("[CANCEL] backend_request_cancelled"
 +                            << " reason=" << ctx->cancel_reason
 +                            << " point=" << ctx->cancel_detection_point
++                            << " request_id=" << (ctx->request_id.empty() ? "none" : ctx->request_id)
 +                            << " generated_frames=" << ctx->generated_frames.load()
 +                            << " last_frame_index=" << ctx->last_frame_index.load()
 +                            << " decoded_frames=" << ctx->decoded_frames.load()
@@ -241,6 +261,7 @@ index 08fea2d..c2255a7 100644
 +                        S2_LOG_INFO_STREAM("[CANCEL] backend_request_cleanup_done"
 +                            << " reason=" << ctx->cancel_reason
 +                            << " point=" << ctx->cancel_detection_point
++                            << " request_id=" << (ctx->request_id.empty() ? "none" : ctx->request_id)
 +                            << " detection_to_cleanup_ms=" << ctx->detection_elapsed_ms(cleanup_time)
 +                            << " server_busy_released_on_scope_exit=true"
 +                            << std::endl);

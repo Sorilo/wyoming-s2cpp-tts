@@ -51,7 +51,7 @@ class RecordingS2Client:
         self.response_headers = REAL_PCM_HEADERS.copy() if response_headers is None else response_headers
         self.requests = []
 
-    def generate_multipart(self, request):
+    def generate_multipart(self, request, **kwargs):
         self.requests.append(request)
         return S2GenerateResult(
             audio=self.audio,
@@ -59,7 +59,7 @@ class RecordingS2Client:
             response_headers=self.response_headers.copy(),
         )
 
-    def generate_stream(self, request, files=None, boundary=None):
+    def generate_stream(self, request, files=None, boundary=None, **kwargs):
         self.requests.append(request)
         result = S2GenerateResult(
             audio=self.audio,

@@ -1,2 +1,107 @@
+# =============================================================================
+# .dockerignore — wyoming-s2cpp-tts
+# =============================================================================
+# Excludes everything unnecessary from Docker build context while retaining
+# only the files required to build the wrapper and backend images.
+# =============================================================================
+
+# ----------------------------- VCS and tooling --------------------------------
+.git/
+.gitignore
+.gitattributes
+.gitmodules
+.hermes/
+.worktrees/
+
+# ----------------------------- CI / workflows --------------------------------
+.github/
+
+# ----------------------------- Build / artifact caches ------------------------
+artifacts/
+verification_artifacts/
+caches/
 __pycache__/
 **/__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.eggs/
+*.egg-info/
+build/
+dist/
+
+# ----------------------------- Logs and generated audio -----------------------
+logs/
+*.log
+*.wav
+*.pcm
+*.mp3
+*.flac
+*.ogg
+audio/
+
+# ----------------------------- Local env and secrets --------------------------
+.env
+.env.*
+*.local
+.venv/
+venv/
+env/
+.config/
+secrets/
+*.pem
+*.key
+*.crt
+
+# ----------------------------- OS / editor artifacts --------------------------
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ----------------------------- Test / coverage output -------------------------
+.coverage
+htmlcov/
+coverage.xml
+.tox/
+.nox/
+
+# ----------------------------- Docker -----------------------------------------
+.docker/
+docker-compose*.yml
+compose*.yml
+
+# ----------------------------- Models and large assets ------------------------
+# (Do NOT bundle GGUF models in the image; they are mounted at runtime.)
+/models/*
+!/models/.gitkeep
+/voices/*
+!/voices/.gitkeep
+*.gguf
+*.safetensors
+*.pt
+*.pth
+*.onnx
+*.bin
+*.ckpt
+
+# ----------------------------- Documentation (exclude for build) --------------
+# Keep docs/ in repo but exclude from build context to keep images small.
+docs/
+
+# ----------------------------- Unraid templates (exclude from build) ----------
+unraid/
+
+# ----------------------------- Smoke / benchmark output dirs ------------------
+smoke-output/
+stride*_run*/
+stride*_warmup*/
+unknown/
+
+# ----------------------------- Config (local only) ----------------------------
+/config/*
+!/config/.gitkeep

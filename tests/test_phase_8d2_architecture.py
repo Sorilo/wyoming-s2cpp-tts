@@ -184,12 +184,11 @@ class TestMetricCorrelation:
 class TestWavConversion:
     """WAV conversion using Hermes-Suite ffmpeg or Python wave fallback."""
 
-    def test_ffmpeg_hermes_suite_path(self):
-        """Verify /usr/bin/ffmpeg exists (Hermes-Suite)."""
-        ffmpeg_path = Path("/usr/bin/ffmpeg")
-        assert ffmpeg_path.exists(), (
-            "/usr/bin/ffmpeg should exist on Hermes-Suite"
-        )
+    def test_ffmpeg_hermes_suite_path_is_documented(self):
+        """The generated review guidance names the Hermes-Suite ffmpeg path."""
+        source = (_PROJECT / "scripts" / "benchmark_quantization.py").read_text()
+        assert "ffmpeg -f s16le -ar 44100 -ac 1" in source
+        assert "ffmpeg available at /usr/bin/ffmpeg on Hermes Suite" in source
 
     def test_wave_fallback_module(self):
         """Python wave module can write WAV headers for s16le PCM."""

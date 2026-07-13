@@ -10,6 +10,23 @@
   `media_player.media_stop`; stock one-wake barge-in remains deferred. Added the
   sanitized closure record at `docs/validation/PHASE_10_CLOSURE.md`.
 
+- Phase 11 operations/docs: established v0.1.0 security posture and
+  operational documentation baseline.  Added `docs/SECURITY.md`
+  (network isolation, no-secrets policy, admin HTTP safety, image
+  pinning), `docs/UPGRADE_ROLLBACK.md` (backup procedures, immutable
+  image pins, supported upgrade paths), and `docs/RELEASE.md` (release
+  checklist, tagging, rollback criteria).  Updated
+  `docs/UNRAID_INSTALL.md` and `docs/HOME_ASSISTANT_SETUP.md` with
+  sanitized IP placeholders, v0.1.0 Compose-first guidance,
+  backup/rollback links, host-unpublished backend port documentation, and
+  the exact stock HA 2026.7.2 / Voice PE 26.6.0 one-wake NOT PASS
+  limitation.  Added 37 contract tests enforcing documentation and
+  security invariants (`.env.example` tracking, Compose no-host-backend-port,
+  presence and content requirements for all ops docs).
+  Ensured `.env.example` remains tracked via `.gitignore` negate pattern
+  and `compose.yaml` does not publish the backend HTTP port.
+
+
 - Phase 9.5: progressive phrase synthesis for streaming Wyoming TTS input.
   Implemented three new components in ``app/speech/``:
 

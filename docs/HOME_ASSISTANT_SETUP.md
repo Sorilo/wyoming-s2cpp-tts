@@ -1,20 +1,22 @@
-# Home Assistant setup
+# Home Assistant setup — v0.1.0
 
-## Verified deployment
+## Deployment overview
 
-The Wyoming TTS service is deployed as two Docker containers on the Unraid `sorilonet` network:
+The Wyoming TTS service is deployed as two Docker containers on a shared Docker bridge (backend port 3030 is not host-published):
 
-- **Wrapper:** `wyoming-s2cpp-tts` (CPU-only), image `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-9c134cc`, Wyoming port 10200
-- **Backend:** `s2cpp-backend` (CUDA), image `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-edf89bd`, HTTP port 3030
+- **Wrapper:** `wyoming-s2cpp-tts` (CPU-only), Wyoming port 10200
+- **Backend:** `s2cpp-backend` (CUDA), HTTP port 3030 (private network only; not published to host)
 
-The wrapper is exposed to LAN at `192.168.1.45:10200`. Home Assistant runs at `192.168.1.233`.
+The wrapper is exposed to your LAN at `<your-docker-host>:10200`. Home Assistant connects to this host:port.
+
+See `compose.yaml` for the full service definition and `docs/INSTALL.md` for installation instructions.
 
 ## Add the Wyoming integration
 
-1. In Home Assistant, go to **Settings \u2192 Devices & services**
+1. In Home Assistant, go to **Settings → Devices & services**
 2. Select **Add Integration**
 3. Search for **Wyoming Protocol**
-4. Enter host: `192.168.1.45`
+4. Enter host: `<your-docker-host-ip>`
 5. Enter port: `10200`
 
 The service auto-discovers as `wyoming-s2cpp-tts` with voice `s2-pro` (en, zh), 44100 Hz, streaming=true.
@@ -26,13 +28,23 @@ The service auto-discovers as `wyoming-s2cpp-tts` with voice `s2-pro` (en, zh), 
 3. Save the pipeline
 4. Test with "Try text-to-speech" in the integration settings
 
-Expected behavior: Home Assistant sends a Wyoming streaming request (`synthesize-start` \u2192 `synthesize-chunk` x N \u2192 `synthesize-stop`), the wrapper synthesizes via the s2.cpp backend, emits `AudioStart` / `AudioChunk` / `AudioStop` / `synthesize-stopped`, and real speech plays through the selected media player.
+Expected behavior: Home Assistant sends a Wyoming streaming request (`synthesize-start` → `synthesize-chunk` x N → `synthesize-stop`), the wrapper synthesizes via the s2.cpp backend, emits `AudioStart` / `AudioChunk` / `AudioStop` / `synthesize-stopped`, and real speech plays through the selected media player.
+
+## Known limitation: stock HA one-wake barge-in
+
+**Stock Home Assistant 2026.7.2 with Voice PE firmware 26.6.0 and ESPHome 2026.6.0 does NOT pass full one-wake barge-in.** This is an external platform limitation, not a repository defect:
+
+- Generic `media_player.media_stop` targets the normal media pipeline while Assist uses the announcement pipeline.
+- HA keeps the TTS producer alive — no Wyoming disconnect or cancellation reaches this service.
+- Full physical interruption plus producer cancellation is deferred to an announcement-aware upstream lifecycle or Cortex-Satellite.
+
+The repository-owned disconnect cancellation, backend abort, scheduler cleanup, and recovery contracts **all pass** — the gap is in how stock HA signals interruption to the TTS service. See `docs/validation/PHASE_10_CLOSURE.md` for the full evidence.
 
 ## Available voice profiles
 
 Six custom `.s2voice` profiles were created from CMU ARCTIC reference recordings
 and verified via direct backend synthesis (Phase 7A). They are stored on the
-Unraid host at `/mnt/user/appdata/s2cpp/voices`:
+Unraid host at `<your-voices-dir>`:
 
 | Profile ID | Gender | Accent |
 |-----------|--------|--------|
@@ -43,18 +55,18 @@ Unraid host at `/mnt/user/appdata/s2cpp/voices`:
 | `cmu_clb_female_us` | female | US English |
 | `cmu_eey_female_us` | female | US English |
 
-**Voice selection in Home Assistant is now wired (Phase 7B).**  The wrapper
-discovers ``.s2voice`` profiles from ``/voices`` and advertises them through
-Wyoming Describe.  Select a voice in Home Assistant TTS settings — the selected
-voice is forwarded to the backend as ``voice`` and ``voice_dir`` multipart fields.
+**Voice selection in Home Assistant is wired (Phase 7B).** The wrapper
+discovers `.s2voice` profiles from `/voices` and advertises them through
+Wyoming Describe. Select a voice in Home Assistant TTS settings — the selected
+voice is forwarded to the backend as `voice` and `voice_dir` multipart fields.
 
-**Drop-in discovery:** New ``.s2voice`` files placed in
-``/mnt/user/appdata/s2cpp/voices`` are discoverable without rebuilding or
-restarting the wrapper container.  However, Home Assistant may cache Wyoming
-Describe results.  To see a newly dropped-in voice in the HA UI:
+**Drop-in discovery:** New `.s2voice` files placed in your voices directory
+are discoverable without rebuilding or restarting the wrapper container.
+However, Home Assistant may cache Wyoming Describe results. To see a newly
+dropped-in voice in the HA UI:
 
 1. Go to **Settings → Devices & services → Wyoming Protocol**.
-2. Select the ``wyoming-s2cpp-tts`` integration.
+2. Select the `wyoming-s2cpp-tts` integration.
 3. Choose **Reload** from the three-dot menu.
 
 This reloads the cached voice list — the wrapper itself does not need a restart.
@@ -65,34 +77,38 @@ perceived quality may be influenced by the older CMU ARCTIC recordings, the
 short reference clip, and the model quantization. A personal clean recording is
 planned for later as a better quality test.
 
-## Verified behavior (2026-07-09)
+## Streaming status
 
-- HA discovers the Wyoming service at `192.168.1.45:10200`
-- `s2-pro` voice appears in TTS settings
-- "Try text-to-speech" generates and audibly plays real speech
-- Wyoming streaming TTS lifecycle completes (`synthesize-stopped` emitted)
-- Full STT \u2192 conversation \u2192 TTS satellite workflow not yet verified
-- Client-disconnect/backend cancellation passed Phase 8B2 five-cycle live verification; queue timeout/busy policy and full barge-in remain future phases
+Wyoming protocol streaming is implemented and verified: the wrapper handles `synthesize-start`, `synthesize-chunk`, and `synthesize-stop`, then emits `AudioStart`, `AudioChunk`, `AudioStop`, and `synthesize-stopped` for Home Assistant.
 
-## Streaming caveat
+Progressive backend-audio streaming is wired (Phase 7.5A). When `S2_STREAM=true` (configured in `compose.yaml` or Unraid), the handler yields Wyoming audio events progressively as backend transport chunks arrive instead of buffering the complete response. When `S2_STREAM=false`, the buffered path is preserved.
 
-Wyoming protocol streaming is implemented and verified (see above).
+Backend cancellation (Phase 8B2) is production-promoted: deliberate disconnects stop abandoned synthesis promptly and release backend busy state.
 
-Progressive backend-audio streaming is now wired (Phase 7.5A). When `S2_STREAM=true` (already configured in Unraid), the handler yields Wyoming audio events progressively as backend transport chunks arrive instead of buffering the complete response. When `S2_STREAM=false`, the buffered path is preserved.
+## Backup and rollback
 
-Phase 8B2 backend cancellation is production-promoted in `sha-edf89bd`: deliberate disconnects stop abandoned synthesis promptly and release backend busy state. Wrapper BrokenPipe task-exception noise during deliberate disconnect remains a narrow logging issue that did not block cleanup or recovery.
+Before upgrading or making configuration changes:
+
+```bash
+# Back up Home Assistant (via HA UI: Settings → System → Backups)
+# Back up TTS data directories
+cp -a /mnt/user/appdata/s2cpp/voices /mnt/user/appdata/s2cpp/voices.bak
+cp -a /mnt/user/appdata/s2cpp/models /mnt/user/appdata/s2cpp/models.bak
+```
+
+For full upgrade and rollback procedures, see `docs/UPGRADE_ROLLBACK.md`.
 
 ## Troubleshooting
 
 ### Spinner hangs on preview
 
-Fixed in wrapper image `sha-89ed2dc` and preserved through current wrapper `sha-9c134cc`. The handler supports the full Wyoming streaming TTS lifecycle. Older images only handled the legacy `synthesize` event and ignored streaming events.
+Fixed as of Phase 6C. The handler supports the full Wyoming streaming TTS lifecycle. Ensure you are running a wrapper image from v0.1.0 or later.
 
 ### No audio / connection errors
 
-- Verify both containers are running on the `sorilonet` network.
-- Verify the wrapper image is pinned to `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-9c134cc` or a newer intentionally tested immutable tag.
-- Verify the backend image is pinned to `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-edf89bd` or a newer intentionally tested immutable tag; rollback is `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-741d06b`.
+- Verify both containers are running on the shared Docker bridge network (`s2cpp-net`).
+- Verify the wrapper image is pinned to a v0.1.0 `sha-*` tag.
+- Verify the backend image is pinned to a v0.1.0 `sha-*` tag.
 - Check that the backend is reachable from the wrapper at `http://s2cpp-backend:3030/generate`.
 - Check wrapper logs for `S2ClientError`; JSON 400 errors indicate an old wrapper path that is not using multipart/form-data.
 
@@ -101,9 +117,16 @@ Fixed in wrapper image `sha-89ed2dc` and preserved through current wrapper `sha-
 Custom voice selection is implemented as of Phase 7B. If a voice does not appear
 in Home Assistant:
 
-- Verify the ``.s2voice`` file exists on the host at
-  ``/mnt/user/appdata/s2cpp/voices/<profile_id>.s2voice``.
+- Verify the `.s2voice` file exists on the host in your voices directory.
 - Reload the Wyoming Protocol integration in Home Assistant
   (Settings → Devices & services → Wyoming Protocol → three-dot menu → Reload).
 - Check wrapper logs for startup voice discovery messages.
-- If ``S2_DEFAULT_VOICE`` is configured, verify it matches a discovered profile ID.
+- If `S2_DEFAULT_VOICE` is configured, verify it matches a discovered profile ID.
+
+## Related documents
+
+- `docs/INSTALL.md` — full installation instructions
+- `docs/UNRAID_INSTALL.md` — Unraid-specific deployment notes
+- `docs/UPGRADE_ROLLBACK.md` — upgrade and rollback procedures
+- `docs/SECURITY.md` — security posture and network model
+- `docs/validation/PHASE_10_CLOSURE.md` — barge-in validation evidence

@@ -20,7 +20,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 WRAPPER_DOCKERFILE = PROJECT_ROOT / "docker" / "wrapper" / "Dockerfile"
 WRAPPER_ENTRYPOINT = PROJECT_ROOT / "docker" / "wrapper" / "entrypoint.sh"
-WRAPPER_WORKFLOW = PROJECT_ROOT / ".github" / "workflows" / "publish-wrapper.yml"
+WRAPPER_WORKFLOW = PROJECT_ROOT / ".github" / "workflows" / "paired-release.yml"
 UNRAID_TEMPLATE = PROJECT_ROOT / "unraid" / "my-wyoming-wrapper.xml"
 APP_CONFIG = PROJECT_ROOT / "app" / "config.py"
 
@@ -179,54 +179,50 @@ def test_wrapper_workflow_no_gpu_required() -> None:
 
 
 def test_wrapper_workflow_publishes_to_ghcr() -> None:
-    """The workflow publishes to ghcr.io/<org>/wyoming-s2cpp-tts."""
+    """The workflow publishes to ghcr.io with WRAPPER_IMAGE env."""
     content = _read(WRAPPER_WORKFLOW)
     assert "ghcr.io" in content
-    assert "IMAGE_NAME: ${{ github.repository }}" in content
+    assert "WRAPPER_IMAGE: ghcr.io/${{ github.repository }}" in content
 
 
 def test_wrapper_workflow_uses_correct_dockerfile() -> None:
-    """The build step points to docker/wrapper/Dockerfile."""
+    """The build step points to docker/wrapper/Dockerfile via file: parameter."""
     content = _read(WRAPPER_WORKFLOW)
-    assert "docker/wrapper/Dockerfile" in content
+    assert "file: docker/wrapper/Dockerfile" in content
 
 
-def test_wrapper_workflow_generates_sha_tag() -> None:
-    """The workflow generates a sha-<short-commit> tag."""
+def test_wrapper_workflow_has_immutable_short_sha_tag() -> None:
+    """The workflow preserves the established immutable short-SHA tag."""
     content = _read(WRAPPER_WORKFLOW)
-    assert "type=sha" in content
-    assert "prefix=sha-" in content
+    assert "sha-${{ needs.source-tests.outputs.short_sha }}" in content
+    assert "sha-${{ github.sha }}" not in content
 
 
-def test_wrapper_workflow_generates_edge_tag() -> None:
-    """The workflow generates an edge tag on main/dispatch."""
+def test_wrapper_workflow_no_edge_or_latest_tag() -> None:
+    """The workflow explicitly has no edge or latest tag."""
     content = _read(WRAPPER_WORKFLOW)
-    assert "value=edge" in content
+    assert ":edge" not in content and '"edge"' not in content, "Must not use edge tag"
+    assert ":latest" not in content and '"latest"' not in content, "Must not use latest tag"
 
 
-def test_wrapper_workflow_has_provenance_sbom() -> None:
-    """The workflow includes provenance and SBOM generation."""
+def test_wrapper_workflow_has_sbom_and_attestation() -> None:
+    """The workflow includes SBOM and attest-build-provenance."""
     content = _read(WRAPPER_WORKFLOW)
-    assert "provenance: mode=max" in content
-    assert "sbom: true" in content
+    assert "sbom" in content.lower(), "Must generate SBOM"
+    assert "attest-build-provenance" in content, "Must attest build provenance"
 
 
-def test_wrapper_workflow_build_step_has_id() -> None:
-    """The build-and-push step has id: build for attestation reference."""
+def test_wrapper_workflow_push_has_candidate_build_id() -> None:
+    """The push step has id: push-wrapper for candidate build identification."""
     content = _read(WRAPPER_WORKFLOW)
-    match = re.search(
-        r'id:\s+build\s*\n\s+uses:\s+docker/build-push-action',
-        content,
-    )
-    assert match is not None, (
-        "Build step must have 'id: build' before 'uses: docker/build-push-action'"
-    )
+    assert "id: push-wrapper" in content, "Must have 'id: push-wrapper' step"
+    assert "local/wrapper:candidate" in content, "Must tag as candidate before push"
 
 
-def test_wrapper_workflow_attestation_references_build() -> None:
-    """The attestation step references steps.build.outputs.digest."""
+def test_wrapper_workflow_attestation_references_push_wrapper_digest() -> None:
+    """The attestation step references steps.push-wrapper.outputs.wrapper_digest."""
     content = _read(WRAPPER_WORKFLOW)
-    assert "steps.build.outputs.digest" in content
+    assert "steps.push-wrapper.outputs.wrapper_digest" in content
 
 
 # ---------------------------------------------------------------------------

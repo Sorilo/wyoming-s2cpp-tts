@@ -45,14 +45,24 @@
 
 ## Current verified deployment
 
-- Backend: `s2cpp-backend` (`ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-75936bc`)
-- Wrapper: `wyoming-s2cpp-tts` (`ghcr.io/sorilo/wyoming-s2cpp-tts:sha-75936bc`)
-- Network: `sorilonet`
-- HA: `192.168.1.233` → `192.168.1.45:10200`
+- Backend: `s2cpp-backend` (pin the approved paired `sha-<commit>` image)
+- Wrapper: `wyoming-s2cpp-tts` (pin the same paired `sha-<commit>` image)
+- Network: `s2cpp-net` (or an operator-selected `NETWORK_NAME`)
+- Home Assistant: `<ha-host>` → `<docker-host>:10200`
 - Audio: 44100 Hz mono s16le real speech via Wyoming protocol streaming lifecycle
 - Phase 9 historical test baseline: 876 passed, 0 failed, 0 skipped
 - Phase 9B standard-suite baseline: 940 collected, 940 passed, 0 failed, 0 skipped; 14 Unraid shell-behavior tests remain a separate environment-specific invocation
 - Phase 9 production deployment and final smoke passed: short/long direct Wyoming, audible Home Assistant VM speech, zero restarts, queue depth zero, active GPU inference, and clean logs. Phase 9 is closed.
+
+## Phase 11 operations/docs status (2026-07-13)
+
+- **Generic Compose + .env.example**: ✅ compose.yaml + .env.example created for v0.1.0.
+- **Operations docs**: ✅ `docs/SECURITY.md`, `docs/UPGRADE_ROLLBACK.md`, `docs/RELEASE.md` created.
+- **Install docs**: ✅ `docs/UNRAID_INSTALL.md` and `docs/HOME_ASSISTANT_SETUP.md` updated with sanitized placeholders, v0.1.0 guidance, backup/rollback links, host-unpublished backend port, and stock HA 2026.7.2 + Voice PE 26.6.0 one-wake NOT PASS limitation.
+- **Contract tests**: ✅ 37 documentation/security contract tests pass.
+- **Remaining Phase 11 work**: Faster-Whisper/full Assist pipeline integration and latency measurement.
+- **Remaining v0.1 phases**: Phase 12 (reliability), Phase 13 (release checklist/tagging), Phase 14 (Unraid template finalization).
+
 ## Phase 10 results
 
 - Final status: **Phase 10 implementation validation complete with documented external stock-platform limitation.**

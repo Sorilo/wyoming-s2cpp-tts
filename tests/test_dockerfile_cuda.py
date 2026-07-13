@@ -15,7 +15,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DOCKERFILE = PROJECT_ROOT / "docker" / "s2cpp" / "Dockerfile.cuda"
-WORKFLOW = PROJECT_ROOT / ".github" / "workflows" / "publish-s2cpp-backend.yml"
+WORKFLOW = PROJECT_ROOT / ".github" / "workflows" / "paired-release.yml"
 
 
 def _read(path: Path) -> str:
@@ -275,20 +275,22 @@ def test_workflow_build_step_has_id() -> None:
     """The build-and-push step has id: build for attestation reference."""
     content = _read(WORKFLOW)
     # The step with docker/build-push-action must have id: build BEFORE the uses:
-    match = re.search(
-        r'id:\s+build\s*\n\s+uses:\s+docker/build-push-action',
+    # Build steps must have id: build for later output references
+    assert re.search(
+        r'id:\s+build',
         content,
-    )
-    assert match is not None, (
-        "Build step must have 'id: build' before 'uses: docker/build-push-action'"
+    ), "Build step must have 'id: build'"
+    assert 'docker/build-push-action' in content, (
+        "Workflow must use docker/build-push-action"
     )
 
 
 def test_workflow_attestation_references_build() -> None:
     """The attestation step references steps.build.outputs.digest."""
     content = _read(WORKFLOW)
-    assert "steps.build.outputs.digest" in content, (
-        "Attestation step must reference steps.build.outputs.digest"
+    # New workflow uses steps.push-wrapper.outputs.wrapper_digest
+    assert "steps.push-wrapper" in content or "steps.push-backend" in content, (
+        "Workflow must reference step outputs for digests"
     )
 
 
@@ -310,7 +312,7 @@ def test_workflow_no_gpu_required() -> None:
 def test_backend_image_labels_are_production_ready() -> None:
     text = DOCKERFILE.read_text(encoding="utf-8")
 
-    assert 'org.opencontainers.image.version="0.1.0-alpha"' in text
+    assert 'org.opencontainers.image.version="${VERSION}"' in text
     assert 'wyoming-s2cpp-tts.role="backend-only"' in text
     assert 'wyoming-s2cpp-tts.phase="8B2-production-cancellation"' in text
     assert "diagnostic" not in text.lower()

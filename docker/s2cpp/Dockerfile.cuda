@@ -31,6 +31,7 @@ ARG S2CPP_REVISION=2c33261938da1a41d713768b1b391b4d368d7d2c
 # rebuilding for a different GPU family.  Default 86 = RTX 3000 series.
 ARG CUDA_ARCHITECTURES=86
 
+
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 
 RUN apt-get update \
@@ -154,6 +155,12 @@ RUN echo "s2.cpp revision: ${S2CPP_REVISION}" > /src/build/BUILD_INFO \
 
 # -- runtime stage ---------------------------------------------------------
 FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
+# Release image build arguments (passed by CI, not developer defaults).
+ARG VERSION=0.1.0
+ARG REVISION
+ARG CREATED
+ARG S2CPP_REVISION=2c33261938da1a41d713768b1b391b4d368d7d2c
+
 
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 
@@ -254,12 +261,15 @@ EXPOSE 3030/tcp
 # OCI metadata labels.
 LABEL org.opencontainers.image.title="s2cpp-backend" \
       org.opencontainers.image.description="Standalone CUDA-enabled rodrigomatta/s2.cpp HTTP backend" \
-      org.opencontainers.image.source="https://github.com/rodrigomatta/s2.cpp" \
-      org.opencontainers.image.version="0.1.0-alpha" \
+      org.opencontainers.image.source="https://github.com/Sorilo/wyoming-s2cpp-tts" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${REVISION}" \
+      org.opencontainers.image.created="${CREATED}" \
       org.opencontainers.image.vendor="wyoming-s2cpp-tts" \
       com.nvidia.volumes.needed="nvidia_driver" \
       com.nvidia.cuda.version="12.4.1" \
-      wyoming-s2cpp-tts.s2cpp-revision="2c33261938da1a41d713768b1b391b4d368d7d2c" \
+      wyoming-s2cpp-tts.s2cpp-revision="${S2CPP_REVISION}" \
+      wyoming-s2cpp-tts.upstream-source="https://github.com/rodrigomatta/s2.cpp" \
       wyoming-s2cpp-tts.role="backend-only" \
       wyoming-s2cpp-tts.phase="8B2-production-cancellation"
 

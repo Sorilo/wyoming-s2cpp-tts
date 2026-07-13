@@ -23,6 +23,7 @@ from app.config import Settings
 from app.lifecycle import LifecycleState, ServiceLifecycle
 from app.speech.scheduler import SpeechScheduler
 from app.admin_http import AdminHttpServer
+from app.version import __version__
 from app.counters import CumulativeCounters, build_counters_snapshot
 from app.wyoming_server import (
     FakeTtsConfig,
@@ -330,7 +331,7 @@ class ServiceCoordinator:
                 ),
                 get_active_connection_count=lambda: self.active_connection_count,
                 get_counters_snapshot=lambda: build_counters_snapshot(self.counters),
-                version="0.1",
+                version=__version__,
             )
             port = await self.admin.start()
             print(f"Admin HTTP server listening on {self.settings.admin_http_host}:{port}")

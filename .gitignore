@@ -13,7 +13,8 @@ env/
 
 # Local environment/config
 .env
-.env.*
+.env.* 
+!.env.example
 *.local
 /config/*
 !/config/.gitkeep
@@ -57,3 +58,4 @@ dist/
 /stride*_warmup*/
 /unknown/
 /verification_artifacts/
+/artifacts/

@@ -48,6 +48,16 @@ class TestComposeNoHostBackendPort:
         compose = (ROOT / "compose.yaml").read_text()
         assert "s2cpp-net" in compose
 
+    def test_backend_healthcheck_is_bounded_and_never_synthesizes(self):
+        compose = (ROOT / "compose.yaml").read_text()
+        health = compose.split("healthcheck:", 1)[1].split("# ---------------------------------------------------------------------------", 1)[0]
+        assert "http://localhost:3030/" in health
+        assert "--max-time 3" in health
+        assert "http_code" in health
+        assert "/generate" not in health
+        assert "-X POST" not in health
+        assert "-F text=" not in health
+
 
 class TestSecurityDocExists:
     def test_security_md_exists(self):

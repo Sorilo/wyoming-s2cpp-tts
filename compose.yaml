@@ -47,7 +47,7 @@ services:
       test:
         - CMD-SHELL
         - |
-          curl -fsS -o /dev/null -w '%{http_code}'             --max-time 3             -X POST http://localhost:3030/generate             -F text="test"           | grep -qE '^2[0-9]{2}$' || exit 1
+          curl -sS -o /dev/null -w '%{http_code}' --max-time 3 http://localhost:3030/ | grep -qE '^[234][0-9]{2}$' || exit 1
       interval: 30s
       timeout: 10s
       start_period: 60s

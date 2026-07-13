@@ -45,14 +45,25 @@
 
 ## Current verified deployment
 
-- Backend: `s2cpp-backend` (`ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-6e629d0`)
-- Wrapper: `wyoming-s2cpp-tts` (`ghcr.io/sorilo/wyoming-s2cpp-tts:sha-7db26b7`)
+- Backend: `s2cpp-backend` (`ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-75936bc`)
+- Wrapper: `wyoming-s2cpp-tts` (`ghcr.io/sorilo/wyoming-s2cpp-tts:sha-75936bc`)
 - Network: `sorilonet`
 - HA: `192.168.1.233` → `192.168.1.45:10200`
 - Audio: 44100 Hz mono s16le real speech via Wyoming protocol streaming lifecycle
 - Phase 9 historical test baseline: 876 passed, 0 failed, 0 skipped
 - Phase 9B standard-suite baseline: 940 collected, 940 passed, 0 failed, 0 skipped; 14 Unraid shell-behavior tests remain a separate environment-specific invocation
 - Phase 9 production deployment and final smoke passed: short/long direct Wyoming, audible Home Assistant VM speech, zero restarts, queue depth zero, active GPU inference, and clean logs. Phase 9 is closed.
+## Phase 10 results
+
+- Final status: **Phase 10 implementation validation complete with documented external stock-platform limitation.**
+- Correlated direct-disconnect: **25/25 passed**; wrapper cancellation, native backend abort, scheduler cleanup, and follow-up recovery proved.
+- Overlap-recovery: **8/8 passed** with no persistent queue or busy latch.
+- Generic HA media-stop: **7/9**; stock HA 2026.7.2 / Voice PE 26.6.0 / ESPHome 2026.6.0 stops the normal media pipeline rather than the active announcement and keeps the TTS producer alive.
+- Stock one-wake barge-in is **not passed**; remaining acceptance moves to an announcement-aware upstream integration or Cortex-Satellite.
+- Full suite: **1512 passed**, excluding only `tests/test_realtime_tuning_unraid.py`.
+- Closure: `docs/validation/PHASE_10_CLOSURE.md`.
+- Production remains wrapper/backend `sha-75936bc`.
+
 ## Phase 9C results
 
 - Graceful shutdown lifecycle owner with explicit state machine: ``STARTING`` → ``RUNNING`` → ``DRAINING`` → ``STOPPING`` → ``STOPPED`` / ``FAILED``.
@@ -280,7 +291,7 @@ Phase 9C: graceful shutdown and optional admin HTTP visibility ✅
 22. ~~Phase 7.5: wire true progressive backend HTTP audio streaming into the production Wyoming event handler when `S2_STREAM=true`~~ ✅ Phase 7.5A complete
 23. Phase 8: client disconnect cleanup, open HTTP stream closure, cancellation behavior, and documented backend cancellation limitations
 24. Phase 9: queue capacity, busy handling, backend HTTP 503 handling, queue wait timeout, synthesis timeout, and controlled Wyoming failure behavior
-25. Phase 10: end-to-end barge-in testing with an actual Home Assistant satellite/player, VAD, wake word, playback interruption, and new-request behavior
+25. ~~Phase 10: end-to-end barge-in implementation validation~~ ✅ Repository-owned disconnect cancellation/recovery passed; stock Voice PE one-wake behavior is a documented external limitation carried to Cortex-Satellite
 26. Phase 11: Faster-Whisper/full Assist pipeline integration and correlated latency measurement
 27. Phase 12: comprehensive reliability tests and troubleshooting docs
 28. Phase 13: v0.1 release checklist, tagging, and rollback criteria

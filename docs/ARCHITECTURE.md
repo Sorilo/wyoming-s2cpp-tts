@@ -28,7 +28,7 @@ The architecture uses **two separate containers** on the `sorilonet` Docker netw
 
 ### s2cpp-backend (CUDA)
 
-- **Image:** `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-6e629d0`
+- **Image:** `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-75936bc`
 - Requires NVIDIA runtime, CUDA, and GPU access
 - Runs `s2.cpp` in HTTP server mode on port 3030
 - Mounts `/models` for GGUF/tokenizer assets and `/voices` for saved `.s2voice` profiles
@@ -38,7 +38,7 @@ The architecture uses **two separate containers** on the `sorilonet` Docker netw
 
 ### wyoming-s2cpp-tts (CPU-only wrapper)
 
-- **Image:** `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-7db26b7`
+- **Image:** `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-75936bc`
 - Does **not** require NVIDIA runtime, CUDA, or GPU
 - Runs the Python Wyoming TCP server on port 10200
 - Translates Wyoming TTS requests into HTTP multipart calls to the backend
@@ -130,7 +130,7 @@ bash scripts/run_realtime_tuning_unraid.sh --benchmark
 ### Deploying to Home Assistant / Wyoming
 
 The production wrapper
-(``ghcr.io/sorilo/wyoming-s2cpp-tts:sha-7db26b7``) supports the stride tuning
+(``ghcr.io/sorilo/wyoming-s2cpp-tts:sha-75936bc``) supports the stride tuning
 environment variables. Preserve the validated production values when editing
 the Unraid template.
 
@@ -317,4 +317,12 @@ STT, LLM, VAD, and actual playback timestamps require Home Assistant or satellit
 
 The service is designed to be barge-in friendly, but true barge-in depends on the full Home Assistant Assist stack: wake word, VAD, satellite behavior, and playback device interrupt support.
 
-Client-disconnect and backend cancellation cleanup were implemented and validated through Phase 8B2 and strengthened in Phases 9–9.5. End-to-end barge-in—including pipeline supersession, wrapper cancellation, and proven physical playback stop through the actual Home Assistant satellite/player path—remains Phase 10 work.
+Client-disconnect and backend cancellation cleanup were implemented through Phase 8B2,
+strengthened in Phases 9–9.5, and validated end to end in Phase 10: a Wyoming
+disconnect cancels wrapper and native backend work, releases scheduler ownership,
+and permits a correlated follow-up request. Stock HA 2026.7.2 with Voice PE 26.6.0
+does not provide full one-wake barge-in: generic media stop targets the normal
+media pipeline while Assist uses the announcement pipeline, and HA keeps the TTS
+producer alive. Full physical interruption plus producer cancellation is deferred
+to an announcement-aware upstream lifecycle or Cortex-Satellite. See
+`docs/validation/PHASE_10_CLOSURE.md`.

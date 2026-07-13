@@ -141,8 +141,15 @@ Compatibility authority, bounded buffering, cancellation, timeout, drain,
 and cleanup behavior are covered by deterministic tests. No image was built
 or deployed; production remains on the recorded Phase 9 image pins.
 
-### Phase 10: end-to-end barge-in testing with HA satellite/player
-Test with an actual Home Assistant satellite/player path including VAD, wake word, playback interruption, and new-request behavior.
+### Phase 10: end-to-end barge-in testing with HA satellite/player — implementation validation complete
+Repository-owned disconnect cancellation, native backend abort, scheduler cleanup,
+follow-up recovery, and overlap recovery passed against the deployed `sha-75936bc`
+images. Stock HA 2026.7.2 with Voice PE 26.6.0 / ESPHome 2026.6.0 has a
+documented external limitation: generic `media_player.media_stop` targets the
+normal media pipeline, not the active Assist announcement, and does not cancel
+the HA TTS producer or close Wyoming. Stock one-wake barge-in is **not passed**;
+it is deferred to an announcement-aware upstream lifecycle or Cortex-Satellite.
+See `docs/validation/PHASE_10_CLOSURE.md`.
 
 ### Phase 11: Faster-Whisper/full Assist pipeline integration and latency measurement
 Integrate or measure the broader Assist path and correlate STT, LLM, VAD, TTS, and playback timings.

@@ -1,76 +1,108 @@
-# Unraid install notes
+# Unraid install notes — v0.1.0
 
-The verified deployment uses two Docker containers on the Unraid `sorilonet` network:
+The v0.1.0 deployment uses two Docker containers linked through a private Docker bridge network.
 
-- `s2cpp-backend` — CUDA s2.cpp HTTP backend, image `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-edf89bd`
-- `wyoming-s2cpp-tts` — CPU-only Wyoming wrapper, image `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-9c134cc`
+For the generic Docker Compose setup (recommended for v0.1.0), see `compose.yaml` and `docs/INSTALL.md`.
+These Unraid notes complement the Compose approach for users who prefer Unraid'''s Docker UI templates.
 
-Home Assistant connects to the wrapper at `192.168.1.45:10200`. The wrapper reaches the backend at `http://s2cpp-backend:3030/generate` over `sorilonet`.
+> **Note**: The `unraid/*.xml` templates in this repository are **historical reference only**. The authoritative v0.1.0 deployment method is `docker compose` with `compose.yaml` and `.env.example`.
 
-## Backend template
+## Architecture
 
-Use `unraid/my-s2cpp-backend.xml` for the CUDA backend.
+- **Wrapper container** (`wyoming-s2cpp-tts`): CPU-only Wyoming Protocol TCP server.
+- **Backend container** (`s2cpp-backend`): CUDA s2.cpp HTTP inference server.
+- **Network**: private Docker bridge (`s2cpp-net` or your custom `NETWORK_NAME`). The backend HTTP port (3030) is **not published to the host** — only the wrapper Wyoming port (10200) is exposed.
+- Home Assistant connects to the wrapper at `<your-docker-host>:10200`.
 
-Important settings:
+## Compose-based setup (recommended)
 
-| Setting | Verified value |
-| --- | --- |
-| Repository | `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-edf89bd` |
+```bash
+# 1. Copy and edit environment
+cp .env.example .env
+# Edit .env to set your host paths, network name, and ports
+
+# 2. Start both containers
+docker compose up -d
+
+# 3. Verify
+docker compose ps
+docker compose logs -f
+```
+
+The `compose.yaml` configures:
+
+| Component | Image | Port | Host exposure |
+|-----------|-------|------|---------------|
+| s2cpp-backend | `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:0.1.0` | 3030 | **None** (private network only) |
+| wyoming-s2cpp-tts | `ghcr.io/sorilo/wyoming-s2cpp-tts:0.1.0` | 10200 | `<host>:10200` |
+
+## Important settings
+
+### Backend
+
+| Setting | Default / suggested value |
+|---------|--------------------------|
+| Image | `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:0.1.0` (pin to `sha-*` for production) |
 | Container name | `s2cpp-backend` |
-| Network | custom Docker network (`sorilonet`) |
-| Internal HTTP port | `3030` |
-| Host debug port | `3031` by default, because host `3030` is already occupied on this server |
-| Model mount | `/mnt/user/appdata/s2cpp/models` → `/models` read-only |
-| Voice mount | `/mnt/user/appdata/s2cpp/voices` → `/voices` read-write |
-| Model path | `/models/s2-pro-q6_k.gguf` |
-| Voice dir | `/voices` |
+| Network | `s2cpp-net` (private bridge) |
+| Internal HTTP port | `3030` (not published) |
+| Model mount | `<your-models-dir>` → `/models` (read-only) |
+| Voice mount | `<your-voices-dir>` → `/voices` (read-write for backend) |
+| Model path | `/models/s2-pro-q4_k_m.gguf` (or your chosen quant) |
 | GPU runtime | NVIDIA runtime / `--runtime=nvidia` |
+| RTX 3080 baseline | Q4_K_M, context=32, stride=32, threads=8 |
 
-The backend `POST /generate` endpoint expects `multipart/form-data`; do not configure the wrapper to send JSON to the deployed backend.
+The backend `POST /generate` endpoint expects `multipart/form-data`. Do not send JSON to the deployed backend.
 
-## Wrapper template
+### Wrapper
 
-Use `unraid/my-wyoming-wrapper.xml` for the CPU-only Wyoming wrapper.
-
-Important settings:
-
-| Setting | Verified value |
-| --- | --- |
-| Repository | `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-9c134cc` |
+| Setting | Default / suggested value |
+|---------|--------------------------|
+| Image | `ghcr.io/sorilo/wyoming-s2cpp-tts:0.1.0` (pin to `sha-*` for production) |
 | Container name | `wyoming-s2cpp-tts` |
-| Network | same custom Docker network as backend (`sorilonet`) |
+| Network | Same private bridge as backend (`s2cpp-net`) |
 | Host Wyoming port | `10200` |
 | `TTS_BACKEND` | `s2cpp` |
 | `S2_HOST` | `s2cpp-backend` |
 | `S2_PORT` | `3030` |
-| `S2_STREAM` | parsed/configured; see streaming caveat below |
+| `S2_STREAM` | `true` (progressive streaming enabled) |
 
-The wrapper does not need NVIDIA runtime, CUDA, GGUF model files, or GPU access.
+The wrapper does **not** need NVIDIA runtime, CUDA, GGUF model files, or GPU access.
 
 ## Streaming and cancellation status
 
-Wyoming protocol streaming is implemented and verified: the wrapper handles `synthesize-start`, `synthesize-chunk`, and `synthesize-stop`, then emits `AudioStart`, `AudioChunk`, `AudioStop`, and `synthesize-stopped` for Home Assistant.
+- Wyoming protocol streaming is implemented and verified: `synthesize-start` → `synthesize-chunk` → `synthesize-stop` → `AudioStart` → `AudioChunk` → `AudioStop` → `synthesize-stopped`.
+- Progressive backend-audio streaming is enabled when `S2_STREAM=true`.
+- Backend cancellation (Phase 8B2) is production-promoted: client disconnects abort synthesis and release backend busy state.
+- **Stock Home Assistant 2026.7.2 + Voice PE firmware 26.6.0 does NOT pass full one-wake barge-in.** Generic `media_player.media_stop` does not cancel the TTS producer in the Assist announcement pipeline. See `docs/validation/PHASE_10_CLOSURE.md`.
 
-Progressive backend-audio streaming is enabled by the wrapper when `S2_STREAM=true`; the verified live defaults are `S2_SEGMENT_SENTENCES=false` and `S2_CODEC_CONTEXT_FRAMES=4`.
+## Backup and rollback
 
-Phase 8B2 backend cancellation is production-promoted in `sha-edf89bd`: deliberate client disconnects are recorded once, generation exits promptly at a frame boundary, final decode is skipped, `server_busy` is released, and immediate recovery synthesis succeeds. Roll back the backend to `sha-741d06b` if cancellation promotion causes an unexpected production regression.
+Before upgrading, back up your data directories:
+
+```bash
+cp -a /mnt/user/appdata/s2cpp/voices /mnt/user/appdata/s2cpp/voices.bak
+cp -a /mnt/user/appdata/s2cpp/models /mnt/user/appdata/s2cpp/models.bak
+```
+
+For full upgrade and rollback procedures, see `docs/UPGRADE_ROLLBACK.md`.
+
+## Voice profiles
+
+Saved `.s2voice` files belong under `<voices-dir>` on the host and `/voices` inside the backend. Phase 7A created six CMU ARCTIC profiles. Phase 7B added wrapper read-only voice discovery and Home Assistant selectable voices. Drop-in discovery: new `.s2voice` files are discoverable without container rebuild or restart.
+
+Do not assume a backend HTTP voice-management endpoint. Plan against CLI profile creation/listing and `/generate` voice selection.
 
 ## Home Assistant setup
 
 1. In Home Assistant, add the **Wyoming Protocol** integration.
-2. Host: `192.168.1.45`
+2. Host: `<your-docker-host-ip>`
 3. Port: `10200`
 4. Select `wyoming-s2cpp-tts` / `s2-pro` as the TTS engine.
 5. Test with "Try text-to-speech".
 
-Verified behavior as of 2026-07-09: Home Assistant discovers the service, `s2-pro` is visible, preview TTS audibly plays real speech, and Phase 8B2 backend cancellation passed five live disconnect/recovery cycles.
-
-## Voice profiles
-
-Saved `.s2voice` files belong under `/mnt/user/appdata/s2cpp/voices` on the host and `/voices` inside the backend. Phase 7A creates and directly verifies a profile. Phase 7B adds wrapper read-only voice discovery and Home Assistant selectable voices.
-
-Do not assume a backend HTTP voice-management endpoint. Plan against CLI profile creation/listing and `/generate` voice selection unless source inspection proves otherwise.
+See `docs/HOME_ASSISTANT_SETUP.md` for detailed setup and known limitations.
 
 ## Finalization status
 
-Final restart, update, persistence, backup, and rollback validation for the Unraid templates is planned for Phase 14. Until then, prefer immutable `sha-*` image tags for every verified deployment.
+Final restart, update, persistence, backup, and rollback validation for Unraid templates is planned for Phase 14. Until then, prefer immutable `sha-*` image tags for every verified deployment and use the `compose.yaml` workflow.

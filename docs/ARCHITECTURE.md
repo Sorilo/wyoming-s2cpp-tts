@@ -326,3 +326,22 @@ media pipeline while Assist uses the announcement pipeline, and HA keeps the TTS
 producer alive. Full physical interruption plus producer cancellation is deferred
 to an announcement-aware upstream lifecycle or Cortex-Satellite. See
 `docs/validation/PHASE_10_CLOSURE.md`.
+
+
+## Operations documentation (Phase 11)
+
+The following operational documents define the v0.1.0 deployment, security,
+and lifecycle posture:
+
+- **`docs/SECURITY.md`** — security model: private backend network,
+  no-secrets-in-images policy, admin HTTP safety, image pinning.
+- **`docs/UPGRADE_ROLLBACK.md`** — upgrade paths, backup procedures,
+  immutable image pins, supported version transitions.
+- **`docs/RELEASE.md`** — release checklist, versioning, tagging,
+  image publication, rollback criteria.
+- **`docs/INSTALL.md`** — fresh install instructions (Compose-first).
+- **`docs/UNRAID_INSTALL.md`** — Unraid-specific notes (Compose-first,
+  sanitized placeholders, backup/rollback links).
+- **`docs/HOME_ASSISTANT_SETUP.md`** — Home Assistant integration with
+  voice selection, streaming status, and the documented stock HA
+  2026.7.2 + Voice PE 26.6.0 one-wake NOT PASS limitation.

@@ -151,8 +151,11 @@ the HA TTS producer or close Wyoming. Stock one-wake barge-in is **not passed**;
 it is deferred to an announcement-aware upstream lifecycle or Cortex-Satellite.
 See `docs/validation/PHASE_10_CLOSURE.md`.
 
-### Phase 11: Faster-Whisper/full Assist pipeline integration and latency measurement
-Integrate or measure the broader Assist path and correlate STT, LLM, VAD, TTS, and playback timings.
+### Phase 11: operations/docs baseline + Faster-Whisper/full Assist pipeline
+
+**Docs baseline** (completed): Generic Compose + `.env.example` with private backend network (no host port 3030). `docs/SECURITY.md`, `docs/UPGRADE_ROLLBACK.md`, `docs/RELEASE.md` created. `docs/UNRAID_INSTALL.md` and `docs/HOME_ASSISTANT_SETUP.md` updated with sanitized placeholders, v0.1.0 guidance, backup/rollback links, and the stock HA 2026.7.2 + Voice PE 26.6.0 one-wake NOT PASS limitation. 37 contract tests enforce documentation and security invariants.
+
+**Remaining**: Integrate or measure the broader Assist path and correlate STT, LLM, VAD, TTS, and playback timings.
 
 ### Phase 12: comprehensive reliability tests and troubleshooting
 Add reliability coverage, operational troubleshooting, and failure-mode documentation.

@@ -371,10 +371,10 @@ def _mock_s2client_with_results(buffered_audio, stream_chunks, stream_headers=No
         def __init__(self, *args, **kwargs):
             pass
 
-        def generate_multipart(self, request, files=None, boundary=None):
+        def generate_multipart(self, request, files=None, boundary=None, **kwargs):
             return S2GenerateResult(audio=buffered_audio, content_type="audio/wav")
 
-        def generate_stream(self, request, files=None, boundary=None):
+        def generate_stream(self, request, files=None, boundary=None, **kwargs):
             return MockStream()
 
         def generate(self, request):
@@ -431,14 +431,14 @@ def _mock_s2client_with_buffered_response(
         def __init__(self, *args, **kwargs):
             pass
 
-        def generate_multipart(self, request, files=None, boundary=None):
+        def generate_multipart(self, request, files=None, boundary=None, **kwargs):
             return S2GenerateResult(
                 audio=buffered_audio,
                 content_type=buffered_content_type,
                 response_headers=(buffered_headers or {}).copy(),
             )
 
-        def generate_stream(self, request, files=None, boundary=None):
+        def generate_stream(self, request, files=None, boundary=None, **kwargs):
             return MockStream()
 
         def generate(self, request):
@@ -1020,10 +1020,10 @@ class TestTimeoutErrorCleanup:
             def __init__(self, *args, **kwargs):
                 pass
 
-            def generate_multipart(self, request, files=None, boundary=None):
+            def generate_multipart(self, request, files=None, boundary=None, **kwargs):
                 raise S2ClientError("Connection refused")
 
-            def generate_stream(self, request, files=None, boundary=None):
+            def generate_stream(self, request, files=None, boundary=None, **kwargs):
                 raise S2ClientError("Connection refused")
 
             def generate(self, request):

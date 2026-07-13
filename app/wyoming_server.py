@@ -508,7 +508,7 @@ async def synthesize_s2cpp_streaming_tts_events(
             raise asyncio.TimeoutError("Synthesis deadline passed before connection")
 
         try:
-                with client.generate_stream(request) as stream:
+                with client.generate_stream(request, synthesis_id=_ctx.synthesis_id) as stream:
                     stream_content_type = getattr(stream, "content_type", None)
                     stream_headers = getattr(stream, "response_headers", None)
 
@@ -828,6 +828,12 @@ async def synthesize_s2cpp_streaming_tts_events(
                             buffer_policy=buffer_policy,
                             status="ok")
 
+                obs_log("synthesis_terminal",
+                        connection_id=_ctx.connection_id,
+                        synthesis_id=_ctx.synthesis_id,
+                        text_fp=fp,
+                        terminal_state="completed",
+                        elapsed_ms=int((time.monotonic() - stream_start) * 1000))
                 metrics.finalize("success")
                 break  # exit retry loop on success
 
@@ -867,24 +873,50 @@ async def synthesize_s2cpp_streaming_tts_events(
             metrics.finalize("error", "backend_busy_exhausted")
             raise
         except asyncio.TimeoutError:
+            total_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
             obs_log("synthesis_timeout",
                     connection_id=_ctx.connection_id,
                     synthesis_id=_ctx.synthesis_id,
                     text_fp=fp,
-                    elapsed_ms=int((time.monotonic() - stream_start) * 1000),
+                    elapsed_ms=total_elapsed_ms,
                     pcm_bytes_received=metrics.total_emitted_bytes,
                     chunk_count=metrics.emitted_chunk_count,
                     audio_start_emitted=audio_start_emitted)
+            obs_log("synthesis_terminal",
+                    connection_id=_ctx.connection_id,
+                    synthesis_id=_ctx.synthesis_id,
+                    text_fp=fp,
+                    terminal_state="timed_out",
+                    elapsed_ms=total_elapsed_ms)
             metrics.finalize("error", "synthesis_timeout")
             raise
         except (GeneratorExit, asyncio.CancelledError) as exc:
             total_elapsed_ms = int((time.monotonic() - stream_start) * 1000)
+            # Phase 10: structured cancellation observability.
+            # Emit cancellation_requested before cancelling the backend stream
+            # so the harness can correlate the wrapper intent independently of
+            # whether the backend cancellation succeeds.
+            obs_log("cancellation_requested",
+                    connection_id=_ctx.connection_id,
+                    synthesis_id=_ctx.synthesis_id,
+                    text_fp=fp,
+                    reason=type(exc).__name__,
+                    elapsed_ms=total_elapsed_ms,
+                    pcm_bytes_received=metrics.total_emitted_bytes,
+                    chunk_count=metrics.emitted_chunk_count,
+                    audio_start_emitted=audio_start_emitted)
             # Explicitly close the backend stream so any blocked
             # asyncio.to_thread(read) is unblocked promptly.
             try:
                 stream.cancel()  # type: ignore[possibly-unbound]
             except Exception:
                 pass
+            obs_log("cancellation_propagated",
+                    connection_id=_ctx.connection_id,
+                    synthesis_id=_ctx.synthesis_id,
+                    text_fp=fp,
+                    reason=type(exc).__name__,
+                    elapsed_ms=total_elapsed_ms)
             obs_log("synthesis_cancelled",
                     connection_id=_ctx.connection_id,
                     synthesis_id=_ctx.synthesis_id,
@@ -895,6 +927,12 @@ async def synthesize_s2cpp_streaming_tts_events(
                     chunk_count=metrics.emitted_chunk_count,
                     audio_start_emitted=audio_start_emitted)
             # The ``with`` block's ``__exit__`` also cleans up the stream.
+            obs_log("synthesis_terminal",
+                    connection_id=_ctx.connection_id,
+                    synthesis_id=_ctx.synthesis_id,
+                    text_fp=fp,
+                    terminal_state="cancelled",
+                    elapsed_ms=total_elapsed_ms)
             metrics.finalize("cancelled")
             raise
         except S2ClientError:
@@ -905,6 +943,13 @@ async def synthesize_s2cpp_streaming_tts_events(
                     text_fp=fp,
                     total_elapsed_ms=total_elapsed_ms,
                     status="error",
+                    error="S2ClientError")
+            obs_log("synthesis_terminal",
+                    connection_id=_ctx.connection_id,
+                    synthesis_id=_ctx.synthesis_id,
+                    text_fp=fp,
+                    terminal_state="failed",
+                    elapsed_ms=total_elapsed_ms,
                     error="S2ClientError")
             metrics.finalize("error", "S2ClientError")
             raise
@@ -917,6 +962,13 @@ async def synthesize_s2cpp_streaming_tts_events(
                     text_fp=fp,
                     total_elapsed_ms=total_elapsed_ms,
                     status="error",
+                    error=exc_name)
+            obs_log("synthesis_terminal",
+                    connection_id=_ctx.connection_id,
+                    synthesis_id=_ctx.synthesis_id,
+                    text_fp=fp,
+                    terminal_state="failed",
+                    elapsed_ms=total_elapsed_ms,
                     error=exc_name)
             metrics.finalize("error", exc_name)
             raise

@@ -48,7 +48,7 @@ class RecordingS2Client:
         self.response_headers = REAL_PCM_HEADERS.copy() if response_headers is None else response_headers
         self.requests = []
 
-    def generate_multipart(self, request):
+    def generate_multipart(self, request, **kwargs):
         self.requests.append(request)
         return S2GenerateResult(
             audio=self.audio,
@@ -250,7 +250,7 @@ def test_synthesis_log_contains_fingerprint_not_text():
 
 def test_error_path_logs_backend_done_with_error():
     class FailingClient:
-        def generate_multipart(self, request):
+        def generate_multipart(self, request, **kwargs):
             from app.s2_client import S2ClientError
             raise S2ClientError("backend timeout")
 

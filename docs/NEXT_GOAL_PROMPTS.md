@@ -3,23 +3,22 @@
 Run phases one at a time. This file is regenerated from the actual repository
 state after every `/goal` run. Do not copy stale assumptions forward.
 
-## Current state after Phase 9.5 (2026-07-12)
+## Current state after Phase 10 (2026-07-13)
 
-- Repository: `main`; PR #2 (Phase 9) merged as `1a0b93f`; PR #9 (Phase 9.5) merged as `ec633bd`.
-- Phase 9.5 authoritative application suite: **1252 passed, 0 failed, 0 skipped**,
-  excluding the 14 environment-specific tests in `tests/test_realtime_tuning_unraid.py`.
-  Phase 9.5 focused affected gate: **208 passed**.
-- Phase 9C application-suite baseline (prior): **1112 passed, 0 failed, 0 skipped**.
-  Phase 9B: source-only domain refactor complete. Phase 9.5: progressive phrase
-  synthesis implemented (PhraseAccumulator, AudioEnvelope, StreamingCoordinator)
-  on draft branch, now merged to `main`.
-- **No Phase 9C, 9.5, or Phase 9B images were built, published, or deployed.**
-  Production remains on recorded Phase 9 images:
-  - Wrapper: `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-7db26b7`
-  - Backend: `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-6e629d0`
-- Production retries: `S2_BACKEND_BUSY_MAX_RETRIES=10`,
-  `S2_BACKEND_BUSY_RETRY_DELAY_MS=500`; timeouts `30` and `120`.
-- Rollback: backend `sha-edf89bd`, wrapper `sha-7db26b7`.
+- Phase 10 implementation validation is complete with a documented external
+  stock-platform limitation; see `docs/validation/PHASE_10_CLOSURE.md`.
+- Direct-disconnect passed 25/25 and overlap-recovery passed 8/8. The authoritative
+  full application suite passed **1512 tests**, excluding only
+  `tests/test_realtime_tuning_unraid.py`.
+- Stock HA 2026.7.2 with Voice PE 26.6.0 / ESPHome 2026.6.0 does not provide
+  one-wake barge-in through generic media stop. The remaining full one-wake
+  requirement belongs to an upstream announcement-aware fix or Cortex-Satellite.
+- Production remains unchanged:
+  - Wrapper: `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-75936bc`
+  - Backend: `ghcr.io/sorilo/wyoming-s2cpp-tts-backend:sha-75936bc`
+- The next repository phase is Phase 11, Faster-Whisper/full Assist integration
+  and correlated latency measurement. Do not silently expand it into the deferred
+  Cortex-Satellite one-wake implementation.
 
 ## Phase 9B: Speech Scheduler Domain Refactor ✅ Complete
 
@@ -515,14 +514,13 @@ SpeechScheduler one at a time with bounded backpressure. Handler integration
 supports progressive feeding, compat-synthesize deduplication, disconnect
 cancellation, and generator cleanup. Test baseline: 1252 passed, 0 failed, 0 skipped.
 
-## Next official phase: Phase 10 — End-to-End Barge-In
+## Next official phase: Phase 11 — Full Assist Integration and Latency
 
-Phase 10 planning is in progress on branch `planning/phase-10-end-to-end-barge-in`.
-See `docs/PHASE_10_END_TO_END_BARGE_IN_PLAN.md` for the complete barge-in
-contract: layer separation, HA pipeline sequence, validation state model,
-correlation scheme, wrapper tests, 16-case live matrix, evidence schema,
-physical playback stop contract, and implementation decision gates.
-No code or deployment changes in the planning phase.
+Phase 10 repository-owned implementation validation is complete; see
+`docs/validation/PHASE_10_CLOSURE.md`. Phase 11 integrates or measures the broader
+Assist path and correlates STT, LLM, VAD, TTS, and playback timings. Stock
+Voice PE one-wake barge-in remains explicitly deferred to an announcement-aware
+upstream lifecycle or Cortex-Satellite and must not be reported as a Phase 10 pass.
 
 ## Prompt-generation guidance
 

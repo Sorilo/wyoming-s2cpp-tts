@@ -76,7 +76,7 @@ class _MockStreamingClient:
         self.requests: list = []
         self._last_stream: _MockS2StreamResult | None = None
 
-    def generate_stream(self, request, files=None, boundary=None):
+    def generate_stream(self, request, files=None, boundary=None, **kwargs):
         self.requests.append(request)
         self._last_stream = _MockS2StreamResult(
             self._chunks,
@@ -754,7 +754,7 @@ class _MetadataStreamingClient:
         } if response_headers is None else response_headers
         self._last_stream = None
 
-    def generate_stream(self, request, files=None, boundary=None):
+    def generate_stream(self, request, files=None, boundary=None, **kwargs):
         self._last_stream = _MetadataMockS2StreamResult(
             self._chunks,
             content_type=self._content_type,

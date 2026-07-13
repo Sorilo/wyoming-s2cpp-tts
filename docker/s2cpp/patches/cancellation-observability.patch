@@ -52,10 +52,10 @@ index 0dd5f01..2eb74dd 100644
          return false;
      }
 diff --git src/s2_server.cpp src/s2_server.cpp
-index 08fea2d..c2255a7 100644
+index 08fea2d..4ceccff 100644
 --- src/s2_server.cpp
 +++ src/s2_server.cpp
-@@ -297,6 +297,60 @@ struct StreamContext {
+@@ -297,6 +297,62 @@ struct StreamContext {
      bool error = false;
      std::string error_message;
      std::atomic<bool> cancelled{false};
@@ -65,6 +65,7 @@ index 08fea2d..c2255a7 100644
 +    std::chrono::steady_clock::time_point cancel_time{};
 +    std::chrono::steady_clock::time_point generation_cancel_time{};
 +    std::chrono::steady_clock::time_point request_start{};
++    std::string request_id;  // From X-Synthesis-ID header
 +    std::atomic<int32_t> generated_frames{0};
 +    std::atomic<int32_t> last_frame_index{-1};
 +    std::atomic<int32_t> decoded_frames{0};
@@ -85,6 +86,7 @@ index 08fea2d..c2255a7 100644
 +            S2_LOG_INFO_STREAM("[CANCEL] backend_cancel_detected"
 +                << " reason=" << reason
 +                << " point=" << detection_point
++                << " request_id=" << (request_id.empty() ? "none" : request_id)
 +                << std::endl);
 +            return true;
 +        }
@@ -101,7 +103,7 @@ index 08fea2d..c2255a7 100644
 +        return std::chrono::duration_cast<std::chrono::milliseconds>(
 +            when - cancel_time).count();
 +    }
- };
++};
 +
 +struct ServerBusyGuard {
 +    explicit ServerBusyGuard(std::shared_ptr<std::atomic<bool>> busy)
@@ -113,10 +115,10 @@ index 08fea2d..c2255a7 100644
 +
 +private:
 +    std::shared_ptr<std::atomic<bool>> server_busy;
-+};
+ };
 
  class BufferedAudioSink : public s2::StreamingSink {
-@@ -379,9 +433,13 @@ public:
+@@ -379,9 +435,13 @@ public:
      }
 
      bool on_pcm_data(const float* data, size_t n_samples) override {
@@ -131,7 +133,7 @@ index 08fea2d..c2255a7 100644
          std::vector<uint8_t> chunk(reinterpret_cast<const uint8_t*>(pcm16.data()),
                                      reinterpret_cast<const uint8_t*>(pcm16.data()) + byte_count);
          {
-@@ -410,6 +468,37 @@ public:
+@@ -410,6 +470,39 @@ public:
          return ctx_->cancelled.load();
      }
 
@@ -144,6 +146,7 @@ index 08fea2d..c2255a7 100644
 +        S2_LOG_INFO_STREAM("[CANCEL] generation_cancel_observed"
 +            << " reason=" << ctx_->cancel_reason
 +            << " point=" << ctx_->cancel_detection_point
++            << " request_id=" << (ctx_->request_id.empty() ? "none" : ctx_->request_id)
 +            << " total_frames=" << total_frames
 +            << " frame_index=" << frame_index
 +            << " detection_to_generation_cancel_ms=" << elapsed
@@ -161,6 +164,7 @@ index 08fea2d..c2255a7 100644
 +        S2_LOG_INFO_STREAM("[CANCEL] final_decode_skipped"
 +            << " reason=" << ctx_->cancel_reason
 +            << " point=" << ctx_->cancel_detection_point
++            << " request_id=" << (ctx_->request_id.empty() ? "none" : ctx_->request_id)
 +            << " generated_frames=" << generated_frames
 +            << " elapsed_ms=" << ctx_->detection_elapsed_ms(now)
 +            << std::endl);
@@ -169,7 +173,7 @@ index 08fea2d..c2255a7 100644
  private:
      std::shared_ptr<StreamContext> ctx_;
      StreamAudioFormat format_;
-@@ -812,7 +901,7 @@ namespace s2
+@@ -812,7 +905,7 @@ namespace s2
                          std::unique_lock<std::mutex> lock(ctx->mtx);
                          while (ctx->chunks.empty() && !ctx->done && !ctx->error) {
                              if (!sink.is_writable()) {
@@ -178,7 +182,7 @@ index 08fea2d..c2255a7 100644
                                  return false;
                              }
                              ctx->cv.wait_for(lock, std::chrono::milliseconds(100));
-@@ -823,7 +912,7 @@ namespace s2
+@@ -823,7 +916,7 @@ namespace s2
                                 ctx->queued_bytes < ctx->startup_buffer_bytes &&
                                 !ctx->done && !ctx->error) {
                              if (!sink.is_writable()) {
@@ -187,7 +191,7 @@ index 08fea2d..c2255a7 100644
                                  return false;
                              }
                              ctx->cv.wait_for(lock, std::chrono::milliseconds(100));
-@@ -842,7 +931,7 @@ namespace s2
+@@ -842,7 +935,7 @@ namespace s2
                              lock.unlock();
                              if (!sink.write(reinterpret_cast<const char*>(chunk.data()),
                                             chunk.size())) {
@@ -196,7 +200,7 @@ index 08fea2d..c2255a7 100644
                                  return false;
                              }
                              lock.lock();
-@@ -862,24 +951,50 @@ namespace s2
+@@ -862,24 +955,67 @@ namespace s2
                      },
                      [ctx](bool success) {
                          if (!success) {
@@ -208,9 +212,24 @@ index 08fea2d..c2255a7 100644
                      }
                  );
 
++                // Extract stable correlation ID from X-Synthesis-ID header
++                // before spawning the synthesis thread (req is the HTTP request).
++                std::string synth_synthesis_id;
++                auto syn_id_it = req.headers.find("X-Synthesis-ID");
++                if (syn_id_it != req.headers.end()) {
++                    synth_synthesis_id = syn_id_it->second;
++                }
++                // Log the extracted synthesis ID for observability
++                if (!synth_synthesis_id.empty()) {
++                    S2_LOG_INFO_STREAM("[ID] synthesis_id=" << synth_synthesis_id << std::endl);
++                }
++
                  std::thread synth_thread([pipeline, pipelineParams, ref_audio, sink, server_busy,
 -                                          segment_sentences, segmented_texts, sentence_pause_ms]() mutable {
-+                                          segment_sentences, segmented_texts, sentence_pause_ms, ctx]() mutable {
++                                          segment_sentences, segmented_texts, sentence_pause_ms, ctx, syn_sid = synth_synthesis_id]() mutable {
++                    if (!syn_sid.empty()) {
++                        ctx->request_id = syn_sid;
++                    }
 +                    ServerBusyGuard busy_guard{server_busy};
 +                    ctx->request_start = std::chrono::steady_clock::now();
 +                    try {
@@ -221,12 +240,14 @@ index 08fea2d..c2255a7 100644
                      if (!ok) {
                          std::cerr << "Streaming synthesis failed." << std::endl;
 -
-+                    }
+                     }
+-                    server_busy->store(false);
 +                    if (ctx->cancelled.load()) {
 +                        const auto exit_time = std::chrono::steady_clock::now();
 +                        S2_LOG_INFO_STREAM("[CANCEL] backend_request_cancelled"
 +                            << " reason=" << ctx->cancel_reason
 +                            << " point=" << ctx->cancel_detection_point
++                            << " request_id=" << (ctx->request_id.empty() ? "none" : ctx->request_id)
 +                            << " generated_frames=" << ctx->generated_frames.load()
 +                            << " last_frame_index=" << ctx->last_frame_index.load()
 +                            << " decoded_frames=" << ctx->decoded_frames.load()
@@ -234,13 +255,13 @@ index 08fea2d..c2255a7 100644
 +                            << " queued_pcm_bytes=" << ctx->queued_bytes
 +                            << " detection_to_exit_ms=" << ctx->detection_elapsed_ms(exit_time)
 +                            << std::endl);
-                     }
--                    server_busy->store(false);
++                    }
 +                    if (ctx->cancelled.load()) {
 +                        const auto cleanup_time = std::chrono::steady_clock::now();
 +                        S2_LOG_INFO_STREAM("[CANCEL] backend_request_cleanup_done"
 +                            << " reason=" << ctx->cancel_reason
 +                            << " point=" << ctx->cancel_detection_point
++                            << " request_id=" << (ctx->request_id.empty() ? "none" : ctx->request_id)
 +                            << " detection_to_cleanup_ms=" << ctx->detection_elapsed_ms(cleanup_time)
 +                            << " server_busy_released_on_scope_exit=true"
 +                            << std::endl);

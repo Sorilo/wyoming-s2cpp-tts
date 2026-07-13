@@ -300,7 +300,7 @@ class MockStreamingClient:
         self.multipart_requests: list[S2GenerateRequest] = []
         self.stream_requests: list[S2GenerateRequest] = []
 
-    def generate_multipart(self, request: S2GenerateRequest) -> S2GenerateResult:
+    def generate_multipart(self, request: S2GenerateRequest, **kwargs) -> S2GenerateResult:
         self.multipart_requests.append(request)
         behavior = self.backend.next_behavior()
         if behavior.error:
@@ -313,7 +313,7 @@ class MockStreamingClient:
         )
 
     def generate_stream(
-        self, request: S2GenerateRequest, files=None, boundary=None,
+        self, request: S2GenerateRequest, files=None, boundary=None, **kwargs,
     ):
         self.stream_requests.append(request)
         with self.backend._counter_lock:
@@ -373,7 +373,7 @@ class _RecordingClient:
         self.stream_requests: list = []
         self._stream_chunks = stream_chunks or ([audio] if audio else [])
 
-    def generate_multipart(self, request):
+    def generate_multipart(self, request, **kwargs):
         self.multipart_requests.append(request)
         return S2GenerateResult(
             audio=self.audio,
@@ -381,7 +381,7 @@ class _RecordingClient:
             response_headers=dict(self.response_headers),
         )
 
-    def generate_stream(self, request, files=None, boundary=None):
+    def generate_stream(self, request, files=None, boundary=None, **kwargs):
         self.stream_requests.append(request)
         return _MockStream(
             self._stream_chunks, self.content_type, self.response_headers,
@@ -653,11 +653,11 @@ class TestCancelOnNewRequest:
             def __init__(self):
                 self.stream_requests = []
                 self.multipart_requests = []
-            def generate_multipart(self, r):
+            def generate_multipart(self, r, **kwargs):
                 self.multipart_requests.append(r)
                 return S2GenerateResult(audio=pcm, content_type=_REAL_PCM_CONTENT_TYPE,
                                         response_headers=dict(_REAL_PCM_HEADERS))
-            def generate_stream(self, r, files=None, boundary=None):
+            def generate_stream(self, r, files=None, boundary=None, **kwargs):
                 self.stream_requests.append(r)
                 return _MockStream([pcm], _REAL_PCM_CONTENT_TYPE, _REAL_PCM_HEADERS)
 
@@ -687,11 +687,11 @@ class TestCancelOnNewRequest:
             def __init__(self):
                 self.stream_requests = []
                 self.multipart_requests = []
-            def generate_multipart(self, r):
+            def generate_multipart(self, r, **kwargs):
                 self.multipart_requests.append(r)
                 return S2GenerateResult(audio=pcm, content_type=_REAL_PCM_CONTENT_TYPE,
                                         response_headers=dict(_REAL_PCM_HEADERS))
-            def generate_stream(self, r, files=None, boundary=None):
+            def generate_stream(self, r, files=None, boundary=None, **kwargs):
                 self.stream_requests.append(r)
                 return _MockStream([pcm], _REAL_PCM_CONTENT_TYPE, _REAL_PCM_HEADERS)
 
@@ -813,11 +813,11 @@ class TestBackendBusyRetry:
             def __init__(self):
                 self.stream_requests = []
                 self.multipart_requests = []
-            def generate_multipart(self, r):
+            def generate_multipart(self, r, **kwargs):
                 self.multipart_requests.append(r)
                 return S2GenerateResult(audio=bad_pcm, content_type=_REAL_PCM_CONTENT_TYPE,
                                         response_headers=dict(_REAL_PCM_HEADERS))
-            def generate_stream(self, r, files=None, boundary=None):
+            def generate_stream(self, r, files=None, boundary=None, **kwargs):
                 self.stream_requests.append(r)
                 return _MockStream([bad_pcm], _REAL_PCM_CONTENT_TYPE, _REAL_PCM_HEADERS)
 
@@ -863,11 +863,11 @@ class TestBackendBusyRetry:
             def __init__(self):
                 self.stream_requests = []
                 self.multipart_requests = []
-            def generate_multipart(self, r):
+            def generate_multipart(self, r, **kwargs):
                 self.multipart_requests.append(r)
                 return S2GenerateResult(audio=pcm, content_type=_REAL_PCM_CONTENT_TYPE,
                                         response_headers=dict(_REAL_PCM_HEADERS))
-            def generate_stream(self, r, files=None, boundary=None):
+            def generate_stream(self, r, files=None, boundary=None, **kwargs):
                 self.stream_requests.append(r)
                 return _Partial503Stream()
 
@@ -914,11 +914,11 @@ class TestSynthesisTimeout:
             def __init__(self):
                 self.stream_requests = []
                 self.multipart_requests = []
-            def generate_multipart(self, r):
+            def generate_multipart(self, r, **kwargs):
                 self.multipart_requests.append(r)
                 return S2GenerateResult(audio=b"", content_type=_REAL_PCM_CONTENT_TYPE,
                                         response_headers=dict(_REAL_PCM_HEADERS))
-            def generate_stream(self, r, files=None, boundary=None):
+            def generate_stream(self, r, files=None, boundary=None, **kwargs):
                 self.stream_requests.append(r)
                 return _BlockForeverStream()
 
@@ -963,11 +963,11 @@ class TestSynthesisTimeout:
             def __init__(self):
                 self.stream_requests = []
                 self.multipart_requests = []
-            def generate_multipart(self, r):
+            def generate_multipart(self, r, **kwargs):
                 self.multipart_requests.append(r)
                 return S2GenerateResult(audio=pcm, content_type=_REAL_PCM_CONTENT_TYPE,
                                         response_headers=dict(_REAL_PCM_HEADERS))
-            def generate_stream(self, r, files=None, boundary=None):
+            def generate_stream(self, r, files=None, boundary=None, **kwargs):
                 self.stream_requests.append(r)
                 return _SlowStream()
 
@@ -1004,11 +1004,11 @@ class TestRecoveryAfterFailure:
                 self.stream_requests = []
                 self.multipart_requests = []
                 self._calls = 0
-            def generate_multipart(self, r):
+            def generate_multipart(self, r, **kwargs):
                 self.multipart_requests.append(r)
                 return S2GenerateResult(audio=pcm, content_type=_REAL_PCM_CONTENT_TYPE,
                                         response_headers=dict(_REAL_PCM_HEADERS))
-            def generate_stream(self, r, files=None, boundary=None):
+            def generate_stream(self, r, files=None, boundary=None, **kwargs):
                 self.stream_requests.append(r)
                 self._calls += 1
                 if self._calls == 1:
@@ -1329,7 +1329,7 @@ class TestBusyBeforeEnter:
 
         class _BusyThenOkClient:
             def __init__(self): self.calls = 0
-            def generate_stream(self, r, files=None, boundary=None):
+            def generate_stream(self, r, files=None, boundary=None, **kwargs):
                 self.calls += 1
                 if self.calls <= 3:
                     raise S2BackendBusyError("503 busy", status_code=503)
@@ -1357,7 +1357,7 @@ class TestBusyBeforeEnter:
 
         class _AlwaysBusyClient:
             def __init__(self): self.calls = 0
-            def generate_stream(self, r, files=None, boundary=None):
+            def generate_stream(self, r, files=None, boundary=None, **kwargs):
                 self.calls += 1
                 raise S2BackendBusyError("503 busy", status_code=503)
 
@@ -1381,7 +1381,7 @@ class TestBusyBeforeEnter:
 
         class _OkThenBusyClient:
             def __init__(self): self.calls = 0
-            def generate_stream(self, r, files=None, boundary=None):
+            def generate_stream(self, r, files=None, boundary=None, **kwargs):
                 self.calls += 1
                 return _FakeStream(content_type=_REAL_PCM_CONTENT_TYPE,
                                    chunks=[pcm],
@@ -1413,7 +1413,7 @@ class TestBusyBeforeEnter:
 
         class _BusyEnterClient:
             def __init__(self): self.calls = 0
-            def generate_stream(self, r, files=None, boundary=None):
+            def generate_stream(self, r, files=None, boundary=None, **kwargs):
                 self.calls += 1
                 if self.calls == 1:
                     raise S2BackendBusyError("503 busy", status_code=503)

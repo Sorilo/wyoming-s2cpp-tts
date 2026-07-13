@@ -30,10 +30,10 @@ class RecordingStreamingClient:
         self.response_headers = response_headers if response_headers is not None else dict(_REAL_PCM_HEADERS)
         self.multipart_requests = []; self.stream_requests = []
         self._stream_chunks = stream_chunks or ([audio] if audio else [])
-    def generate_multipart(self, request):
+    def generate_multipart(self, request, **kwargs):
         self.multipart_requests.append(request)
         return S2GenerateResult(audio=self.audio, content_type=self.content_type, response_headers=dict(self.response_headers))
-    def generate_stream(self, request, files=None, boundary=None):
+    def generate_stream(self, request, files=None, boundary=None, **kwargs):
         self.stream_requests.append(request)
         return _MockStream(self._stream_chunks, self.content_type, self.response_headers)
 
@@ -175,13 +175,13 @@ class TestStreamingSuccess:
             def __init__(self):
                 self.multipart_requests = []
                 self.stream_requests = []
-            def generate_multipart(self, request):
+            def generate_multipart(self, request, **kwargs):
                 self.multipart_requests.append(request)
                 return S2GenerateResult(
                     audio=chunk_a + chunk_b,
                     content_type=_REAL_PCM_CONTENT_TYPE,
                     response_headers=dict(_REAL_PCM_HEADERS))
-            def generate_stream(self, request, files=None, boundary=None):
+            def generate_stream(self, request, files=None, boundary=None, **kwargs):
                 self.stream_requests.append(request)
                 return _BlockingStream()
 
@@ -336,8 +336,8 @@ class TestStreamingFailure:
     async def test_backend_http_failure(self):
         class FailingClient:
             multipart_requests = []; stream_requests = []
-            def generate_multipart(self, r): self.multipart_requests.append(r); raise S2ClientError("fail")
-            def generate_stream(self, r, files=None, boundary=None): self.stream_requests.append(r); raise S2ClientError("fail")
+            def generate_multipart(self, r, **kwargs): self.multipart_requests.append(r); raise S2ClientError("fail")
+            def generate_stream(self, r, files=None, boundary=None, **kwargs): self.stream_requests.append(r); raise S2ClientError("fail")
         client = FailingClient()
         settings = Settings(tts_backend="s2cpp", s2_stream=True)
         server = await start_fake_tts_server(host="127.0.0.1", port=0, settings=settings, s2_client_factory=_make_cf(client))
@@ -431,7 +431,7 @@ class TestStreamCleanup:
             def cancel(self): pass
 
         class _Client:
-            def generate_stream(self, r, files=None, boundary=None): return _CloseStream()
+            def generate_stream(self, r, files=None, boundary=None, **kwargs): return _CloseStream()
 
         from app.s2_client import S2GenerateRequest
         from app.wyoming_server import synthesize_s2cpp_streaming_tts_events
@@ -472,7 +472,7 @@ class TestStreamCleanup:
             def cancel(self): pass
 
         class _Client:
-            def generate_stream(self, r, files=None, boundary=None): return _Stream()
+            def generate_stream(self, r, files=None, boundary=None, **kwargs): return _Stream()
 
         from app.s2_client import S2GenerateRequest
         from app.wyoming_server import synthesize_s2cpp_streaming_tts_events
@@ -509,7 +509,7 @@ class TestStreamCleanup:
             def cancel(self): cancel_called.set()
 
         class _Client:
-            def generate_stream(self, r, files=None, boundary=None): return _CancelStream()
+            def generate_stream(self, r, files=None, boundary=None, **kwargs): return _CancelStream()
 
         from app.s2_client import S2GenerateRequest
         from app.wyoming_server import synthesize_s2cpp_streaming_tts_events
@@ -580,8 +580,8 @@ class TestDisconnectBeforeAudio:
 
         class _Client:
             def __init__(self): self.stream_requests = []; self.multipart_requests = []
-            def generate_multipart(self, r): self.multipart_requests.append(r); return S2GenerateResult(audio=b"", content_type=_REAL_PCM_CONTENT_TYPE, response_headers=dict(_REAL_PCM_HEADERS))
-            def generate_stream(self, r, files=None, boundary=None): self.stream_requests.append(r); return _BlockStream()
+            def generate_multipart(self, r, **kwargs): self.multipart_requests.append(r); return S2GenerateResult(audio=b"", content_type=_REAL_PCM_CONTENT_TYPE, response_headers=dict(_REAL_PCM_HEADERS))
+            def generate_stream(self, r, files=None, boundary=None, **kwargs): self.stream_requests.append(r); return _BlockStream()
 
         client = _Client()
         settings = Settings(tts_backend="s2cpp", s2_stream=True)
@@ -630,8 +630,8 @@ class TestBackendErrorMidStream:
 
         class _Client:
             def __init__(self): self.stream_requests = []; self.multipart_requests = []
-            def generate_multipart(self, r): self.multipart_requests.append(r); return S2GenerateResult(audio=b"", content_type=_REAL_PCM_CONTENT_TYPE, response_headers=dict(_REAL_PCM_HEADERS))
-            def generate_stream(self, r, files=None, boundary=None): self.stream_requests.append(r); return _FailingStream()
+            def generate_multipart(self, r, **kwargs): self.multipart_requests.append(r); return S2GenerateResult(audio=b"", content_type=_REAL_PCM_CONTENT_TYPE, response_headers=dict(_REAL_PCM_HEADERS))
+            def generate_stream(self, r, files=None, boundary=None, **kwargs): self.stream_requests.append(r); return _FailingStream()
 
         client = _Client()
         settings = Settings(tts_backend="s2cpp", s2_stream=True)
@@ -680,8 +680,8 @@ class TestShutdownDuringSynthesis:
 
         class _Client:
             def __init__(self): self.stream_requests = []; self.multipart_requests = []
-            def generate_multipart(self, r): self.multipart_requests.append(r); return S2GenerateResult(audio=b"", content_type=_REAL_PCM_CONTENT_TYPE, response_headers=dict(_REAL_PCM_HEADERS))
-            def generate_stream(self, r, files=None, boundary=None): self.stream_requests.append(r); return _LongStream()
+            def generate_multipart(self, r, **kwargs): self.multipart_requests.append(r); return S2GenerateResult(audio=b"", content_type=_REAL_PCM_CONTENT_TYPE, response_headers=dict(_REAL_PCM_HEADERS))
+            def generate_stream(self, r, files=None, boundary=None, **kwargs): self.stream_requests.append(r); return _LongStream()
 
         client = _Client()
         settings = Settings(tts_backend="s2cpp", s2_stream=True)
@@ -761,7 +761,7 @@ class TestBlockedReadTimeout:
             def cancel(self): read_released.set()
 
         class _Client:
-            def generate_stream(self, r, files=None, boundary=None): return _BlockStream()
+            def generate_stream(self, r, files=None, boundary=None, **kwargs): return _BlockStream()
 
         from app.s2_client import S2GenerateRequest
         from app.wyoming_server import synthesize_s2cpp_streaming_tts_events
@@ -828,7 +828,7 @@ class _PacedResetStream:
 
 class _AlternatingResetClient:
     def __init__(self): self.streams = []
-    def generate_stream(self, _request, files=None, boundary=None):
+    def generate_stream(self, _request, files=None, boundary=None, **kwargs):
         stream = _PacedResetStream(finite=(len(self.streams) % 2 == 1))
         self.streams.append(stream)
         return stream

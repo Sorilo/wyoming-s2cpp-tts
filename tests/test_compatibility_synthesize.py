@@ -24,8 +24,8 @@ class _BS:
 
 class R:
     def __init__(s,a,*,ct=CT,rh=None): s.a=a; s.ct=ct; s.rh=RH.copy() if rh is None else rh; s.rq=[]
-    def generate_multipart(s,r): s.rq.append(r); return S2GenerateResult(audio=s.a,content_type=s.ct,response_headers=s.rh.copy())
-    def generate_stream(s,r,files=None,boundary=None): s.rq.append(r); return _BS(S2GenerateResult(audio=s.a,content_type=s.ct,response_headers=s.rh.copy()))
+    def generate_multipart(s,r,synthesis_id=None): s.rq.append(r); return S2GenerateResult(audio=s.a,content_type=s.ct,response_headers=s.rh.copy())
+    def generate_stream(s,r,files=None,boundary=None,synthesis_id=None): s.rq.append(r); return _BS(S2GenerateResult(audio=s.a,content_type=s.ct,response_headers=s.rh.copy()))
 
 PCM = bytes([1,0])*200
 

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Phase 10 implementation validation completed with a documented external
+  stock-platform limitation. Correlated Wyoming disconnect cancellation, native
+  backend abort, scheduler cleanup, follow-up recovery, and overlap recovery
+  passed. Stock HA 2026.7.2 with Voice PE 26.6.0 / ESPHome 2026.6.0 does not
+  stop the active Assist announcement or cancel its TTS producer through generic
+  `media_player.media_stop`; stock one-wake barge-in remains deferred. Added the
+  sanitized closure record at `docs/validation/PHASE_10_CLOSURE.md`.
+
 - Phase 9.5: progressive phrase synthesis for streaming Wyoming TTS input.
   Implemented three new components in ``app/speech/``:
 

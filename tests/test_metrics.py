@@ -337,7 +337,7 @@ class TestBufferedS2CppMetrics:
         class _Client:
             def __init__(self):
                 self.requests = []
-            def generate_multipart(self, request):
+            def generate_multipart(self, request, **kwargs):
                 self.requests.append(request)
                 return S2GenerateResult(
                     audio=audio,
@@ -424,7 +424,7 @@ class TestBufferedS2CppMetrics:
         from app.wyoming_server import synthesize_s2cpp_tts_events
 
         class _FailingClient:
-            def generate_multipart(self, request):
+            def generate_multipart(self, request, **kwargs):
                 raise S2ClientError("backend down")
 
         client = _FailingClient()
@@ -492,7 +492,7 @@ class TestStreamingS2CppMetrics:
                 self._chunks = chunks
                 self._fail_after = fail_after
 
-            def generate_stream(self, request, files=None, boundary=None):
+            def generate_stream(self, request, files=None, boundary=None, **kwargs):
                 return _MockStream(self._chunks, self._fail_after)
 
         return _Client(chunks, fail_after)
@@ -724,7 +724,7 @@ class TestStreamingS2CppMetrics:
                 raise StopIteration
 
         class _BlockingClient:
-            def generate_stream(self, request, files=None, boundary=None):
+            def generate_stream(self, request, files=None, boundary=None, **kwargs):
                 return _BlockingStream()
 
         client = _BlockingClient()
@@ -849,7 +849,7 @@ class TestStreamingPCMByteAccounting:
         class _Client:
             def __init__(self, chunks):
                 self._chunks = chunks
-            def generate_stream(self, request, files=None, boundary=None):
+            def generate_stream(self, request, files=None, boundary=None, **kwargs):
                 return _MockStream(self._chunks)
         return _Client(chunks)
 
@@ -1045,7 +1045,7 @@ class TestStreamingPCMByteAccounting:
                 if self._idx >= len(self._chunks): raise StopIteration
                 chunk = self._chunks[self._idx]; self._idx += 1; return chunk
         class _Client:
-            def generate_stream(self, r, files=None, boundary=None):
+            def generate_stream(self, r, files=None, boundary=None, **kwargs):
                 return _MockStream(transport_chunks)
 
         client = _Client()

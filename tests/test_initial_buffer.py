@@ -71,7 +71,7 @@ class _MockStreamingClient:
         self._last_stream = None
         self.requests = []
 
-    def generate_stream(self, request, files=None, boundary=None):
+    def generate_stream(self, request, files=None, boundary=None, **kwargs):
         self.requests.append(request)
         stream = _MockS2StreamResult(self._chunks, fail_after=self._fail_after)
         stream.content_type = self._content_type

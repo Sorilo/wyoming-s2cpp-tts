@@ -36,6 +36,7 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       release_version: ${{ steps.preflight.outputs.release_version }}
+      short_sha: ${{ steps.preflight.outputs.short_sha }}
       created: ${{ steps.preflight.outputs.created }}
     steps:
       - name: Checkout repository
@@ -48,28 +49,33 @@ jobs:
         run: uv python install 3.12
 
       - name: Install dependencies
-        run: uv sync --group dev
+        run: uv sync --locked --group dev
 
       - name: Preflight version validation and outputs
         id: preflight
+        env:
+          VERSION_INPUT: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          VERSION_INPUT="${{ inputs.version }}"
 
           # Read canonical version from source
           CANONICAL=$(uv run python -c "from app.version import __version__; print(__version__)")
           echo "Canonical source version: ${CANONICAL}"
 
-          # Validate: must be v0.1.0 or v0.1.0-rc.N (N = 1-9)
-          if [[ ! "$VERSION_INPUT" =~ ^v${CANONICAL}(-rc\.[1-9])?$ ]]; then
+          # Validate: exact stable tag or a positive, unbounded RC number.
+          if [[ ! "$VERSION_INPUT" =~ ^v${CANONICAL}(-rc\.[1-9][0-9]*)?$ ]]; then
             echo "ERROR: version '${VERSION_INPUT}' does not match canonical ${CANONICAL}"
-            echo "       Must be v${CANONICAL} or v${CANONICAL}-rc.N (N=1-9)"
+            echo "       Must be v${CANONICAL} or v${CANONICAL}-rc.N (N>=1)"
             exit 1
           fi
 
           # Emit release_version: strip leading v
           RELEASE_VERSION="${VERSION_INPUT#v}"
           echo "release_version=${RELEASE_VERSION}" >> "$GITHUB_OUTPUT"
+
+          # Preserve the established immutable image-tag convention.
+          SHORT_SHA=$(git rev-parse --short=7 HEAD)
+          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
 
           # Emit created: deterministic git commit timestamp
           CREATED=$(git show -s --format=%cI HEAD)
@@ -296,11 +302,11 @@ jobs:
         id: push-wrapper
         run: |
           set -euo pipefail
-          docker tag local/wrapper:candidate "${{ env.WRAPPER_IMAGE }}:${{ inputs.version }}"
-          docker tag local/wrapper:candidate "${{ env.WRAPPER_IMAGE }}:sha-${{ github.sha }}"
-          docker push "${{ env.WRAPPER_IMAGE }}:${{ inputs.version }}"
-          docker push "${{ env.WRAPPER_IMAGE }}:sha-${{ github.sha }}"
-          WRAPPER_DIGEST=$(docker buildx imagetools inspect "${{ env.WRAPPER_IMAGE }}:${{ inputs.version }}" --format '{{json .}}' | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('manifest',d).get('digest',''))")
+          docker tag local/wrapper:candidate "${{ env.WRAPPER_IMAGE }}:${{ needs.source-tests.outputs.release_version }}"
+          docker tag local/wrapper:candidate "${{ env.WRAPPER_IMAGE }}:sha-${{ needs.source-tests.outputs.short_sha }}"
+          docker push "${{ env.WRAPPER_IMAGE }}:${{ needs.source-tests.outputs.release_version }}"
+          docker push "${{ env.WRAPPER_IMAGE }}:sha-${{ needs.source-tests.outputs.short_sha }}"
+          WRAPPER_DIGEST=$(docker buildx imagetools inspect "${{ env.WRAPPER_IMAGE }}:${{ needs.source-tests.outputs.release_version }}" --format '{{json .}}' | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('manifest',d).get('digest',''))")
           if [[ ! "$WRAPPER_DIGEST" =~ ^sha256:[a-fA-F0-9]{64}$ ]]; then
             echo "ERROR: invalid wrapper digest: $WRAPPER_DIGEST"
             exit 1
@@ -311,11 +317,11 @@ jobs:
         id: push-backend
         run: |
           set -euo pipefail
-          docker tag local/backend:candidate "${{ env.BACKEND_IMAGE }}:${{ inputs.version }}"
-          docker tag local/backend:candidate "${{ env.BACKEND_IMAGE }}:sha-${{ github.sha }}"
-          docker push "${{ env.BACKEND_IMAGE }}:${{ inputs.version }}"
-          docker push "${{ env.BACKEND_IMAGE }}:sha-${{ github.sha }}"
-          BACKEND_DIGEST=$(docker buildx imagetools inspect "${{ env.BACKEND_IMAGE }}:${{ inputs.version }}" --format '{{json .}}' | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('manifest',d).get('digest',''))")
+          docker tag local/backend:candidate "${{ env.BACKEND_IMAGE }}:${{ needs.source-tests.outputs.release_version }}"
+          docker tag local/backend:candidate "${{ env.BACKEND_IMAGE }}:sha-${{ needs.source-tests.outputs.short_sha }}"
+          docker push "${{ env.BACKEND_IMAGE }}:${{ needs.source-tests.outputs.release_version }}"
+          docker push "${{ env.BACKEND_IMAGE }}:sha-${{ needs.source-tests.outputs.short_sha }}"
+          BACKEND_DIGEST=$(docker buildx imagetools inspect "${{ env.BACKEND_IMAGE }}:${{ needs.source-tests.outputs.release_version }}" --format '{{json .}}' | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('manifest',d).get('digest',''))")
           if [[ ! "$BACKEND_DIGEST" =~ ^sha256:[a-fA-F0-9]{64}$ ]]; then
             echo "ERROR: invalid backend digest: $BACKEND_DIGEST"
             exit 1
@@ -362,13 +368,13 @@ jobs:
       - name: Generate SBOM for wrapper
         uses: anchore/sbom-action@f325610c9f50a54015d37c8d16cb3b0e2c8f4de0  # verified
         with:
-          image: ${{ env.WRAPPER_IMAGE }}:${{ inputs.version }}
+          image: ${{ env.WRAPPER_IMAGE }}:${{ needs.source-tests.outputs.release_version }}
           output-file: /tmp/wrapper-sbom.spdx.json
 
       - name: Generate SBOM for backend
         uses: anchore/sbom-action@f325610c9f50a54015d37c8d16cb3b0e2c8f4de0  # verified
         with:
-          image: ${{ env.BACKEND_IMAGE }}:${{ inputs.version }}
+          image: ${{ env.BACKEND_IMAGE }}:${{ needs.source-tests.outputs.release_version }}
           output-file: /tmp/backend-sbom.spdx.json
 
       - name: Upload SBOMs

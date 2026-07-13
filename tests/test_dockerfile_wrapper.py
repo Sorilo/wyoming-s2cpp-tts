@@ -191,10 +191,11 @@ def test_wrapper_workflow_uses_correct_dockerfile() -> None:
     assert "file: docker/wrapper/Dockerfile" in content
 
 
-def test_wrapper_workflow_has_immutable_sha_tag() -> None:
-    """The workflow tags with immutable sha-${{ github.sha }}."""
+def test_wrapper_workflow_has_immutable_short_sha_tag() -> None:
+    """The workflow preserves the established immutable short-SHA tag."""
     content = _read(WRAPPER_WORKFLOW)
-    assert "sha-${{ github.sha }}" in content
+    assert "sha-${{ needs.source-tests.outputs.short_sha }}" in content
+    assert "sha-${{ github.sha }}" not in content
 
 
 def test_wrapper_workflow_no_edge_or_latest_tag() -> None:

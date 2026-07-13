@@ -161,10 +161,13 @@ def test_build_args_use_created():
     assert "CREATED=${{ needs.source-tests.outputs.created }}" in text
 
 
-def test_registry_tags_use_inputs_version():
-    """Registry tags use inputs.version (with v prefix)."""
+def test_registry_semver_tags_use_normalized_release_version():
+    """GHCR uses 0.1.0[-rc.N]; only the Git release input carries a v prefix."""
     text = _read(PAIRED_RELEASE)
-    assert "${{ inputs.version }}" in text
+    assert '"${{ env.WRAPPER_IMAGE }}:${{ needs.source-tests.outputs.release_version }}"' in text
+    assert '"${{ env.BACKEND_IMAGE }}:${{ needs.source-tests.outputs.release_version }}"' in text
+    assert '"${{ env.WRAPPER_IMAGE }}:${{ inputs.version }}"' not in text
+    assert '"${{ env.BACKEND_IMAGE }}:${{ inputs.version }}"' not in text
 
 
 def test_backend_build_has_s2cpp_revision_arg():
@@ -209,10 +212,11 @@ def test_paired_release_uses_github_sha():
     assert "github.sha" in text
 
 
-def test_paired_release_uses_inputs_version():
-    """Images tagged with inputs.version."""
+def test_paired_release_validates_version_input_via_environment():
+    """Untrusted dispatch input is passed as env data, never interpolated into shell."""
     text = _read(PAIRED_RELEASE)
-    assert "inputs.version" in text
+    assert "VERSION_INPUT: ${{ inputs.version }}" in text
+    assert 'VERSION_INPUT="${{ inputs.version }}"' not in text
 
 
 # ==============================================================================
@@ -649,3 +653,33 @@ def test_workflow_yaml_is_parseable():
                 yaml.safe_load(stripped)
             except yaml.YAMLError as exc2:
                 raise AssertionError(f"Invalid YAML in {wf.name}: {exc2}") from exc2
+
+
+def test_paired_release_emits_and_uses_short_sha_tag():
+    text = _read(PAIRED_RELEASE)
+    assert "short_sha: ${{ steps.preflight.outputs.short_sha }}" in text
+    assert "git rev-parse --short=7 HEAD" in text
+    assert "sha-${{ needs.source-tests.outputs.short_sha }}" in text
+    assert "sha-${{ github.sha }}" not in text
+
+
+def test_paired_release_rc_validation_accepts_multi_digit_positive_rc():
+    text = _read(PAIRED_RELEASE)
+    assert r"(-rc\.[1-9][0-9]*)?" in text
+
+
+def test_sbom_uses_normalized_release_image_tags():
+    text = _read(PAIRED_RELEASE)
+    assert "image: ${{ env.WRAPPER_IMAGE }}:${{ needs.source-tests.outputs.release_version }}" in text
+    assert "image: ${{ env.BACKEND_IMAGE }}:${{ needs.source-tests.outputs.release_version }}" in text
+
+
+def test_pr_ci_uses_verified_setup_uv_sha():
+    text = _read(PR_CI)
+    assert "astral-sh/setup-uv@c7f87aa956e4c323abf06d5dec078e358f6b4d04" in text
+    assert "d4aa0d20ccf3c835b4c51100259d7204042244b7" not in text
+
+
+def test_workflows_use_locked_dependency_sync():
+    assert "uv sync --locked --group dev" in _read(PR_CI)
+    assert "uv sync --locked --group dev" in _read(PAIRED_RELEASE)

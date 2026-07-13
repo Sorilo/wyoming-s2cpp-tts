@@ -39,8 +39,24 @@ jobs:
       short_sha: ${{ steps.preflight.outputs.short_sha }}
       created: ${{ steps.preflight.outputs.created }}
     steps:
-      - name: Checkout repository
+      - name: Checkout full history for release security scan
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Scan Git history for secrets
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e  # v3.0.0
+
+      - name: Scan source dependencies and configuration
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8  # v0.36.0
+        with:
+          version: v0.72.0
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,misconfig,secret
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
 
       - name: Install uv
         uses: astral-sh/setup-uv@c7f87aa956e4c323abf06d5dec078e358f6b4d04  # verified
@@ -253,6 +269,26 @@ jobs:
           set -euo pipefail
           docker run --rm --entrypoint="" local/backend:candidate /usr/local/bin/s2 --help >/dev/null 2>&1
           echo "Backend binary smoke OK"
+
+      - name: Scan wrapper candidate image
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8  # v0.36.0
+        with:
+          version: v0.72.0
+          image-ref: local/wrapper:candidate
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+
+      - name: Scan backend candidate image
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8  # v0.36.0
+        with:
+          version: v0.72.0
+          image-ref: local/backend:candidate
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
 
   # ------------------------------------------------------------------
   # Publish: login and push both images with same version tag + attestation

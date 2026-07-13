@@ -30,12 +30,15 @@ The `s2cpp-net` Docker network is a private bridge. Set `NETWORK_NAME` in `.env`
 - Bounded time/size HTTP parsing prevents resource exhaustion.
 - Bind failure is non-fatal — the Wyoming service continues to run.
 
-## Image supply chain
+## Supply-chain gates
 
-- Images are built from this repository and published to `ghcr.io/sorilo/wyoming-s2cpp-tts*`.
-- Pinned `sha-*` tags identify exact build artifacts.
-- Rollback images are documented in `docs/UPGRADE_ROLLBACK.md`.
-- Users are responsible for verifying image provenance before deployment.
+- PR CI scans full Git history with Gitleaks and scans dependencies, Dockerfiles, and source configuration with Trivy. Both gates fail closed.
+- The paired-release workflow repeats the source scans, builds the wrapper/backend candidates without publishing, smoke-tests both exact local image references, and blocks publication until Trivy reports no fixed HIGH/CRITICAL image vulnerabilities.
+- All third-party workflow actions are pinned to verified 40-character commits. Trivy itself is pinned to `v0.72.0` in workflow inputs.
+- `.gitleaksignore` contains only eight exact fingerprints for a public Python base-image `GPG_KEY` captured in historical verification artifacts; wildcard or rule-wide suppression is prohibited.
+- Images are published to `ghcr.io/sorilo/wyoming-s2cpp-tts*` only after the manual release gate.
+- Pinned seven-character `sha-*` tags identify exact build artifacts; semantic image tags omit the Git tag's leading `v`.
+- Release artifacts include paired digests, SBOMs, and build-provenance attestations. Rollback is documented in `docs/UPGRADE_ROLLBACK.md`.
 
 ## Vulnerability reporting
 

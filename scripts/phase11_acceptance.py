@@ -60,7 +60,9 @@ _APIKEY_RE = re.compile(r'[aA][pP][iI][_-]?[kK][eE][yY][\s=:]+[\w\-./+=]+')
 
 # Required source files/dirs for static checks
 STATIC_REQUIRED_DIRS = ("scripts", "tests", "docs", "docker")
-STATIC_REQUIRED_FILES = ("README.md", "CHANGELOG.md", "Dockerfile")
+STATIC_REQUIRED_FILES = ("README.md", "CHANGELOG.md")
+# Actual Dockerfile locations — the source tree has no root Dockerfile
+STATIC_REQUIRED_DOCKERFILES = ("docker/wrapper/Dockerfile", "docker/s2cpp/Dockerfile.cuda")
 STATIC_DOC_FILES = ("CHANGELOG.md",)
 
 
@@ -187,37 +189,59 @@ def run_static_checks(
             details=f"Directory '{dirname}' {'exists' if d.is_dir() else 'missing'} at {repo_root}",
         ))
 
-    # Check required files (look recursively for Dockerfile)
+    # Check required files
     for fname in STATIC_REQUIRED_FILES:
-        if fname == "Dockerfile":
-            found = list(repo_root.glob(f"Dockerfile")) or list(repo_root.glob("docker/Dockerfile"))
-            status = "pass" if found else "fail"
-            checks.append(AcceptanceCheck(
-                name=f"source_structure_file_{fname.lower()}",
-                status=status,
-                details=f"File '{fname}' {'found' if found else 'missing'}",
-            ))
-        else:
-            f = repo_root / fname
-            checks.append(AcceptanceCheck(
-                name=f"source_structure_file_{fname.lower().replace('.', '_')}",
-                status="pass" if f.is_file() else "fail",
-                details=f"File '{fname}' {'exists' if f.is_file() else 'missing'}",
-            ))
+        f = repo_root / fname
+        checks.append(AcceptanceCheck(
+            name=f"source_structure_file_{fname.lower().replace('.', '_')}",
+            status="pass" if f.is_file() else "fail",
+            details=f"File '{fname}' {'exists' if f.is_file() else 'missing'}",
+        ))
 
-    # Version check from pyproject.toml
+    # Check required Dockerfiles at their actual paths (no root Dockerfile)
+    for df_path in STATIC_REQUIRED_DOCKERFILES:
+        f = repo_root / df_path
+        safe_name = df_path.replace("/", "_").replace(".", "_")
+        checks.append(AcceptanceCheck(
+            name=f"source_structure_dockerfile_{safe_name}",
+            status="pass" if f.is_file() else "fail",
+            details=f"Dockerfile '{df_path}' {'exists' if f.is_file() else 'missing'}",
+        ))
+
+    # Version check from pyproject.toml — resolves dynamic version
     pyproject_path = repo_root / "pyproject.toml"
     version_str = None
     try:
         if pyproject_path.is_file():
-            content = pyproject_path.read_text()
-            match = re.search(r'version\s*=\s*"([^"]+)"', content)
+            pyproject_text = pyproject_path.read_text()
+            # Check for direct version (static)
+            match = re.search(r'version\s*=\s*"([^"]+)"', pyproject_text)
             if match:
                 version_str = match.group(1)
+            else:
+                # Check for dynamic version via [tool.setuptools.dynamic]
+                dynamic_match = re.search(
+                    r'\[tool\.setuptools\.dynamic\]\s*\nversion\s*=\s*\{\s*attr\s*=\s*"([^"]+)"\s*\}',
+                    pyproject_text
+                )
+                if dynamic_match:
+                    attr_path = dynamic_match.group(1)  # e.g. "app.version.__version__"
+                    # Safely resolve module attribute by parsing simple assignment
+                    parts = attr_path.split(".")
+                    module_rel = "/".join(parts[:-1]) + ".py"
+                    var_name = parts[-1]
+                    version_file = repo_root / module_rel
+                    if version_file.is_file():
+                        ver_text = version_file.read_text()
+                        ver_match = re.search(
+                            rf'{re.escape(var_name)}\s*=\s*"([^"]+)"', ver_text
+                        )
+                        if ver_match:
+                            version_str = ver_match.group(1)
         checks.append(AcceptanceCheck(
             name="version_from_pyproject",
             status="pass" if version_str else "fail",
-            details=f"Version: {version_str}" if version_str else "No version found in pyproject.toml",
+            details=f"Version: {version_str}" if version_str else "No version found in pyproject.toml or resolved attr",
         ))
     except Exception as e:
         checks.append(AcceptanceCheck(
@@ -1018,7 +1042,7 @@ def _detect_source_identity(repo_root: Path) -> dict:
             cwd=repo_root, capture_output=True, text=True, timeout=5,
         )
         if result2.returncode == 0:
-            identity["commit"] = result2.stdout.strip()[:12]
+            identity["commit"] = result2.stdout.strip()  # full 40-char SHA
     except Exception:
         pass
     return identity

@@ -46,7 +46,8 @@ def _make_fixture_repo(base: Path, files: dict | None = None) -> Path:
         "CHANGELOG.md": "# Changelog\n\n## 1.2.3\n- Test\n",
         "scripts/__init__.py": "",
         "tests/__init__.py": "",
-        "docker/Dockerfile": "FROM python:3.13\n",
+        "docker/wrapper/Dockerfile": "FROM python:3.13\n",
+        "docker/s2cpp/Dockerfile.cuda": "FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04\n",
         "docs/index.md": "# Documentation\n",
         "pyproject.toml": "[project]\nversion = \"1.2.3\"\n",
     }
@@ -780,6 +781,218 @@ class TestExtensibility:
         )
         data = json.loads(report.to_json())
         assert hasattr(report, 'extra_metadata')
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 9. Phase 11 Dockerfile Contract Regression Tests
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestDockerfileContractRegressions:
+    """Verify static source contract matches actual architecture:
+    docker/wrapper/Dockerfile + docker/s2cpp/Dockerfile.cuda, not root."""
+
+    def test_missing_wrapper_dockerfile_fails(self):
+        """Regression: missing docker/wrapper/Dockerfile causes failure."""
+        p11 = _import_harness()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _make_fixture_repo(Path(tmp))
+            (repo / "docker" / "wrapper" / "Dockerfile").unlink()
+            result = p11.run_static_checks(repo_root=repo)
+            data = json.loads(result.to_json())
+            wrapper_checks = [
+                c for c in data["checks"]
+                if "wrapper" in c["name"]
+            ]
+            assert len(wrapper_checks) > 0
+            assert wrapper_checks[0]["status"] == "fail"
+
+    def test_missing_s2cpp_dockerfile_cuda_fails(self):
+        """Regression: missing docker/s2cpp/Dockerfile.cuda causes failure."""
+        p11 = _import_harness()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _make_fixture_repo(Path(tmp))
+            (repo / "docker" / "s2cpp" / "Dockerfile.cuda").unlink()
+            result = p11.run_static_checks(repo_root=repo)
+            data = json.loads(result.to_json())
+            s2cpp_checks = [
+                c for c in data["checks"]
+                if "s2cpp" in c["name"]
+            ]
+            assert len(s2cpp_checks) > 0
+            assert s2cpp_checks[0]["status"] == "fail"
+
+    def test_root_dockerfile_absence_passes(self):
+        """Regression: root Dockerfile absence is NOT a failure."""
+        p11 = _import_harness()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _make_fixture_repo(Path(tmp))
+            # Ensure no root Dockerfile exists
+            root_df = repo / "Dockerfile"
+            if root_df.exists():
+                root_df.unlink()
+            result = p11.run_static_checks(repo_root=repo)
+            data = json.loads(result.to_json())
+            # No check should reference a root "Dockerfile" as a requirement
+            for c in data["checks"]:
+                if "dockerfile" in c["name"].lower() or c["name"] == "source_structure_file_dockerfile":
+                    assert c["status"] != "fail", (
+                        f"Root Dockerfile check '{c['name']}' failed but should not be required"
+                    )
+
+    def test_both_real_dockerfiles_pass(self):
+        """Regression: both real Dockerfile paths pass when present."""
+        p11 = _import_harness()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _make_fixture_repo(Path(tmp))
+            result = p11.run_static_checks(repo_root=repo)
+            data = json.loads(result.to_json())
+            dockerfile_checks = [
+                c for c in data["checks"]
+                if "dockerfile" in c["name"].lower()
+            ]
+            assert len(dockerfile_checks) >= 2
+            for c in dockerfile_checks:
+                assert c["status"] == "pass", f"{c['name']}: {c['status']}"
+
+
+class TestDynamicVersionResolution:
+    """Resolve canonical version from pyproject [tool.setuptools.dynamic]
+    -> app.version.__version__ -> 0.1.0, without executing project code."""
+
+    def test_dynamic_version_resolves_via_attr(self):
+        """Dynamic version resolves from pyproject -> app/version.py -> 0.1.0."""
+        p11 = _import_harness()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _make_fixture_repo(Path(tmp), {
+                "pyproject.toml": (
+                    '[project]\n'
+                    'name = "test-pkg"\n'
+                    'dynamic = ["version"]\n'
+                    '\n'
+                    '[tool.setuptools.dynamic]\n'
+                    'version = { attr = "app.version.__version__" }\n'
+                ),
+                "app/version.py": '__version__ = "0.1.0"\n',
+            })
+            result = p11.run_static_checks(repo_root=repo)
+            data = json.loads(result.to_json())
+            ver_checks = [c for c in data["checks"] if c["name"] == "version_from_pyproject"]
+            assert len(ver_checks) == 1
+            assert ver_checks[0]["status"] == "pass"
+            assert "0.1.0" in ver_checks[0]["details"]
+
+    def test_missing_version_file_fails(self):
+        """When app/version.py is missing, dynamic resolution fails."""
+        p11 = _import_harness()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _make_fixture_repo(Path(tmp), {
+                "pyproject.toml": (
+                    '[project]\n'
+                    'name = "test-pkg"\n'
+                    'dynamic = ["version"]\n'
+                    '\n'
+                    '[tool.setuptools.dynamic]\n'
+                    'version = { attr = "app.version.__version__" }\n'
+                ),
+                # No app/version.py
+            })
+            result = p11.run_static_checks(repo_root=repo)
+            data = json.loads(result.to_json())
+            ver_checks = [c for c in data["checks"] if c["name"] == "version_from_pyproject"]
+            assert len(ver_checks) == 1
+            assert ver_checks[0]["status"] == "fail"
+
+    def test_mismatched_version_fails(self):
+        """When version != 0.1.0, expected_version extra check fails."""
+        p11 = _import_harness()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _make_fixture_repo(Path(tmp), {
+                "pyproject.toml": (
+                    '[project]\n'
+                    'name = "test-pkg"\n'
+                    'dynamic = ["version"]\n'
+                    '\n'
+                    '[tool.setuptools.dynamic]\n'
+                    'version = { attr = "app.version.__version__" }\n'
+                ),
+                "app/version.py": '__version__ = "1.0.0"\n',
+            })
+            result = p11.run_static_checks(
+                repo_root=repo,
+                extra_inputs={"expected_version": "0.1.0"},
+            )
+            data = json.loads(result.to_json())
+            match_checks = [c for c in data["checks"] if c["name"] == "version_matches_expected"]
+            assert len(match_checks) == 1
+            assert match_checks[0]["status"] == "fail"
+
+    def test_static_version_direct_fallback(self):
+        """Static version= in pyproject still works (fallback path)."""
+        p11 = _import_harness()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _make_fixture_repo(Path(tmp), {
+                "pyproject.toml": '[project]\nname = "test-pkg"\nversion = "2.5.0"\n',
+            })
+            result = p11.run_static_checks(repo_root=repo)
+            data = json.loads(result.to_json())
+            ver_checks = [c for c in data["checks"] if c["name"] == "version_from_pyproject"]
+            assert len(ver_checks) == 1
+            assert ver_checks[0]["status"] == "pass"
+            assert "2.5.0" in ver_checks[0]["details"]
+
+
+class TestSourceIdentityFullSha:
+    """Source identity must include full 40-char commit SHA when available."""
+
+    def test_full_sha_emitted_when_git_available(self):
+        """Full 40-char SHA in source_identity when git is available."""
+        p11 = _import_harness()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _make_fixture_repo(Path(tmp))
+            result = p11.run_static_checks(repo_root=repo)
+            data = json.loads(result.to_json())
+            commit = data["source_identity"].get("commit", "")
+            assert len(commit) == 40, (
+                f"Expected full 40-char SHA, got {len(commit)} chars: '{commit}'"
+            )
+
+
+class TestDefaultModeNoDockerNetwork:
+    """Default/static mode must touch no Docker or network."""
+
+    def test_default_config_no_docker_required(self):
+        """AcceptanceConfig default has docker_required=False."""
+        p11 = _import_harness()
+        config = p11.AcceptanceConfig()
+        assert getattr(config, 'docker_required', False) is False
+
+    def test_default_config_no_network_required(self):
+        """AcceptanceConfig default has require_network=False."""
+        p11 = _import_harness()
+        config = p11.AcceptanceConfig()
+        assert config.require_network is False
+
+    def test_static_mode_is_safe(self):
+        """Static mode config never has run_real=True."""
+        p11 = _import_harness()
+        config = p11.AcceptanceConfig(mode="static")
+        assert config.run_real is False
+
+    def test_static_runner_does_not_call_subprocess_for_docker(self):
+        """run_static_checks never invokes subprocess (no Docker calls)."""
+        p11 = _import_harness()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _make_fixture_repo(Path(tmp))
+            with patch("subprocess.run") as mock_run:
+                p11.run_static_checks(repo_root=repo)
+                # Only _detect_source_identity might call git, but never docker
+                docker_calls = [
+                    call for call in mock_run.call_args_list
+                    if call.args and "docker" in str(call.args[0])
+                ]
+                assert len(docker_calls) == 0, (
+                    f"static mode made Docker subprocess calls: {docker_calls}"
+                )
 
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -669,6 +669,185 @@ class TestHAOperations:
         assert callable(p10.trigger_assist_pipeline), "trigger_assist_pipeline must exist"
 
 
+class TestMediaStopFormalGate:
+    """Media-stop formal results must be evidence-backed and fail closed."""
+
+    def test_missing_media_stop_evidence_produces_failing_assertions(self):
+        report = p10.ValidationReport(
+            mode="media-stop", utc_timestamp="20260713T041341Z", dry_run=False,
+        )
+        evidence = {
+            "pre_state": "idle", "service_called": False,
+            "service_accepted": False, "post_state": "idle",
+            "ha_playback_stopped": False,
+            "physical_playback_stop_proven": False,
+            "physical_observation_required": True,
+        }
+        p10.record_media_stop_result(report, evidence)
+        assert report.outcomes["playback_stopped"] is False
+        assert report.assertions_failed > 0
+        summary = p10.generate_validation_report(
+            mode=report.mode, assertions_passed=report.assertions_passed,
+            assertions_failed=report.assertions_failed,
+            outcomes=report.outcomes, timeline=report.timeline,
+        )
+        assert summary["passed"] is False
+
+    def test_server_cancellation_does_not_prove_physical_playback_stop(self):
+        report = p10.ValidationReport(
+            mode="media-stop", utc_timestamp="20260713T041341Z", dry_run=False,
+        )
+        evidence = {
+            "pre_state": "playing", "service_called": True,
+            "service_accepted": True, "post_state": "playing",
+            "ha_playback_stopped": False,
+            "server_cancellation_observed": True,
+            "physical_playback_stop_proven": False,
+            "physical_observation_required": True,
+        }
+        p10.record_media_stop_result(report, evidence)
+        assert report.outcomes["playback_stopped"] is False
+        assert report.outcomes["physical_playback_stop_proven"] is False
+        stopped = next(a for a in report.assertions if a.name == "ha_media_playback_stopped")
+        assert stopped.passed is False
+
+    def test_successful_ha_state_transition_satisfies_automated_gate_only(self):
+        report = p10.ValidationReport(
+            mode="media-stop", utc_timestamp="20260713T041341Z", dry_run=False,
+        )
+        evidence = {
+            "pre_state": "playing", "service_called": True,
+            "service_accepted": True, "post_state": "idle",
+            "ha_playback_stopped": True,
+            "physical_playback_stop_proven": False,
+            "physical_observation_required": True,
+        }
+        p10.record_media_stop_result(report, evidence)
+        assert report.assertions_failed == 0
+        assert report.outcomes["playback_stopped"] is True
+        assert report.outcomes["physical_playback_stop_proven"] is False
+
+    @pytest.mark.asyncio
+    async def test_media_stop_polls_through_stale_playing_state(self):
+        class SequenceHttp:
+            def __init__(self):
+                self.states = iter(["playing", "playing", "idle"])
+            async def get_json(self, path):
+                return {"entity_id": "media_player.vpe", "state": next(self.states)}
+            async def post_json(self, path, data):
+                return []  # Home Assistant service calls commonly return a JSON list.
+
+        async def no_sleep(_delay):
+            return None
+
+        evidence = await p10.collect_media_stop_evidence(
+            entity_id="media_player.vpe", http_client=SequenceHttp(),
+            poll_attempts=3, poll_interval=0, sleep_fn=no_sleep,
+        )
+        assert evidence["service_accepted"] is True
+        assert evidence["post_state"] == "idle"
+        assert evidence["ha_playback_stopped"] is True
+        assert [s["state"] for s in evidence["state_samples"]] == [
+            "playing", "playing", "idle",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_media_stop_outcome_without_required_assertion_fails_closed(self, tmp_path):
+        async def incomplete_dispatcher(cfg, report, artifact_dir, **kwargs):
+            report.outcomes["playback_stopped"] = False
+            return report
+
+        cfg = p10.ValidationConfig(
+            mode=p10.ValidationMode.MEDIA_STOP, dry_run=False,
+            artifact_base=tmp_path,
+        )
+        original_confirm = p10.confirm_live_action
+        p10.confirm_live_action = lambda: True
+        try:
+            report = await p10.run_validation(cfg, _mode_dispatcher=incomplete_dispatcher)
+        finally:
+            p10.confirm_live_action = original_confirm
+        assert report.assertions_failed == 1
+        assert report.assertions[-1].name == "media_stop_formal_gate_complete"
+
+    @pytest.mark.asyncio
+    async def test_false_outcome_cannot_pass_with_contradictory_assertions(self, tmp_path):
+        async def contradictory_dispatcher(cfg, report, artifact_dir, **kwargs):
+            for name in (
+                "media_stop_precondition_playing",
+                "media_stop_service_accepted",
+                "ha_media_playback_stopped",
+            ):
+                report.assertions.append(p10.AssertionResult(
+                    name=name, passed=True, detail="contradictory test fixture",
+                ))
+            report.outcomes["playback_stopped"] = False
+            return report
+
+        cfg = p10.ValidationConfig(
+            mode=p10.ValidationMode.MEDIA_STOP, dry_run=False,
+            artifact_base=tmp_path,
+        )
+        original_confirm = p10.confirm_live_action
+        p10.confirm_live_action = lambda: True
+        try:
+            report = await p10.run_validation(cfg, _mode_dispatcher=contradictory_dispatcher)
+        finally:
+            p10.confirm_live_action = original_confirm
+        assert report.assertions_failed == 1
+        assert report.assertions[-1].name == "media_stop_formal_gate_consistent"
+        persisted = json.loads(
+            (tmp_path / report.utc_timestamp / "report.json").read_text()
+        )
+        assert persisted["passed"] is False
+
+    @pytest.mark.asyncio
+    async def test_paused_state_is_not_misreported_as_stopped(self):
+        class PausedHttp:
+            def __init__(self):
+                self.calls = 0
+            async def get_json(self, path):
+                self.calls += 1
+                return {"state": "playing" if self.calls == 1 else "paused"}
+            async def post_json(self, path, data):
+                return []
+
+        async def no_sleep(_delay):
+            return None
+
+        evidence = await p10.collect_media_stop_evidence(
+            entity_id="media_player.vpe", http_client=PausedHttp(),
+            poll_attempts=2, poll_interval=0, sleep_fn=no_sleep,
+        )
+        assert evidence["post_state"] == "paused"
+        assert evidence["ha_playback_stopped"] is False
+
+    @pytest.mark.asyncio
+    async def test_empty_dict_is_not_service_acceptance_evidence(self):
+        http = _FakeHttpClient()
+        path = "/api/states/media_player.vpe"
+        http._get_responses[path] = {"state": "playing"}
+        evidence = await p10.collect_media_stop_evidence(
+            entity_id="media_player.vpe", http_client=http,
+        )
+        assert evidence["service_called"] is True
+        assert evidence["service_accepted"] is False
+
+    def test_informational_outcome_does_not_silently_control_formal_result(self):
+        summary = p10.generate_validation_report(
+            mode="health", assertions_passed=1, assertions_failed=0,
+            outcomes={"operator_note_confirmed": False}, timeline=[],
+        )
+        assert summary["passed"] is True
+
+    def test_two_wake_voice_pe_behavior_is_classified_as_server_pass(self):
+        result = p10.classify_vpe_barge_in_observation(
+            playback_stopped=True, second_wake_required=True,
+            second_request_succeeded=True,
+        )
+        assert result == "stock_vpe_two_wake_server_pass"
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Test 9: Wyoming client operations
 # ═══════════════════════════════════════════════════════════════════════════

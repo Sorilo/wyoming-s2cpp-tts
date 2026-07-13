@@ -1555,27 +1555,165 @@ async def ha_media_stop(
     ha_url: str = "",
     ha_token: str = "",
 ) -> bool:
-    """Call POST /api/services/media_player/media_stop only after observing 'playing' state.
+    """Report whether HA accepted media_stop; this does not prove acoustic stop."""
+    evidence = await collect_media_stop_evidence(
+        entity_id=entity_id, http_client=http_client,
+        ha_url=ha_url, ha_token=ha_token, poll_attempts=1,
+    )
+    return bool(evidence["service_accepted"])
 
-    Returns True if the stop was called, False if state is not playing or on error.
-    """
+
+async def collect_media_stop_evidence(
+    entity_id: str,
+    http_client: Any = None,
+    ha_url: str = "",
+    ha_token: str = "",
+    *,
+    poll_attempts: int = 8,
+    poll_interval: float = 0.25,
+    sleep_fn: Any = asyncio.sleep,
+) -> dict[str, Any]:
+    """Collect HA-state evidence; never infer physical speaker stop from it."""
+    evidence: dict[str, Any] = {
+        "entity_id": entity_id,
+        "pre_state": "unknown",
+        "service_called": False,
+        "service_accepted": False,
+        "post_state": "unknown",
+        "ha_playback_stopped": False,
+        "physical_playback_stop_proven": False,
+        "physical_observation_required": True,
+        "state_samples": [],
+    }
     if http_client is None:
         if not ha_url or not ha_token:
-            return False
+            evidence["error"] = "missing Home Assistant credentials"
+            return evidence
         http_client = HaRestClient(ha_url, ha_token)
 
-    # Check entity state first
     state_path = f"/api/states/{entity_id}"
-    state = await http_client.get_json(state_path)
-    if state.get("state") != "playing":
-        return False
+    pre = await http_client.get_json(state_path)
+    pre_state = pre.get("state", "unknown") if isinstance(pre, dict) else "unknown"
+    evidence["pre_state"] = pre_state
+    evidence["post_state"] = pre_state
+    evidence["state_samples"].append({
+        "state": pre_state, "observed_at_monotonic": time.monotonic(),
+    })
+    if not isinstance(pre, dict) or pre.get("error"):
+        evidence["error"] = (
+            pre.get("error", "invalid HA state response")
+            if isinstance(pre, dict) else "invalid HA state response"
+        )
+        return evidence
+    if pre_state != "playing":
+        evidence["error"] = f"precondition not met: state={pre_state}"
+        return evidence
 
-    # Call media_stop
-    result = await http_client.post_json(
-        "/api/services/media_player/media_stop",
-        {"entity_id": entity_id},
+    evidence["service_called"] = True
+    service_result = await http_client.post_json(
+        "/api/services/media_player/media_stop", {"entity_id": entity_id},
     )
-    return not result.get("error") and result.get("success", False) is not False
+    if isinstance(service_result, dict):
+        accepted = (
+            not service_result.get("error")
+            and service_result.get("success") is True
+        )
+        if service_result.get("error"):
+            evidence["error"] = service_result["error"]
+    else:
+        # HA commonly returns a JSON list, including [], after a service call.
+        accepted = isinstance(service_result, list)
+    evidence["service_accepted"] = accepted
+    if not accepted:
+        evidence.setdefault("error", "media_stop service was not accepted")
+        return evidence
+
+    for attempt in range(max(1, poll_attempts)):
+        if attempt:
+            await sleep_fn(poll_interval)
+        sample = await http_client.get_json(state_path)
+        state = sample.get("state", "unknown") if isinstance(sample, dict) else "unknown"
+        evidence["post_state"] = state
+        evidence["state_samples"].append({
+            "state": state, "observed_at_monotonic": time.monotonic(),
+        })
+        if isinstance(sample, dict) and sample.get("error"):
+            evidence["error"] = sample["error"]
+            break
+        if state in {"idle", "off", "standby"}:
+            evidence["ha_playback_stopped"] = True
+            break
+
+    if not evidence["ha_playback_stopped"]:
+        evidence.setdefault(
+            "error", "HA media-player state did not leave playing during observation window",
+        )
+    return evidence
+
+
+def record_media_stop_result(
+    report: ValidationReport, evidence: dict[str, Any],
+) -> None:
+    """Record the three automated evidence gates that define media-stop PASS."""
+    precondition = evidence.get("pre_state") == "playing"
+    accepted = bool(evidence.get("service_accepted"))
+    ha_stopped = bool(evidence.get("ha_playback_stopped"))
+    report.assertions.extend([
+        AssertionResult(
+            name="media_stop_precondition_playing", passed=precondition,
+            detail=f"pre_state={evidence.get('pre_state', 'unknown')}",
+            evidence=evidence,
+        ),
+        AssertionResult(
+            name="media_stop_service_accepted", passed=accepted,
+            detail=(
+                f"called={bool(evidence.get('service_called'))}, accepted={accepted}"
+            ),
+            evidence=evidence,
+        ),
+        AssertionResult(
+            name="ha_media_playback_stopped", passed=ha_stopped,
+            detail=(
+                f"HA state {evidence.get('pre_state', 'unknown')} -> "
+                f"{evidence.get('post_state', 'unknown')}"
+            ),
+            evidence=evidence,
+        ),
+    ])
+    report.outcomes.update({
+        "playback_stopped": ha_stopped,
+        "playback_stop_evidence_scope": "home_assistant_media_player_state_only",
+        "physical_playback_stop_proven": bool(
+            evidence.get("physical_playback_stop_proven", False)
+        ),
+        "physical_observation_required": True,
+        "server_cancellation_observed": bool(
+            evidence.get("server_cancellation_observed", False)
+        ),
+    })
+    report.ha_states["media_stop"] = evidence
+    report.timeline.append({
+        "timestamp": time.monotonic(),
+        "event": "media_stop_evidence_collected",
+        "pre_state": evidence.get("pre_state", "unknown"),
+        "post_state": evidence.get("post_state", "unknown"),
+        "service_accepted": accepted,
+        "ha_playback_stopped": ha_stopped,
+    })
+
+
+def classify_vpe_barge_in_observation(
+    *, playback_stopped: bool, second_wake_required: bool,
+    second_request_succeeded: bool,
+) -> str:
+    """Classify operator-observed Voice PE barge-in behavior."""
+    if playback_stopped and second_wake_required and second_request_succeeded:
+        return "stock_vpe_two_wake_server_pass"
+    if playback_stopped and not second_wake_required and second_request_succeeded:
+        return "single_wake_barge_in_pass"
+    if playback_stopped and not second_request_succeeded:
+        return "playback_stopped_replacement_failed"
+    return "barge_in_not_detected"
 
 
 async def trigger_assist_pipeline(
@@ -2001,22 +2139,22 @@ async def _run_media_stop_mode(
                                                 http_client_factory=http_client_factory if not cfg.dry_run else None)
     report.status_snapshots.append(status_before)
 
-    # In dry-run, emit placeholder outcome
+    # In dry-run, emit placeholder outcome without enforcing live evidence gates.
     if cfg.dry_run:
         report.outcomes["playback_stopped"] = "dry-run"
         report.timeline.append({"timestamp": time.monotonic(), "event": "media_stop_dry_run"})
     else:
-        result = await ha_media_stop(
+        ha_client = (
+            http_client_factory(cfg.ha_url, cfg.ha_token)
+            if http_client_factory is not None else None
+        )
+        evidence = await collect_media_stop_evidence(
             entity_id=cfg.vpe_media_player,
+            http_client=ha_client,
             ha_url=cfg.ha_url,
             ha_token=cfg.ha_token,
         )
-        report.outcomes["playback_stopped"] = str(result)
-        report.timeline.append({
-            "timestamp": time.monotonic(),
-            "event": "media_stop_executed",
-            "result": result,
-        })
+        record_media_stop_result(report, evidence)
 
     status_after = await capture_admin_status(admin_url=cfg.admin_url,
                                                http_client_factory=http_client_factory if not cfg.dry_run else None)
@@ -2464,6 +2602,51 @@ async def _run_vpe_barge_in_mode(
     return report
 
 
+def _enforce_required_mode_assertions(
+    cfg: ValidationConfig, report: ValidationReport,
+) -> None:
+    """Fail closed when a live mode omits assertions required for formal PASS."""
+    if cfg.dry_run or cfg.mode is not ValidationMode.MEDIA_STOP:
+        return
+    required = {
+        "media_stop_precondition_playing",
+        "media_stop_service_accepted",
+        "ha_media_playback_stopped",
+    }
+    present = {assertion.name for assertion in report.assertions}
+    missing = sorted(required - present)
+    if missing:
+        report.assertions.append(AssertionResult(
+            name="media_stop_formal_gate_complete",
+            passed=False,
+            detail=f"missing required assertions: {', '.join(missing)}",
+            evidence={
+                "missing_assertions": missing,
+                "playback_stopped": report.outcomes.get("playback_stopped"),
+            },
+        ))
+        return
+
+    stopped_assertion = next(
+        assertion for assertion in report.assertions
+        if assertion.name == "ha_media_playback_stopped"
+    )
+    playback_stopped = report.outcomes.get("playback_stopped")
+    if playback_stopped is not True and stopped_assertion.passed:
+        report.assertions.append(AssertionResult(
+            name="media_stop_formal_gate_consistent",
+            passed=False,
+            detail=(
+                "playback_stopped must be true when the required "
+                "ha_media_playback_stopped assertion passes"
+            ),
+            evidence={
+                "playback_stopped": playback_stopped,
+                "ha_media_playback_stopped": stopped_assertion.passed,
+            },
+        ))
+
+
 # ── Mode dispatcher ────────────────────────────────────────────────
 
 _MODE_HANDLERS = {
@@ -2540,6 +2723,7 @@ async def run_validation(
             http_client_factory=http_client_factory if not cfg.dry_run else None,
             connector_factory=connector_factory if not cfg.dry_run else None,
         )
+        _enforce_required_mode_assertions(cfg, report)
 
         # (M) Set duration before writing artifacts
         report.duration_sec = round(time.monotonic() - start, 3)
@@ -2550,6 +2734,7 @@ async def run_validation(
     except Exception as exc:
         # (M) Catch, sanitize, always write artifacts
         report.errors.append(f"Fatal error: {exc}")
+        _enforce_required_mode_assertions(cfg, report)
         report.duration_sec = round(time.monotonic() - start, 3)
         artifact_dir = make_artifact_dir(cfg.artifact_base, report.utc_timestamp)
         _write_all_artifacts(report, artifact_dir)

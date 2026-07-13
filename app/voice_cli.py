@@ -231,7 +231,7 @@ def cmd_import(
 
         # --- Copy sidecar atomically if present ---
         source_sidecar = Path(str(source_path) + ".json")
-        if source_sidecar.is_file():
+        if source_sidecar.is_file() and not _is_symlink(source_sidecar):
             dest_sidecar = Path(str(dest_path) + ".json")
             try:
                 sidecar_data = source_sidecar.read_bytes()
@@ -282,10 +282,11 @@ def cmd_audit(voice_dir: str) -> dict[str, Any]:
     Returns:
         Dict with keys: total_voices, voices (list of per-voice dicts).
     """
-    result: dict[str, Any] = {"total_voices": 0, "voices": []}
+    result: dict[str, Any] = {"total_voices": 0, "voices": [], "valid": False}
     dir_path = Path(voice_dir)
 
     if not dir_path.is_dir():
+        result["error"] = f"Voice directory not found: {voice_dir}"
         return result
 
     try:
@@ -346,6 +347,10 @@ def cmd_audit(voice_dir: str) -> dict[str, Any]:
         result["voices"].append(voice_info)
 
     result["total_voices"] = len(result["voices"])
+    result["valid"] = all(
+        voice.get("valid") is True and not voice.get("issues")
+        for voice in result["voices"]
+    )
     return result
 
 
@@ -367,6 +372,7 @@ def cmd_licenses(voice_dir: str) -> dict[str, Any]:
         "total_voices": 0,
         "unlicensed_count": 0,
         "licenses": {},
+        "valid": False,
     }
 
     audit_result = cmd_audit(voice_dir)
@@ -383,4 +389,7 @@ def cmd_licenses(voice_dir: str) -> dict[str, Any]:
         result["licenses"][lic]["count"] += 1
         result["licenses"][lic]["voices"].append(voice["id"])
 
+    result["valid"] = bool(audit_result.get("valid")) and result["unlicensed_count"] == 0
+    if audit_result.get("error"):
+        result["error"] = audit_result["error"]
     return result

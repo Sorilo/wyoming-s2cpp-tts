@@ -121,7 +121,7 @@ class TestJsonSchemaAndSidecar:
                 "attribution": "Test Speaker",
                 "provenance": {"source": "test"},
             }
-            with pytest.raises((jsonschema.ValidationError, ValueError)):
+            with pytest.raises(jsonschema.ValidationError):
                 jsonschema.validate(instance=invalid, schema=schema)
 
 
@@ -718,7 +718,12 @@ class TestAtomicImportEdgeCases:
         voice_path = source / "test.noext"
         _write_fixture(voice_path, _build_s2voice_bytes())
         result = cmd_import(str(voice_path), str(dest), voice_id="test-voice")
-        assert "error" in result or result.get("imported") is True
+        assert result == {
+            "imported": True,
+            "voice_id": "test-voice",
+            "path": str(dest / "test-voice.s2voice"),
+        }
+        assert (dest / "test-voice.s2voice").read_bytes() == voice_path.read_bytes()
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -1035,3 +1040,52 @@ def test_jsonschema_is_declared_in_canonical_package_metadata():
     pyproject = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
     dependencies = pyproject["project"]["dependencies"]
     assert any(dep.split(">=", 1)[0].lower() == "jsonschema" for dep in dependencies)
+
+
+class TestReviewRegression_CLIExitStatusAndSidecarSymlink:
+    def test_audit_aggregate_invalid_for_corrupt_or_unmanaged_voice(self, tmp_path):
+        from app.voice_cli import cmd_audit
+        (tmp_path / "broken.s2voice").write_bytes(b"not-a-profile")
+        result = cmd_audit(str(tmp_path))
+        assert result["valid"] is False
+        assert result["voices"][0]["valid"] is False
+
+    def test_audit_aggregate_valid_for_managed_valid_voice(self, tmp_path):
+        from app.voice_cli import cmd_audit
+        voice = tmp_path / "managed.s2voice"
+        _write_fixture(voice, _build_s2voice_bytes())
+        _write_fixture(Path(str(voice) + ".json"), json.dumps({
+            "id": "managed", "license": "MIT", "attribution": "Synthetic fixture"
+        }).encode())
+        result = cmd_audit(str(tmp_path))
+        assert result["valid"] is True
+
+    def test_licenses_aggregate_invalid_when_any_voice_unlicensed(self, tmp_path):
+        from app.voice_cli import cmd_licenses
+        _write_fixture(tmp_path / "unmanaged.s2voice", _build_s2voice_bytes())
+        result = cmd_licenses(str(tmp_path))
+        assert result["unlicensed_count"] == 1
+        assert result["valid"] is False
+
+    def test_cli_audit_and_licenses_return_nonzero_on_findings(self, tmp_path):
+        import subprocess, sys
+        _write_fixture(tmp_path / "unmanaged.s2voice", _build_s2voice_bytes())
+        script = Path(__file__).parent.parent / "scripts" / "voice_profile.py"
+        for command in ("audit", "licenses"):
+            completed = subprocess.run(
+                [sys.executable, str(script), command, str(tmp_path)],
+                text=True, capture_output=True, check=False,
+            )
+            assert completed.returncode == 1, (command, completed.stdout, completed.stderr)
+
+    def test_import_ignores_symlinked_sidecar(self, tmp_path):
+        from app.voice_cli import cmd_import
+        source = tmp_path / "source.s2voice"
+        _write_fixture(source, _build_s2voice_bytes())
+        sensitive = tmp_path / "unrelated.json"
+        sensitive.write_text('{"secret": "must-not-copy"}')
+        Path(str(source) + ".json").symlink_to(sensitive)
+        dest = tmp_path / "dest"
+        result = cmd_import(str(source), str(dest), "safe-id")
+        assert result["imported"] is True
+        assert not (dest / "safe-id.s2voice.json").exists()

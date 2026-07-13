@@ -114,10 +114,10 @@ jobs:
       - name: Verify version consistency
         run: |
           uv run python -c "from app.version import __version__; print(f'source version={__version__}')"
-          uv run pytest tests/test_version.py tests/test_version_consistency.py tests/test_docker_version_labels.py tests/test_release_manifest.py -v
+          uv run python -m pytest tests/test_version.py tests/test_version_consistency.py tests/test_docker_version_labels.py tests/test_release_manifest.py -v
 
       - name: Run full test suite
-        run: uv run pytest tests/ --ignore=tests/test_realtime_tuning_unraid.py -v
+        run: uv run python -m pytest tests/ --ignore=tests/test_realtime_tuning_unraid.py -v
 
   # ------------------------------------------------------------------
   # Build wrapper image (no push, export tarball, tag as candidate)

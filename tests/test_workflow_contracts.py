@@ -721,3 +721,14 @@ def test_non_push_build_jobs_do_not_declare_empty_digest_outputs():
     text = _read(PAIRED_RELEASE)
     prefix = text[:text.index("  smoke:")]
     assert "steps.build.outputs.digest" not in prefix
+
+
+def test_source_tests_use_module_invocation_for_project_imports():
+    """Console-script pytest omits the source root from sys.path in clean CI."""
+    pr = _read(PR_CI)
+    release = _read(PAIRED_RELEASE)
+    assert "uv run pytest" not in pr
+    assert "uv run pytest" not in release
+    assert "uv run python -m pytest tests/ --ignore=tests/test_realtime_tuning_unraid.py -v" in pr
+    assert "uv run python -m pytest tests/ --ignore=tests/test_realtime_tuning_unraid.py -v" in release
+    assert "uv run python -m pytest tests/test_version.py" in release

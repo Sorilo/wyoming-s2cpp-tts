@@ -37,7 +37,7 @@ jobs:
         run: uv run python -c "from app.version import __version__; print(f'version={__version__}'); assert __version__ == '0.1.0'"
 
       - name: Run tests
-        run: uv run pytest tests/ --ignore=tests/test_realtime_tuning_unraid.py -v
+        run: uv run python -m pytest tests/ --ignore=tests/test_realtime_tuning_unraid.py -v
 
   security-scan:
     name: Secret and Vulnerability Scan

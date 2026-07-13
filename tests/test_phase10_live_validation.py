@@ -318,6 +318,92 @@ class TestDockerLogTimestamps:
         assert "s2cpp-backend" in result
         assert len(result["wyoming-s2cpp-tts"]) >= 2
 
+    @pytest.mark.asyncio
+    async def test_successful_docker_logs_preserve_stderr_log_stream(self):
+        """Docker writes container logs to stderr even when the command succeeds."""
+        line = '2026-07-13T02:45:31.223715890Z {"event":"cancellation_requested"}'
+        subp = _FakeSubprocess(responses={
+            "docker logs --timestamps --tail 200 wyoming-s2cpp-tts":
+                _FakeProcess(0, "", line + "\n"),
+        })
+        result = await p10.collect_docker_logs(
+            container_names=("wyoming-s2cpp-tts",), subprocess_runner=subp,
+        )
+        assert result["wyoming-s2cpp-tts"] == [line]
+
+    @pytest.mark.asyncio
+    async def test_successful_docker_logs_preserve_both_output_streams(self):
+        stdout_line = "2026-07-13T02:45:31Z stdout-record"
+        stderr_line = "2026-07-13T02:45:32Z stderr-record"
+        subp = _FakeSubprocess(responses={
+            "docker logs --timestamps --tail 200 wyoming-s2cpp-tts":
+                _FakeProcess(0, stdout_line + "\n", stderr_line + "\n"),
+        })
+        result = await p10.collect_docker_logs(
+            container_names=("wyoming-s2cpp-tts",), subprocess_runner=subp,
+        )
+        assert result["wyoming-s2cpp-tts"] == [stdout_line, stderr_line]
+
+    @pytest.mark.asyncio
+    async def test_successful_empty_docker_logs_are_reported_explicitly(self):
+        subp = _FakeSubprocess(responses={
+            "docker logs --timestamps --tail 200 wyoming-s2cpp-tts":
+                _FakeProcess(0, "", ""),
+        })
+        result = await p10.collect_docker_logs(
+            container_names=("wyoming-s2cpp-tts",), subprocess_runner=subp,
+        )
+        assert result["wyoming-s2cpp-tts"] == [
+            "ERROR: docker logs succeeded but returned no stdout or stderr"
+        ]
+
+    def test_since_filter_includes_fractional_records_in_baseline_second(self):
+        line = '2026-07-13T02:45:29.823687407Z {"event":"syn_trigger"}'
+        assert p10._post_filter_logs_since(
+            [line], "2026-07-13T02:45:29Z"
+        ) == [line]
+
+    def test_since_filter_excludes_records_before_baseline(self):
+        before = "2026-07-13T02:45:28.999999999Z old"
+        boundary = "2026-07-13T02:45:29.000000001Z current"
+        assert p10._post_filter_logs_since(
+            [before, boundary], "2026-07-13T02:45:29Z"
+        ) == [boundary]
+
+    def test_artifact_writer_preserves_raw_logs_when_parser_rejects_line(self, tmp_path):
+        raw = "2026-07-13T02:45:31Z not-json-but-must-be-preserved"
+        report = p10.ValidationReport(
+            mode="direct-disconnect", utc_timestamp="20260713T024529Z",
+            dry_run=False, wrapper_logs=[raw],
+        )
+        assert p10.parse_wrapper_logs([raw]) == {}
+        p10._write_all_artifacts(report, tmp_path)
+        assert (tmp_path / "wrapper.log").read_text() == raw
+
+    def test_container_identity_change_is_an_explicit_failed_gate(self):
+        before = {
+            "wyoming-s2cpp-tts": {"found": True, "id": "old-wrapper"},
+            "s2cpp-backend": {"found": True, "id": "same-backend"},
+        }
+        after = {
+            "wyoming-s2cpp-tts": {"found": True, "id": "new-wrapper"},
+            "s2cpp-backend": {"found": True, "id": "same-backend"},
+        }
+        result = p10.assert_container_ids_unchanged(before, after)
+        assert result.passed is False
+        assert result.name == "container_ids_unchanged_during_scenario"
+        assert result.evidence["changed"] == {
+            "wyoming-s2cpp-tts": {"before": "old-wrapper", "after": "new-wrapper"}
+        }
+
+    def test_missing_container_identity_is_an_explicit_failed_gate(self):
+        before = {"wyoming-s2cpp-tts": {"found": True, "id": "wrapper-id"}}
+        result = p10.assert_container_ids_unchanged(before, {})
+        assert result.passed is False
+        assert result.evidence["changed"]["wyoming-s2cpp-tts"] == {
+            "before": "wrapper-id", "after": None,
+        }
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Test 5: Token sanitization — recursive, strings/headers

@@ -37,6 +37,7 @@ import sys
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -445,13 +446,23 @@ def _post_filter_logs_since(lines: list[str], since_utc: str) -> list[str]:
     """
     if not since_utc:
         return list(lines)
+    try:
+        since_dt = datetime.fromisoformat(since_utc.replace("Z", "+00:00"))
+    except ValueError:
+        return list(lines)
     filtered: list[str] = []
     for line in lines:
         ts = _parse_rfc3339_prefix(line)
         if ts is None:
             filtered.append(line)
-        elif ts >= since_utc:
-            filtered.append(line)
+        else:
+            try:
+                line_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            except ValueError:
+                filtered.append(line)
+            else:
+                if line_dt >= since_dt:
+                    filtered.append(line)
     return filtered
 
 
@@ -1377,6 +1388,24 @@ async def collect_docker_state(
     return state
 
 
+def assert_container_ids_unchanged(
+    before: dict[str, Any], after: dict[str, Any],
+) -> AssertionResult:
+    """Fail closed when a scenario crosses a container recreation boundary."""
+    changed: dict[str, dict[str, Any]] = {}
+    for name in sorted(set(before) | set(after)):
+        before_id = before.get(name, {}).get("id")
+        after_id = after.get(name, {}).get("id")
+        if not before_id or not after_id or before_id != after_id:
+            changed[name] = {"before": before_id, "after": after_id}
+    return AssertionResult(
+        name="container_ids_unchanged_during_scenario",
+        passed=not changed,
+        detail="container identities stable" if not changed else "container recreation detected",
+        evidence={"changed": changed},
+    )
+
+
 async def collect_docker_logs(
     container_names: tuple[str, ...],
     subprocess_runner: Any = None,
@@ -1396,8 +1425,12 @@ async def collect_docker_logs(
             cmd.append(name)
             result = await subprocess_runner.run(cmd, capture_output=True, timeout=15)
             if result.returncode == 0:
-                decoded = result.stdout.decode(errors="replace").strip()
+                stdout = result.stdout.decode(errors="replace").strip()
+                stderr = result.stderr.decode(errors="replace").strip()
+                decoded = "\n".join(part for part in (stdout, stderr) if part)
                 lines = decoded.split("\n") if decoded else []
+                if not lines:
+                    lines = ["ERROR: docker logs succeeded but returned no stdout or stderr"]
                 # Post-filter locally because SSH aliases may ignore --since
                 if since is not None:
                     lines = _post_filter_logs_since(lines, since)
@@ -2034,6 +2067,9 @@ async def _run_direct_disconnect_mode(
         return report
 
     # ── LIVE PATH ────────────────────────────────────────────────
+    identity_before = await collect_docker_state(
+        cfg.container_names, subprocess_runner,
+    )
 
     # Capture DURING snapshot WHILE disconnect is in flight via callback
     during_captured: dict[str, Any] | None = None
@@ -2089,7 +2125,17 @@ async def _run_direct_disconnect_mode(
     # Idle timeout explicit failing assertion
     report.assertions.append(assert_idle_timeout_not_reached(idle_status))
 
-    # 8. Collect logs since baseline
+    # 8. Verify container continuity, then collect logs since baseline
+    identity_after = await collect_docker_state(
+        cfg.container_names, subprocess_runner,
+    )
+    identity_gate = assert_container_ids_unchanged(identity_before, identity_after)
+    report.assertions.append(identity_gate)
+    if not identity_gate.passed:
+        report.errors.append(
+            "Container identity changed during direct-disconnect; log correlation aborted"
+        )
+        return report
     all_logs = await collect_docker_logs(
         container_names=cfg.container_names,
         subprocess_runner=subprocess_runner,

@@ -57,7 +57,7 @@ The current verified RTX 3080 runtime baseline is `/models/s2-pro-q4_k_m.gguf` w
 | Wrapper image | `ghcr.io/sorilo/wyoming-s2cpp-tts:sha-75936bc` |
 | Wyoming endpoint | `tcp://0.0.0.0:10200` inside container; `<host>:10200` from Home Assistant |
 | Home Assistant result | Discovery succeeds; `s2-pro` is visible; real speech is audible |
-| Test baseline | 1,873 passed, 0 failed, 7 skipped (`LiveArtifactIntegrity`, opt-in historical deployment artifacts) |
+| Test baseline | 1,874 passed, 0 failed, 7 skipped (`LiveArtifactIntegrity`, opt-in historical deployment artifacts) |
 
 ## Current architecture
 

@@ -16,13 +16,18 @@ from __future__ import annotations
 # JSON Schema for <id>.s2voice.json sidecar files
 # ---------------------------------------------------------------------------
 
-VOICE_SIDECAR_SCHEMA: str = r"""{
+VOICE_SIDECAR_SCHEMA: str = r"""
+{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://nousresearch.com/s2voice-sidecar.schema.json",
   "title": "S2 Voice Profile Sidecar",
   "description": "Metadata sidecar for a .s2voice binary voice profile.",
   "type": "object",
-  "required": ["id", "license", "attribution"],
+  "required": [
+    "id",
+    "license",
+    "attribution"
+  ],
   "properties": {
     "id": {
       "type": "string",
@@ -77,20 +82,39 @@ VOICE_SIDECAR_SCHEMA: str = r"""{
     },
     "gender": {
       "type": "string",
-      "enum": ["male", "female", "neutral", "unknown"]
+      "enum": [
+        "male",
+        "female",
+        "neutral",
+        "unknown"
+      ]
     },
     "tags": {
       "type": "array",
-      "items": {"type": "string"},
+      "items": {
+        "type": "string"
+      },
       "description": "Free-form tags for categorisation."
     },
     "notes": {
       "type": "string",
       "description": "Free-form operator notes."
+    },
+    "rights_basis": {
+      "type": "string",
+      "description": "Basis for usage rights (e.g., 'open-license', 'permission-granted', 'public-domain', 'proprietary').",
+      "enum": [
+        "open-license",
+        "permission-granted",
+        "public-domain",
+        "proprietary",
+        "unknown"
+      ]
     }
   },
   "additionalProperties": false
-}"""
+}
+"""
 
 
 # ---------------------------------------------------------------------------

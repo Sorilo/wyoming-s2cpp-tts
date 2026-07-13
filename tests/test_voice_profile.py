@@ -35,7 +35,7 @@ def _build_s2voice_bytes(
     codes_bytes = struct.pack(f"<{len(codes)}i", *codes)
     codes_size = len(codes_bytes)
     header = struct.pack(
-        "<8sIIIIIQQ",
+        "<8sIiiiiQQ",
         _S2VOICE_MAGIC,
         _S2VOICE_VERSION,
         num_codebooks,
@@ -719,3 +719,309 @@ class TestAtomicImportEdgeCases:
         _write_fixture(voice_path, _build_s2voice_bytes())
         result = cmd_import(str(voice_path), str(dest), voice_id="test-voice")
         assert "error" in result or result.get("imported") is True
+
+
+# ─────────────────────────────────────────────────────────────────
+# RED regression tests for voice-review blockers (Phase 11)
+# These SHOULD FAIL initially — they document the gaps.
+# ─────────────────────────────────────────────────────────────────
+
+class TestReviewRegression_Requirements:
+    """jsonschema must be declared as a runtime dependency."""
+
+    def test_jsonschema_declared_in_requirements(self):
+        req_path = Path(__file__).parent.parent / "requirements.txt"
+        assert req_path.exists(), "requirements.txt must exist"
+        lines = req_path.read_text().splitlines()
+        found = any(
+            line.strip().startswith("jsonschema") for line in lines
+        )
+        assert found, "jsonschema must be declared in requirements.txt"
+
+
+class TestReviewRegression_VoiceDiscoveryIdContract:
+    """voice_discovery ID regex must match CLI/schema: 1-128 chars,
+    starts with [A-Za-z0-9]."""
+
+    def test_discovery_rejects_id_starting_with_dash(self):
+        from app.voice_discovery import _sanitize_voice_id
+        assert _sanitize_voice_id("-bad.s2voice") is None, (
+            "ID starting with '-' must be rejected"
+        )
+
+    def test_discovery_rejects_id_starting_with_underscore(self):
+        from app.voice_discovery import _sanitize_voice_id
+        assert _sanitize_voice_id("_bad.s2voice") is None, (
+            "ID starting with '_' must be rejected"
+        )
+
+    def test_discovery_rejects_id_exceeding_128_chars(self):
+        from app.voice_discovery import _sanitize_voice_id
+        long_id = "a" * 129 + ".s2voice"
+        assert _sanitize_voice_id(long_id) is None, (
+            "ID exceeding 128 chars must be rejected"
+        )
+
+    def test_discovery_accepts_1_char_id(self):
+        from app.voice_discovery import _sanitize_voice_id
+        assert _sanitize_voice_id("a.s2voice") == "a", (
+            "1-char ID must be accepted"
+        )
+
+    def test_discovery_accepts_128_char_id(self):
+        from app.voice_discovery import _sanitize_voice_id
+        valid_128 = "a" * 128 + ".s2voice"
+        assert _sanitize_voice_id(valid_128) == "a" * 128, (
+            "128-char ID must be accepted"
+        )
+
+
+class TestReviewRegression_CLIEntrypoint:
+    """A usable CLI entrypoint must exist at scripts/voice_profile.py."""
+
+    def test_cli_entrypoint_exists(self):
+        entry = Path(__file__).parent.parent / "scripts" / "voice_profile.py"
+        assert entry.exists(), "scripts/voice_profile.py must exist"
+
+    def test_cli_entrypoint_has_validate_subcommand(self):
+        entry = Path(__file__).parent.parent / "scripts" / "voice_profile.py"
+        if not entry.exists():
+            pytest.skip("entrypoint file missing")
+        content = entry.read_text()
+        assert "validate" in content, "must expose validate subcommand"
+
+    def test_cli_entrypoint_has_import_subcommand(self):
+        entry = Path(__file__).parent.parent / "scripts" / "voice_profile.py"
+        if not entry.exists():
+            pytest.skip("entrypoint file missing")
+        content = entry.read_text()
+        assert "import" in content, "must expose import subcommand"
+
+    def test_cli_entrypoint_has_audit_subcommand(self):
+        entry = Path(__file__).parent.parent / "scripts" / "voice_profile.py"
+        if not entry.exists():
+            pytest.skip("entrypoint file missing")
+        content = entry.read_text()
+        assert "audit" in content, "must expose audit subcommand"
+
+    def test_cli_entrypoint_has_licenses_subcommand(self):
+        entry = Path(__file__).parent.parent / "scripts" / "voice_profile.py"
+        if not entry.exists():
+            pytest.skip("entrypoint file missing")
+        content = entry.read_text()
+        assert "licenses" in content, "must expose licenses subcommand"
+
+
+class TestReviewRegression_FsyncBeforeReplace:
+    """Import must fsync temp binary before os.replace for durability."""
+
+    def test_fsync_called_before_rename(self, tmp_path, monkeypatch):
+        import app.voice_cli as vc_mod
+        source = tmp_path / "source"
+        source.mkdir()
+        dest = tmp_path / "dest"
+        dest.mkdir()
+        voice_path = source / "test.s2voice"
+        _write_fixture(voice_path, _build_s2voice_bytes())
+
+        fsync_calls = []
+        original_fsync = os.fsync
+
+        def mock_fsync(fd):
+            fsync_calls.append(fd)
+            return original_fsync(fd)
+
+        monkeypatch.setattr(os, "fsync", mock_fsync)
+
+        result = vc_mod.cmd_import(str(voice_path), str(dest), voice_id="fsync-test")
+        assert result["imported"] is True, f"Import should succeed, got {result}"
+        assert len(fsync_calls) >= 1, (
+            "os.fsync must be called at least once before os.replace"
+        )
+
+
+class TestReviewRegression_AtomicSidecar:
+    """Sidecar must be written atomically via temp in dest directory."""
+
+    def test_sidecar_written_via_tempfile(self, tmp_path, monkeypatch):
+        import app.voice_cli as vc_mod
+        source = tmp_path / "source"
+        source.mkdir()
+        dest = tmp_path / "dest"
+        dest.mkdir()
+        voice_path = source / "test.s2voice"
+        sidecar_path = source / "test.s2voice.json"
+        _write_fixture(voice_path, _build_s2voice_bytes())
+        _write_fixture(sidecar_path, json.dumps({
+            "id": "test", "license": "MIT",
+            "attribution": "T", "provenance": {"source": "test"},
+        }).encode())
+
+        replace_calls = []
+        original_replace = os.replace
+
+        def mock_replace(src, dst):
+            replace_calls.append((src, dst))
+            return original_replace(src, dst)
+
+        monkeypatch.setattr(os, "replace", mock_replace)
+
+        result = vc_mod.cmd_import(str(voice_path), str(dest), voice_id="atomic-sc")
+        assert result["imported"] is True
+        sidecar_replaces = [
+            (s, d) for s, d in replace_calls if d.endswith(".json")
+        ]
+        assert len(sidecar_replaces) >= 1, (
+            "sidecar must be written via os.replace (atomic)"
+        )
+
+
+class TestReviewRegression_ManifestHashMatching:
+    """Manifest profile_sha256 must match the binary hash."""
+
+    def test_manifest_hash_matches_binary(self):
+        from app.voice_profile import parse_s2voice, generate_manifest, compute_voice_hash
+        data = _build_s2voice_bytes()
+        profile = parse_s2voice(data)
+        binary_hash = compute_voice_hash(data)
+        manifest = generate_manifest(data, profile, voice_id="test-hash")
+        assert manifest.get("hash_sha256") == binary_hash, (
+            "manifest hash_sha256 must match binary hash"
+        )
+
+    def test_manifest_id_matches_import_id(self):
+        from app.voice_profile import parse_s2voice, generate_manifest
+        data = _build_s2voice_bytes()
+        profile = parse_s2voice(data)
+        manifest = generate_manifest(data, profile, voice_id="my-voice-001")
+        assert manifest["id"] == "my-voice-001", (
+            "manifest id must match the provided voice_id"
+        )
+
+    def test_manifest_id_matches_filename_convention(self):
+        from app.voice_profile import parse_s2voice, generate_manifest
+        import re
+        data = _build_s2voice_bytes()
+        profile = parse_s2voice(data)
+        for vid in ("test", "my-voice_01", "a" * 128):
+            manifest = generate_manifest(data, profile, voice_id=vid)
+            assert re.match(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$", manifest["id"]), (
+                f"manifest id '{manifest['id']}' must match safe ID pattern"
+            )
+
+
+class TestReviewRegression_SchemaRightsBasis:
+    """Schema must include explicit rights_basis/provenance/license/attribution."""
+
+    def test_schema_has_rights_basis(self):
+        from app.voice_schema import VOICE_SIDECAR_SCHEMA
+        schema = json.loads(VOICE_SIDECAR_SCHEMA)
+        props = schema.get("properties", {})
+        assert "rights_basis" in props, (
+            "Schema must declare 'rights_basis' property"
+        )
+
+    def test_schema_has_license_attribution_provenance(self):
+        from app.voice_schema import VOICE_SIDECAR_SCHEMA
+        schema = json.loads(VOICE_SIDECAR_SCHEMA)
+        props = schema.get("properties", {})
+        required = schema.get("required", [])
+        for field in ("license", "attribution", "provenance"):
+            assert field in props, f"Schema must declare '{field}' property"
+        for field in ("license", "attribution"):
+            assert field in required, f"Schema must require '{field}'"
+
+
+class TestReviewRegression_MaxFileSize:
+    """Max total file size must be enforced in the parser."""
+
+    def test_parser_rejects_total_file_exceeding_max(self):
+        from app.voice_profile import parse_s2voice, VoiceProfileError
+        raw = bytearray(_build_s2voice_bytes(transcript="ok", codes=[1]))
+        struct.pack_into("<Q", raw, 36, 200 * 1024 * 1024)
+        with pytest.raises(VoiceProfileError):
+            parse_s2voice(bytes(raw))
+
+    def test_parser_rejects_transcript_exceeding_max(self):
+        from app.voice_profile import parse_s2voice, VoiceProfileError
+        raw = bytearray(_build_s2voice_bytes(transcript="ok"))
+        struct.pack_into("<Q", raw, 28, 10 * 1024 * 1024)
+        with pytest.raises(VoiceProfileError):
+            parse_s2voice(bytes(raw))
+
+    def test_max_file_size_constant_exists(self):
+        from app import voice_profile
+        assert hasattr(voice_profile, "_MAX_FILE_SIZE"), (
+            "_MAX_FILE_SIZE constant must exist"
+        )
+
+
+class TestReviewRegression_FortyFourByteComment:
+    """The 44-byte header comment must be correct — no 48-byte references."""
+
+    def test_header_size_is_44(self):
+        from app.voice_profile import _HEADER_SIZE
+        assert _HEADER_SIZE == 44, "Header size must be 44 bytes"
+
+    def test_no_48_byte_comment_in_parser(self):
+        import inspect
+        from app import voice_profile
+        src = inspect.getsource(voice_profile.parse_s2voice)
+        assert "48 byte" not in src, (
+            "parse_s2voice must not reference '48 byte' (header is 44 bytes)"
+        )
+
+
+class TestReviewRegression_NoDeadCodeOrDuplicates:
+    """Remove dead code, duplicate imports, and duplicate audit issues."""
+
+    def test_no_unused_shutil_import(self):
+        import ast
+        cli_path = Path(__file__).parent.parent / "app" / "voice_cli.py"
+        tree = ast.parse(cli_path.read_text())
+        shutil_used = False
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name) and node.id == "shutil":
+                if isinstance(node.ctx, ast.Load):
+                    shutil_used = True
+                    break
+        assert not shutil_used, "shutil import appears unused in voice_cli.py"
+
+    def test_no_duplicate_audit_issues(self):
+        from app.voice_cli import cmd_audit
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "no_rights.s2voice"
+            _write_fixture(path, _build_s2voice_bytes())
+            result = cmd_audit(d)
+            voices = {v["id"]: v for v in result.get("voices", [])}
+            issues = voices.get("no_rights", {}).get("issues", [])
+            license_count = sum(1 for i in issues if "license" in i.lower())
+            attr_count = sum(1 for i in issues if "attribution" in i.lower())
+            assert license_count <= 1, "license issue must not be duplicated"
+            assert attr_count <= 1, "attribution issue must not be duplicated"
+
+
+class TestReviewRegression_SignedFieldValidity:
+    """int32 fields must be non-negative where semantics require it."""
+
+    def test_parser_rejects_negative_num_codebooks(self):
+        from app.voice_profile import parse_s2voice, VoiceProfileError
+        raw = bytearray(_build_s2voice_bytes())
+        struct.pack_into("<i", raw, 12, -1)
+        with pytest.raises(VoiceProfileError):
+            parse_s2voice(bytes(raw))
+
+    def test_parser_rejects_negative_sample_rate(self):
+        from app.voice_profile import parse_s2voice, VoiceProfileError
+        raw = bytearray(_build_s2voice_bytes())
+        struct.pack_into("<i", raw, 20, -44100)
+        with pytest.raises(VoiceProfileError):
+            parse_s2voice(bytes(raw))
+
+    def test_parser_rejects_negative_codebook_size(self):
+        from app.voice_profile import parse_s2voice, VoiceProfileError
+        raw = bytearray(_build_s2voice_bytes())
+        struct.pack_into("<i", raw, 24, -4096)
+        with pytest.raises(VoiceProfileError):
+            parse_s2voice(bytes(raw))

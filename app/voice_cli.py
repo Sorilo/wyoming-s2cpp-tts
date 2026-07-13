@@ -7,11 +7,9 @@ and their JSON sidecars.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
-import shutil
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -218,8 +216,11 @@ def cmd_import(
         tmp_path = Path(tmp_path_str)
         os.close(tmp_fd)
 
-        # Write data to temp file
-        tmp_path.write_bytes(data)
+        # Write data to temp file with fsync for durability
+        with open(tmp_path_str, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
 
         # Atomic rename
         os.replace(str(tmp_path), str(dest_path))
@@ -228,13 +229,30 @@ def cmd_import(
         result["voice_id"] = voice_id
         result["path"] = str(dest_path)
 
-        # --- Copy sidecar if present ---
+        # --- Copy sidecar atomically if present ---
         source_sidecar = Path(str(source_path) + ".json")
         if source_sidecar.is_file():
             dest_sidecar = Path(str(dest_path) + ".json")
             try:
                 sidecar_data = source_sidecar.read_bytes()
-                dest_sidecar.write_bytes(sidecar_data)
+                # Write sidecar via temp file in dest dir for atomicity
+                sc_tmp_fd, sc_tmp_path = tempfile.mkstemp(
+                    dir=str(dest_dir_path),
+                    prefix=".tmp-sidecar-",
+                    suffix=".json",
+                )
+                try:
+                    with os.fdopen(sc_tmp_fd, "wb") as sc_f:
+                        sc_f.write(sidecar_data)
+                        sc_f.flush()
+                        os.fsync(sc_f.fileno())
+                    os.replace(sc_tmp_path, str(dest_sidecar))
+                except OSError:
+                    # Clean up temp sidecar on failure
+                    try:
+                        Path(sc_tmp_path).unlink()
+                    except OSError:
+                        pass
             except OSError:
                 pass  # Best-effort, sidecar is optional
 

@@ -17,7 +17,7 @@ _VOICE_SUFFIX = ".s2voice"
 # Profiles must match this naming convention (letters, digits, underscores,
 # hyphens only) and must not be empty.  This is stricter than what the
 # filesystem allows to keep downstream clients safe.
-_VALID_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+_VALID_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 
 
 def _sanitize_voice_id(filename: str) -> str | None:

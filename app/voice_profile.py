@@ -116,7 +116,7 @@ def parse_s2voice(data: bytes) -> S2VoiceProfile:
             f"got {len(data)}"
         )
 
-    # --- Parse fixed header (48 bytes) ---
+    # --- Parse fixed header (44 bytes) ---
     (
         magic,
         version,
@@ -126,7 +126,7 @@ def parse_s2voice(data: bytes) -> S2VoiceProfile:
         codebook_size,
         transcript_len,
         codes_size,
-    ) = struct.unpack_from("<8sIIIIIQQ", data, 0)
+    ) = struct.unpack_from("<8sIiiiiQQ", data, 0)
 
     # --- Magic ---
     if magic != _S2VOICE_MAGIC:
@@ -138,6 +138,20 @@ def parse_s2voice(data: bytes) -> S2VoiceProfile:
     if version != _S2VOICE_VERSION:
         raise VoiceProfileError(
             f"Unsupported version: {version} (expected {_S2VOICE_VERSION})"
+        )
+
+    # --- Signed-field validity: reject negative values ---
+    if num_codebooks < 0:
+        raise VoiceProfileError(
+            f"num_codebooks is negative: {num_codebooks}"
+        )
+    if sample_rate < 0:
+        raise VoiceProfileError(
+            f"sample_rate is negative: {sample_rate}"
+        )
+    if codebook_size < 0:
+        raise VoiceProfileError(
+            f"codebook_size is negative: {codebook_size}"
         )
 
     # --- Bounds: transcript length ---
@@ -155,8 +169,12 @@ def parse_s2voice(data: bytes) -> S2VoiceProfile:
             f"Codes size {codes_size} exceeds maximum {_MAX_CODES_SIZE}"
         )
 
-    # --- Check total expected size ---
+    # --- Check total expected size against max ---
     expected_size = _HEADER_SIZE + transcript_len + codes_size
+    if expected_size > _MAX_FILE_SIZE:
+        raise VoiceProfileError(
+            f"Total file size {expected_size} exceeds maximum {_MAX_FILE_SIZE}"
+        )
     if len(data) > expected_size:
         raise VoiceProfileError(
             f"Trailing data: expected {expected_size} bytes, got {len(data)}"

@@ -48,6 +48,7 @@ from app.observability import (
 from app.speech import SpeechScheduler, SpeechRequest, SpeechMetadata, QueueFullError, QueueTimeoutError, StreamingCoordinator
 from app.speech.session import SynthesisSession
 
+from app.version import __version__
 from app.voice_discovery import discover_voices
 import signal
 import sys
@@ -161,7 +162,7 @@ def build_info_event(settings: Settings | None = None) -> Event:
                 attribution=attribution,
                 installed=True,
                 description="Fish Speech S2 Pro via s2.cpp — 44100 Hz mono s16le",
-                version="0.1",
+                version=__version__,
                 languages=["en", "zh"],
             )
         ]
@@ -174,7 +175,7 @@ def build_info_event(settings: Settings | None = None) -> Event:
                     attribution=attribution,
                     installed=True,
                     description=f"Custom s2 voice profile: {profile_id}",
-                    version="0.1",
+                    version=__version__,
                     languages=["en"],
                 )
             )
@@ -184,7 +185,7 @@ def build_info_event(settings: Settings | None = None) -> Event:
             attribution=attribution,
             installed=True,
             description="Wyoming TTS service backed by s2.cpp / Fish Speech S2 Pro",
-            version="0.1",
+            version=__version__,
             voices=voices,
             supports_synthesize_streaming=True,
         )
@@ -194,7 +195,7 @@ def build_info_event(settings: Settings | None = None) -> Event:
             attribution=attribution,
             installed=True,
             description="Deterministic Phase 1 fake PCM test tone",
-            version="0.1-phase1",
+            version=__version__,
             languages=["en"],
         )
         program = TtsProgram(
@@ -202,7 +203,7 @@ def build_info_event(settings: Settings | None = None) -> Event:
             attribution=attribution,
             installed=True,
             description="Phase 1 fake/test PCM Wyoming TTS service",
-            version="0.1-phase1",
+            version=__version__,
             voices=[voice],
             supports_synthesize_streaming=False,
         )

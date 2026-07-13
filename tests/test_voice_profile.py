@@ -153,15 +153,15 @@ class TestBinaryParser:
 
     def test_parse_rejects_truncated_header(self):
         from app.voice_profile import parse_s2voice, VoiceProfileError
-        for length in range(0, 48):
+        for length in range(0, 44):
             with pytest.raises(VoiceProfileError):
                 parse_s2voice(b"\x00" * length)
 
     def test_parse_rejects_zero_transcript_length(self):
         from app.voice_profile import parse_s2voice, VoiceProfileError
         raw = bytearray(_build_s2voice_bytes())
-        struct.pack_into("<Q", raw, 40, 0)
-        with pytest.raises(VoiceProfileError, match="transcript"):
+        struct.pack_into("<Q", raw, 28, 0)
+        with pytest.raises(VoiceProfileError, match="[Tt]ranscript"):
             parse_s2voice(bytes(raw))
 
     def test_parse_rejects_truncated_transcript(self):
@@ -174,7 +174,7 @@ class TestBinaryParser:
     def test_parse_rejects_non_null_terminated_transcript(self):
         from app.voice_profile import parse_s2voice, VoiceProfileError
         raw = bytearray(_build_s2voice_bytes(transcript="hello"))
-        null_pos = raw.find(b"\x00", 48)
+        null_pos = raw.find(b"\x00", 44)
         raw[null_pos] = ord("!")
         with pytest.raises(VoiceProfileError, match="null"):
             parse_s2voice(bytes(raw))
@@ -189,22 +189,22 @@ class TestBinaryParser:
     def test_parse_rejects_oversized_transcript_length(self):
         from app.voice_profile import parse_s2voice, VoiceProfileError
         raw = bytearray(_build_s2voice_bytes(transcript="ok"))
-        struct.pack_into("<Q", raw, 40, 10 * 1024 * 1024)
-        with pytest.raises(VoiceProfileError, match="transcript"):
+        struct.pack_into("<Q", raw, 28, 10 * 1024 * 1024)
+        with pytest.raises(VoiceProfileError, match="[Tt]ranscript"):
             parse_s2voice(bytes(raw))
 
     def test_parse_rejects_oversized_codes_size(self):
         from app.voice_profile import parse_s2voice, VoiceProfileError
         raw = bytearray(_build_s2voice_bytes(codes=[1]))
-        struct.pack_into("<Q", raw, 48, 500 * 1024 * 1024)
-        with pytest.raises(VoiceProfileError, match="codes"):
+        struct.pack_into("<Q", raw, 36, 500 * 1024 * 1024)
+        with pytest.raises(VoiceProfileError, match="[Cc]odes"):
             parse_s2voice(bytes(raw))
 
     def test_parse_rejects_trailing_data(self):
         from app.voice_profile import parse_s2voice, VoiceProfileError
         data = _build_s2voice_bytes(codes=[1, 2])
         extra = data + b"extra_garbage"
-        with pytest.raises(VoiceProfileError, match="trailing"):
+        with pytest.raises(VoiceProfileError, match="[Tt]railing"):
             parse_s2voice(extra)
 
     def test_parse_empty_codes_allowed(self):
@@ -263,7 +263,7 @@ class TestHashAndManifest:
         from app.voice_profile import compute_voice_hash, verify_voice_hash, VoiceProfileError
         data = _build_s2voice_bytes()
         wrong_hash = "0" * 64
-        with pytest.raises(VoiceProfileError, match="hash"):
+        with pytest.raises(VoiceProfileError, match="[Hh]ash"):
             verify_voice_hash(data, wrong_hash)
 
     def test_hash_verification_passes(self):

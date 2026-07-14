@@ -18,7 +18,6 @@ from .voice_profile import VoiceProfileError, compute_voice_hash, parse_s2voice
 from .voice_schema import VOICE_SIDECAR_SCHEMA
 
 
-DEFAULT_S2CPP_REVISION = "2c33261938da1a41d713768b1b391b4d368d7d2c"
 _VOICE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 _S2CPP_REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
 _COMMON_AUDIO_SUFFIXES = {
@@ -40,6 +39,17 @@ def validate_voice_id(voice_id: str) -> str:
             "or hyphen; the first character must be alphanumeric"
         )
     return voice_id
+
+
+def resolve_s2cpp_revision() -> str:
+    """Return validated build provenance for results and managed sidecars."""
+    revision = os.getenv("S2CPP_REVISION")
+    if revision is None or not _S2CPP_REVISION_RE.fullmatch(revision):
+        raise VoiceImportError(
+            "S2CPP_REVISION must be set to the 40-character lowercase "
+            "hexadecimal build revision"
+        )
+    return revision
 
 
 def build_ffmpeg_command(
@@ -143,6 +153,7 @@ class ImportResult:
     profile_path: Path
     sidecar_path: Path
     commands: tuple[tuple[str, ...], ...]
+    s2cpp_revision: str
     hash_sha256: str | None = None
     validation_wav_path: Path | None = None
 
@@ -162,6 +173,7 @@ class ImportResult:
             "profile_path": str(self.profile_path),
             "sidecar_path": str(self.sidecar_path),
             "commands": rendered_commands,
+            "s2cpp_revision": self.s2cpp_revision,
             "hash_sha256": self.hash_sha256,
             "validation_wav_path": (
                 str(self.validation_wav_path) if self.validation_wav_path else None
@@ -354,12 +366,11 @@ def _publish_file(staged: Path, destination: Path, *, overwrite: bool) -> None:
     staged.unlink()
 
 
-def _build_sidecar(request: ImportRequest, digest: str) -> dict[str, object]:
-    revision = os.getenv("S2CPP_REVISION", DEFAULT_S2CPP_REVISION)
-    if not _S2CPP_REVISION_RE.fullmatch(revision):
-        raise VoiceImportError(
-            "S2CPP_REVISION must be the 40-character lowercase hexadecimal build revision"
-        )
+def _build_sidecar(
+    request: ImportRequest,
+    digest: str,
+    s2cpp_revision: str,
+) -> dict[str, object]:
     sidecar: dict[str, object] = {
         "id": request.voice_id,
         "license": request.license.strip(),
@@ -367,7 +378,7 @@ def _build_sidecar(request: ImportRequest, digest: str) -> dict[str, object]:
         "provenance": {
             "source": request.provenance_source.strip(),
             "tool": "wyoming-s2cpp-tts offline voice importer",
-            "s2cpp_revision": revision,
+            "s2cpp_revision": s2cpp_revision,
         },
         "hash_sha256": digest,
     }
@@ -386,6 +397,7 @@ def import_voice(
 ) -> ImportResult:
     """Create, validate, and commit one profile without retaining audio."""
     profile_path, sidecar_path, validation_wav_path = _validate_request(request)
+    s2cpp_revision = resolve_s2cpp_revision()
     dry_staging = Path(request.voice_dir) / f".voice-import-{request.voice_id}-dry-run"
     dry_commands = _commands_for(request, dry_staging)
     if request.dry_run:
@@ -396,6 +408,7 @@ def import_voice(
             profile_path=profile_path,
             sidecar_path=sidecar_path,
             commands=tuple(tuple(command) for command in dry_commands),
+            s2cpp_revision=s2cpp_revision,
             validation_wav_path=validation_wav_path,
         )
 
@@ -428,7 +441,7 @@ def import_voice(
             raise VoiceImportError("Invalid generated profile: transcript mismatch")
 
         digest = compute_voice_hash(profile_data)
-        sidecar = _build_sidecar(request, digest)
+        sidecar = _build_sidecar(request, digest, s2cpp_revision)
         staged_sidecar = staging_dir / f"{request.voice_id}.s2voice.json"
         staged_sidecar.write_text(
             json.dumps(sidecar, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -495,6 +508,7 @@ def import_voice(
         profile_path=profile_path,
         sidecar_path=sidecar_path,
         commands=(tuple(ffmpeg_command), tuple(s2_command)),
+        s2cpp_revision=s2cpp_revision,
         hash_sha256=digest,
         validation_wav_path=validation_wav_path,
     )

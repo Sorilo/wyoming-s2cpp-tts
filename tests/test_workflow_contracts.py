@@ -1,7 +1,7 @@
 """Phase 11 release-core: behavioral/static contract tests for CI workflows.
 
 Validates:
-- PR CI workflow: no triggers on tags, no publish, no login, least privilege
+- PR CI workflow: source/image checks without tag triggers, publish, login, or write privilege
 - Paired release workflow: manually dispatched only, source tests first,
   smokes before login, pinned SHAs, no edge/latest, SBOM/attestation
 - Source-tests preflight outputs and version validation
@@ -56,15 +56,18 @@ def test_old_independent_workflows_removed():
 def test_pr_ci_no_push_trigger():
     """PR CI must not trigger on push/tags — pull_request only."""
     text = _read(PR_CI)
-    assert "pull_request:" in text
-    assert "push:" not in text
+    on_section = text.split("on:", 1)[1].split("permissions:", 1)[0]
+    assert "pull_request:" in on_section
+    assert "push:" not in on_section
 
 
-def test_pr_ci_no_registry_login():
-    """PR CI must not contain docker/login-action (no registry access)."""
+def test_pr_ci_no_registry_login_or_publication():
+    """PR image builds remain local to the runner and cannot publish."""
     text = _read(PR_CI)
+    assert "docker/build-push-action" in text
+    assert "push: false" in text
     assert "docker/login-action" not in text
-    assert "docker/build-push-action" not in text
+    assert "docker push" not in text
 
 
 def test_pr_ci_least_privilege():

@@ -12,6 +12,14 @@ import sys
 import pytest
 
 
+TEST_S2CPP_REVISION = "2c33261938da1a41d713768b1b391b4d368d7d2c"
+
+
+@pytest.fixture(autouse=True)
+def _set_runtime_s2cpp_revision(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("S2CPP_REVISION", TEST_S2CPP_REVISION)
+
+
 def test_validate_voice_id_rejects_path_like_values() -> None:
     from app.voice_import import VoiceImportError, validate_voice_id
 
@@ -278,6 +286,19 @@ def test_subprocess_timeout_is_distinct_and_redacted(tmp_path: Path) -> None:
     assert list(request.voice_dir.iterdir()) == []
 
 
+def test_import_rejects_missing_runtime_revision_before_dry_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.voice_import import VoiceImportError, import_voice
+
+    request = _request(tmp_path, dry_run=True)
+    monkeypatch.delenv("S2CPP_REVISION")
+
+    with pytest.raises(VoiceImportError, match="S2CPP_REVISION"):
+        import_voice(request)
+
+
 def test_sidecar_records_runtime_s2cpp_revision(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -471,16 +492,68 @@ def test_operator_cli_dry_run_from_transcript_file_is_json_and_redacted(
         check=False,
         capture_output=True,
         text=True,
+        env={**os.environ, "S2CPP_REVISION": "a" * 40},
     )
 
     assert completed.returncode == 0, completed.stderr
     payload = json.loads(completed.stdout)
     assert payload["dry_run"] is True
     assert payload["imported"] is False
+    assert payload["s2cpp_revision"] == "a" * 40
     assert payload["validation_wav_path"] == str(validation_wav)
     assert request.transcript not in completed.stdout
     assert "[REDACTED TRANSCRIPT]" in completed.stdout
     assert completed.stderr == ""
+
+
+@pytest.mark.parametrize("runtime_revision", [None, "latest", "A" * 40])
+def test_operator_cli_rejects_missing_or_invalid_runtime_revision(
+    tmp_path: Path,
+    runtime_revision: str | None,
+) -> None:
+    request = _request(tmp_path)
+    script = Path(__file__).resolve().parents[1] / "scripts" / "import_voice.py"
+    env = os.environ.copy()
+    if runtime_revision is None:
+        env.pop("S2CPP_REVISION", None)
+    else:
+        env["S2CPP_REVISION"] = runtime_revision
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            str(request.source_path),
+            "--transcript",
+            request.transcript,
+            "--id",
+            request.voice_id,
+            "--license",
+            request.license,
+            "--attribution",
+            request.attribution,
+            "--provenance-source",
+            request.provenance_source,
+            "--model",
+            str(request.model_path),
+            "--tokenizer",
+            str(request.tokenizer_path),
+            "--voice-dir",
+            str(request.voice_dir),
+            "--dry-run",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert completed.returncode == 2
+    payload = json.loads(completed.stderr)
+    assert payload["imported"] is False
+    assert "S2CPP_REVISION" in payload["error"]
+    assert request.transcript not in completed.stderr
+    assert "Traceback" not in completed.stderr
 
 
 def test_operator_cli_error_is_json_without_traceback_or_transcript(tmp_path: Path) -> None:
@@ -514,6 +587,7 @@ def test_operator_cli_error_is_json_without_traceback_or_transcript(tmp_path: Pa
         check=False,
         capture_output=True,
         text=True,
+        env={**os.environ, "S2CPP_REVISION": "a" * 40},
     )
 
     assert completed.returncode == 2

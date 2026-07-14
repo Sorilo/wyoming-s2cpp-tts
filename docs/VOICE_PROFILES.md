@@ -96,6 +96,15 @@ create usage rights.
 A dry-run validates all local paths, metadata, collision policy, and prints the
 redacted FFmpeg/s2.cpp argv without starting either program or writing files:
 
+Both dry-run and real import require `S2CPP_REVISION` from the packaged backend
+image. It must be exactly 40 lowercase hexadecimal characters and identifies
+the actual s2.cpp revision included in that image. Missing or malformed
+metadata fails closed; abbreviated, uppercase, non-hexadecimal, and all other
+invalid values are rejected. These failures are bounded, sanitized JSON and do
+not expose the transcript. Successful dry-run JSON reports the validated
+revision, and a real import records it in the generated `.s2voice.json`
+sidecar's provenance.
+
 ```bash
 docker run --rm --network none \
   --entrypoint /usr/local/bin/import-s2voice \
@@ -115,8 +124,12 @@ docker run --rm --network none \
   --dry-run
 ```
 
-Use an immutable `sha-*` value for `BACKEND_IMAGE`. Substitute only real local
-paths and rights metadata; do not copy the invented values above blindly.
+Use an immutable `sha-*` value or image digest for `BACKEND_IMAGE`, and select
+only an image that passed exact-image CI. That CI verifies both the runtime
+`S2CPP_REVISION` environment value and the
+`wyoming-s2cpp-tts.s2cpp-revision` OCI label against the pinned revision.
+Substitute only real local paths and rights metadata; do not copy the invented
+values above blindly.
 
 ### Real import and active-server guard
 

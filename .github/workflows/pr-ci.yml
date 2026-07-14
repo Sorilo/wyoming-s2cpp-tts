@@ -139,7 +139,15 @@ jobs:
             /usr/local/bin/import-s2voice --help >/dev/null
             PYTHONPATH=/usr/local/lib/wyoming-s2cpp-tts python3 -c "import app.voice_import, app.voice_profile, app.voice_schema, jsonschema"
             ffmpeg -version >/dev/null
-            /usr/local/bin/s2 --help >/dev/null
+            test -x /usr/local/bin/s2
+            ldd /usr/local/bin/s2 > /tmp/s2-runtime-ldd.txt
+            cat /tmp/s2-runtime-ldd.txt
+            unexpected_missing="$(grep "not found" /tmp/s2-runtime-ldd.txt | grep -v -E "^[[:space:]]*libcuda\.so\.1[[:space:]]+=>[[:space:]]+not found[[:space:]]*$" || true)"
+            if test -n "$unexpected_missing"; then
+              echo "ERROR: missing runtime dependency other than host-injected libcuda.so.1" >&2
+              echo "$unexpected_missing" >&2
+              exit 1
+            fi
             for root in /models /voices /voice-import-inputs; do
               if test -d "$root" && find "$root" -type f -print -quit | grep -q .; then
                 echo "Unexpected model, voice, or source-audio asset under $root" >&2

@@ -349,6 +349,10 @@ def test_pr_ci_builds_and_smokes_exact_head_backend_without_publication() -> Non
         "PYTHONPATH=/usr/local/lib/wyoming-s2cpp-tts python3 -c",
         "import app.voice_import, app.voice_profile, app.voice_schema, jsonschema",
         "ffmpeg -version",
+        "test -x /usr/local/bin/s2",
+        "ldd /usr/local/bin/s2",
+        'grep -v -E "^[[:space:]]*libcuda\\.so\\.1',
+        'missing runtime dependency other than host-injected libcuda.so.1',
         "S2CPP_REVISION",
         "wyoming-s2cpp-tts.s2cpp-revision",
         'test "$(docker image inspect',
@@ -368,6 +372,8 @@ def test_pr_ci_builds_and_smokes_exact_head_backend_without_publication() -> Non
     job = content.split("  backend-image-smoke:", 1)[1]
     assert "docker/login-action" not in job
     assert "docker push" not in job
+    assert "/usr/local/bin/s2 --help" not in job
+    assert "awk '/not found/" not in job
 
 
 def test_backend_image_labels_are_production_ready() -> None:

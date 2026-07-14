@@ -70,6 +70,9 @@ Local-only CLI functions (no network, no URL downloader):
 
 ## Offline import from local audio (Phase 11.1)
 
+For the daemon-free Unraid User Scripts workflow that safely coordinates an
+active backend container, see [Unraid voice-import operator](UNRAID_VOICE_IMPORT.md).
+
 The backend image includes `/usr/local/bin/import-s2voice`. It converts a local
 WAV, FLAC, MP3, M4A, OGG, Opus, WebM, or AAC reference into a managed
 `<id>.s2voice` plus canonical `<id>.s2voice.json` sidecar. The importer has no

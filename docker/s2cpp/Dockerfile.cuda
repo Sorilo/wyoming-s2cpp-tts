@@ -167,6 +167,7 @@ SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 
 # Runtime dependencies: only what the s2 binary needs for the HTTP server.
 RUN apt-get update \
+    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         ffmpeg \

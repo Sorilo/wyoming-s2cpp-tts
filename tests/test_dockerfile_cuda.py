@@ -205,7 +205,11 @@ def test_runtime_installs_openmp_runtime_package() -> None:
     runtime_section = content.split("# -- runtime stage")[1] if "# -- runtime stage" in content else ""
     runtime_apt = runtime_section.split("# Copy only the required runtime artifacts.")[0]
 
+    assert "apt-get update" in runtime_apt
+    assert "apt-get upgrade -y" in runtime_apt
     assert "apt-get install -y --no-install-recommends" in runtime_apt
+    assert runtime_apt.index("apt-get update") < runtime_apt.index("apt-get upgrade -y")
+    assert runtime_apt.index("apt-get upgrade -y") < runtime_apt.index("apt-get install")
     assert "libgomp1" in runtime_apt, (
         "Runtime image should install libgomp1 for libgomp.so.1"
     )

@@ -346,6 +346,7 @@ def test_pr_ci_builds_and_smokes_exact_head_backend_without_publication() -> Non
         "push: false",
         "load: true",
         "/usr/local/bin/import-s2voice --help",
+        "PYTHONPATH=/usr/local/lib/wyoming-s2cpp-tts python3 -c",
         "import app.voice_import, app.voice_profile, app.voice_schema, jsonschema",
         "ffmpeg -version",
         "S2CPP_REVISION",

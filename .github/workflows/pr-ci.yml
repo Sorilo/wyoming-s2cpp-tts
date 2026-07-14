@@ -137,7 +137,7 @@ jobs:
             test "$(id -un)" = "s2cpp"
             test "$S2CPP_REVISION" = "2c33261938da1a41d713768b1b391b4d368d7d2c"
             /usr/local/bin/import-s2voice --help >/dev/null
-            python3 -c "import app.voice_import, app.voice_profile, app.voice_schema, jsonschema"
+            PYTHONPATH=/usr/local/lib/wyoming-s2cpp-tts python3 -c "import app.voice_import, app.voice_profile, app.voice_schema, jsonschema"
             ffmpeg -version >/dev/null
             /usr/local/bin/s2 --help >/dev/null
             for root in /models /voices /voice-import-inputs; do

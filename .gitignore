@@ -39,12 +39,20 @@ dist/
 *.onnx
 *.ckpt
 
-# Generated audio/cache/logs
+# Generated audio/cache/logs and local voice-import inputs
 *.wav
 *.mp3
 *.flac
 *.ogg
+*.aac
+*.m4a
+*.opus
+*.webm
 *.pcm
+*.s2voice
+*.s2voice.json
+*.transcript.txt
+/voice-import-inputs/
 /cache/
 /logs/
 *.log

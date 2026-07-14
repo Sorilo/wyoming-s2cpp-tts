@@ -41,6 +41,21 @@ This backend image has been deployed and verified for the current Home Assistant
 
 GGUF model files are available at: https://huggingface.co/rodrigomt/s2-pro-gguf
 
+## Offline voice import
+
+This image also contains `/usr/local/bin/import-s2voice`, FFmpeg, Python, and
+the narrow parser/schema modules required to create a profile from authorized
+local audio. It is an operator CLI, not a network endpoint, and does not alter
+the normal `/entrypoint.sh` server startup. Real import refuses while an
+`s2 --server` process is active and never stops or restarts that process.
+
+Use a separate one-shot container with `--entrypoint
+/usr/local/bin/import-s2voice`, preferably `--network none`, the same model and
+read-write voices mounts, and an explicit read-only import-input mount. Start
+with `--dry-run`; add GPU access only for the real import. See
+[`../../docs/VOICE_PROFILES.md`](../../docs/VOICE_PROFILES.md) for the complete
+rights, privacy, command, backup, and rollback procedure.
+
 ## Environment variables
 
 | Variable | Default | Description |

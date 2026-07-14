@@ -211,6 +211,26 @@ def test_runtime_installs_openmp_runtime_package() -> None:
     assert "rm -rf /var/lib/apt/lists/*" in runtime_apt
 
 
+def test_runtime_packages_offline_voice_importer() -> None:
+    """Backend image contains the local-only importer and its bounded dependencies."""
+    content = _read(DOCKERFILE)
+    runtime_section = content.split("# -- runtime stage")[1]
+
+    for package in ("ffmpeg", "python3", "python3-jsonschema"):
+        assert package in runtime_section, f"Runtime image is missing {package}"
+    for source in (
+        "app/__init__.py",
+        "app/voice_import.py",
+        "app/voice_profile.py",
+        "app/voice_schema.py",
+        "scripts/import_voice.py",
+    ):
+        assert source in runtime_section, f"Runtime image does not copy {source}"
+    assert "/usr/local/bin/import-s2voice" in runtime_section
+    assert "import-s2voice --help" in runtime_section
+    assert "ENV S2CPP_REVISION=${S2CPP_REVISION}" in runtime_section
+
+
 def test_runtime_copies_ggml_libs_and_runs_ldconfig() -> None:
     """Runtime stage installs collected GGML libraries into the linker cache."""
     content = _read(DOCKERFILE)

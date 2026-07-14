@@ -100,6 +100,11 @@ VOICE_SIDECAR_SCHEMA: str = r"""
       "type": "string",
       "description": "Free-form operator notes."
     },
+    "hash_sha256": {
+      "type": "string",
+      "description": "SHA-256 digest of the exact companion .s2voice binary.",
+      "pattern": "^[a-f0-9]{64}$"
+    },
     "rights_basis": {
       "type": "string",
       "description": "Basis for usage rights (e.g., 'open-license', 'permission-granted', 'public-domain', 'proprietary').",

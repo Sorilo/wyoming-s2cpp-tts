@@ -30,6 +30,31 @@ The `s2cpp-net` network is a project-scoped Docker bridge, not a Docker `interna
 - Bounded time/size HTTP parsing prevents resource exhaustion.
 - Bind failure is non-fatal — the Wyoming service continues to run.
 
+## Offline voice-import safety
+
+- Voice creation is an explicit operator-side, local-filesystem workflow. The
+  importer has no URL/download mode and does not expose a network service.
+- Reference audio, transcripts, normalized audio, generated validation WAVs,
+  models, and generated profiles are never baked into the image.
+- Real import refuses while an `s2 --server` process is active, preventing an
+  automatic second model-bearing process from competing for VRAM. The tool
+  never stops or restarts the backend; dry-run remains available.
+- Voice IDs are restricted to a bounded filename-safe grammar. Source, model,
+  tokenizer, destination, transcript-file, and optional validation-WAV paths
+  reject unsafe file types or symlink traversal as applicable.
+- Subprocesses use argument arrays with `shell=False`. Commands have bounded
+  timeouts, and errors do not echo captured subprocess output or transcripts.
+- Profile, canonical sidecar, and optional validation audio are validated and
+  placed from same-filesystem staging. No-overwrite is race-safe; `--force`
+  requires explicit operator intent and rollback preserves an earlier pair if
+  final publication fails.
+- The exact transcript is required by pinned s2.cpp, appears in the child
+  process arguments while it runs, and is embedded in `.s2voice`. Prefer
+  `--transcript-file`, restrict local process access, and treat the resulting
+  profile as sensitive when the transcript or voice is sensitive.
+- License, attribution, and provenance are mandatory metadata, but operators
+  remain responsible for consent and usage rights. See `VOICE_PROFILES.md`.
+
 ## Supply-chain gates
 
 - PR CI scans full Git history with Gitleaks and scans dependencies, Dockerfiles, and source configuration with Trivy. Both gates fail closed.

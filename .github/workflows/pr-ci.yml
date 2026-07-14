@@ -1,7 +1,7 @@
 name: PR CI
 
-# Source-only PR verification: runs tests on every PR to main.
-# No builds, no registry access, no publication, no deployments.
+# Source and backend-image verification for every PR to main.
+# Builds are ephemeral: no registry access, publication, or deployment.
 # Pinned actions by exact commit SHA for supply-chain integrity.
 
 on:
@@ -10,6 +10,10 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  group: pr-ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   source-tests:
@@ -21,8 +25,10 @@ jobs:
         python-version: ["3.12", "3.13"]
 
     steps:
-      - name: Checkout repository
+      - name: Checkout repository at immutable PR head
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Install uv
         uses: astral-sh/setup-uv@c7f87aa956e4c323abf06d5dec078e358f6b4d04  # v6.0.0
@@ -45,9 +51,10 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Checkout full history for secret scanning
+      - name: Checkout full history at immutable PR head for secret scanning
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
 
       - name: Scan Git history for secrets
@@ -62,6 +69,187 @@ jobs:
           scan-type: fs
           scan-ref: .
           scanners: vuln,misconfig,secret
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+
+  backend-image-smoke:
+    name: Backend Image Build and Importer Smoke
+    needs: [source-tests, security-scan]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository at immutable PR head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Derive reproducible image metadata
+        id: metadata
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          echo "created=$(git show -s --format=%cI "$HEAD_SHA")" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2  # verified
+
+      - name: Build exact-head backend image locally
+        id: build-backend
+        uses: docker/build-push-action@471d1dc4e07e5cdedd4c2171150001c434f0b7a4  # v6.15.0
+        with:
+          context: .
+          file: docker/s2cpp/Dockerfile.cuda
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: local/backend:pr-head
+          build-args: |
+            VERSION=0.1.0
+            REVISION=${{ github.event.pull_request.head.sha }}
+            CREATED=${{ steps.metadata.outputs.created }}
+            S2CPP_REVISION=2c33261938da1a41d713768b1b391b4d368d7d2c
+            CUDA_ARCHITECTURES=86
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verify image identity, runtime contract, and dependencies
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EXPECTED_S2CPP_REVISION: 2c33261938da1a41d713768b1b391b4d368d7d2c
+        run: |
+          set -euo pipefail
+          IMAGE=local/backend:pr-head
+          echo "image_id=$(docker image inspect "$IMAGE" --format '{{.Id}}')"
+          test "$(docker image inspect "$IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$HEAD_SHA"
+          test "$(docker image inspect "$IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')" = "0.1.0"
+          test "$(docker image inspect "$IMAGE" --format '{{index .Config.Labels "wyoming-s2cpp-tts.role"}}')" = "backend-only"
+          test "$(docker image inspect "$IMAGE" --format '{{index .Config.Labels "wyoming-s2cpp-tts.s2cpp-revision"}}')" = "$EXPECTED_S2CPP_REVISION"
+          test "$(docker image inspect "$IMAGE" --format '{{json .Config.User}}')" = '"s2cpp"'
+          test "$(docker image inspect "$IMAGE" --format '{{json .Config.Entrypoint}}')" = '["/entrypoint.sh"]'
+          docker run --rm --entrypoint /bin/bash "$IMAGE" -lc '
+            set -euo pipefail
+            test "$(id -u)" != "0"
+            test "$(id -un)" = "s2cpp"
+            test "$S2CPP_REVISION" = "2c33261938da1a41d713768b1b391b4d368d7d2c"
+            /usr/local/bin/import-s2voice --help >/dev/null
+            PYTHONPATH=/usr/local/lib/wyoming-s2cpp-tts python3 -c "import app.voice_import, app.voice_profile, app.voice_schema, jsonschema"
+            ffmpeg -version >/dev/null
+            test -x /usr/local/bin/s2
+            runtime_ldd="$(ldd /usr/local/bin/s2)"
+            printf "%s\n" "$runtime_ldd"
+            unexpected_missing="$(printf "%s\n" "$runtime_ldd" | grep "not found" | grep -v -E "^[[:space:]]*libcuda\.so\.1[[:space:]]+=>[[:space:]]+not found[[:space:]]*$" || true)"
+            if test -n "$unexpected_missing"; then
+              echo "ERROR: missing runtime dependency other than host-injected libcuda.so.1" >&2
+              echo "$unexpected_missing" >&2
+              exit 1
+            fi
+            for root in /models /voices /voice-import-inputs; do
+              if test -d "$root" && find "$root" -type f -print -quit | grep -q .; then
+                echo "Unexpected model, voice, or source-audio asset under $root" >&2
+                exit 1
+              fi
+            done
+          '
+
+      - name: Exercise importer dry-run and active-server refusal in image
+        env:
+          EXPECTED_S2CPP_REVISION: 2c33261938da1a41d713768b1b391b4d368d7d2c
+          SMOKE_TRANSCRIPT: Synthetic CI reference transcript.
+        run: |
+          set -euo pipefail
+          IMAGE=local/backend:pr-head
+          ROOT=$(mktemp -d)
+          cleanup() {
+            docker rm -f importer-active-server >/dev/null 2>&1 || true
+            rm -rf "$ROOT"
+          }
+          trap cleanup EXIT
+          mkdir -p "$ROOT/inputs" "$ROOT/models" "$ROOT/voices/validation"
+          chmod 755 "$ROOT" "$ROOT/inputs" "$ROOT/models" "$ROOT/voices" "$ROOT/voices/validation"
+          truncate -s 1 "$ROOT/inputs/reference.wav"
+          truncate -s 1 "$ROOT/models/model.gguf"
+          truncate -s 1 "$ROOT/models/tokenizer.json"
+          find "$ROOT/voices" -mindepth 1 -printf '%P %y\n' | sort > "$ROOT/voices-before"
+
+          docker run -d --name importer-active-server \
+            -v "$ROOT/inputs:/inputs:ro" \
+            -v "$ROOT/models:/models:ro" \
+            -v "$ROOT/voices:/voices" \
+            --entrypoint /bin/bash "$IMAGE" \
+            -lc 'exec -a s2 /bin/bash -c "while :; do sleep 60; done" --server' >/dev/null
+
+          docker exec importer-active-server /usr/local/bin/import-s2voice \
+            /inputs/reference.wav \
+            --transcript "$SMOKE_TRANSCRIPT" \
+            --id ci-dry-run \
+            --license CC0-1.0 \
+            --attribution 'Synthetic CI fixture' \
+            --provenance-source 'generated in ephemeral PR CI' \
+            --model /models/model.gguf \
+            --tokenizer /models/tokenizer.json \
+            --voice-dir /voices \
+            --validation-wav /voices/validation/ci-dry-run.wav \
+            --dry-run > "$ROOT/dry-run.json"
+
+          python3 - "$ROOT/dry-run.json" "$EXPECTED_S2CPP_REVISION" "$SMOKE_TRANSCRIPT" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          payload = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          expected_revision, transcript = sys.argv[2:]
+          assert payload["dry_run"] is True
+          assert payload["imported"] is False
+          assert payload["s2cpp_revision"] == expected_revision
+          serialized = json.dumps(payload)
+          assert transcript not in serialized
+          assert "[REDACTED TRANSCRIPT]" in serialized
+          print("Dry-run JSON is revision-bound and transcript-redacted")
+          PY
+          find "$ROOT/voices" -mindepth 1 -printf '%P %y\n' | sort > "$ROOT/voices-after"
+          cmp "$ROOT/voices-before" "$ROOT/voices-after" || {
+            echo "No managed artifacts expected after dry-run" >&2
+            exit 1
+          }
+          echo "No managed artifacts expected after dry-run: PASS"
+
+          set +e
+          docker exec importer-active-server /usr/local/bin/import-s2voice \
+            /inputs/reference.wav \
+            --transcript "$SMOKE_TRANSCRIPT" \
+            --id ci-active-refusal \
+            --license CC0-1.0 \
+            --attribution 'Synthetic CI fixture' \
+            --provenance-source 'generated in ephemeral PR CI' \
+            --model /models/model.gguf \
+            --tokenizer /models/tokenizer.json \
+            --voice-dir /voices > "$ROOT/refusal.out" 2> "$ROOT/refusal.json"
+          status=$?
+          set -e
+          test "$status" -eq 2
+          python3 - "$ROOT/refusal.json" "$SMOKE_TRANSCRIPT" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          payload = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          assert payload["imported"] is False
+          assert "active s2 --server process" in payload["error"]
+          assert sys.argv[2] not in json.dumps(payload)
+          print("Active-server refusal is fail-closed and sanitized")
+          PY
+
+      - name: Scan exact backend candidate image
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8  # v0.36.0
+        with:
+          version: v0.72.0
+          image-ref: local/backend:pr-head
+          scanners: vuln
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: '1'

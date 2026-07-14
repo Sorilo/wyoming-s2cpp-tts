@@ -120,6 +120,20 @@ phrase begins backend synthesis as soon as its terminal punctuation arrives,
 without waiting for the full LLM response. Audio continuity (one `AudioStart`,
 continuous timestamps, one `AudioStop`) and scheduler serialisation are preserved.
 
+## Offline custom voice import
+
+The backend image includes a guarded, local-only `import-s2voice` operator CLI
+for creating `.s2voice` profiles from authorized reference audio. It normalizes
+common audio formats to 44.1 kHz mono PCM, validates the pinned s2.cpp output,
+requires rights/provenance metadata, writes the canonical checksum sidecar, and
+cleans temporary audio by default. Real import refuses while the backend's
+`s2 --server` process is active; the tool never stops or restarts production.
+
+See [docs/VOICE_PROFILES.md](docs/VOICE_PROFILES.md) for the dry-run-first
+container workflow, privacy/rights requirements, optional validation WAV,
+backup, and rollback guidance. This feature is locally testable but must not be
+described as live-GPU validated or deployed until those separate gates pass.
+
 ## Running locally for development
 
 ```text
@@ -174,7 +188,9 @@ No ordinary test should contact a real backend unless explicitly opted in throug
 - Phase 13: v0.1 release checklist, tagging, and rollback criteria.
 - Phase 14: Final Unraid templates, persistence, restart, update, and backup testing.
 
-Do not claim end-to-end latency, full barge-in, custom voice management, or production release readiness until those phases have been implemented and verified.
+Do not claim end-to-end latency, full barge-in, live-GPU-validated custom voice
+import, deployment of the importer, or production release readiness until those
+separate phases have been implemented and verified.
 
 ## Historical implementation notes
 

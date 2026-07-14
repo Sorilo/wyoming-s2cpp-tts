@@ -160,15 +160,20 @@ ARG VERSION=0.1.0
 ARG REVISION
 ARG CREATED
 ARG S2CPP_REVISION=2c33261938da1a41d713768b1b391b4d368d7d2c
+ENV S2CPP_REVISION=${S2CPP_REVISION}
 
 
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 
 # Runtime dependencies: only what the s2 binary needs for the HTTP server.
 RUN apt-get update \
+    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
+        ffmpeg \
         libgomp1 \
+        python3 \
+        python3-jsonschema \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system s2cpp \
     && useradd --system --no-create-home --gid s2cpp s2cpp
@@ -180,8 +185,10 @@ COPY --from=builder --chown=s2cpp:s2cpp /src/build/s2            /usr/local/bin/
 COPY --from=builder --chown=s2cpp:s2cpp /src/build/BUILD_INFO     /usr/local/share/s2cpp/BUILD_INFO
 COPY --from=builder --chown=root:root     /src/runtime-libs/       /usr/local/lib/
 COPY --chown=s2cpp:s2cpp docker/s2cpp/entrypoint.sh               /entrypoint.sh
+COPY --chown=root:root app/__init__.py app/voice_import.py app/voice_profile.py app/voice_schema.py /usr/local/lib/wyoming-s2cpp-tts/app/
+COPY --chown=root:root scripts/import_voice.py                     /usr/local/bin/import-s2voice
 
-RUN chmod +x /entrypoint.sh \
+RUN chmod +x /entrypoint.sh /usr/local/bin/import-s2voice \
     && ldconfig \
     && mkdir -p /models /voices /config \
     && chown s2cpp:s2cpp /models /voices /config
@@ -200,6 +207,9 @@ RUN echo "=== runtime verification ===" \
     && test -x /usr/local/bin/s2 && echo "  OK: /usr/local/bin/s2" \
     && echo "BUILD_INFO present:" \
     && test -f /usr/local/share/s2cpp/BUILD_INFO && echo "  OK: BUILD_INFO" \
+    && echo "Offline voice importer present:" \
+    && /usr/local/bin/import-s2voice --help >/dev/null \
+    && echo "  OK: import-s2voice --help" \
     && echo "=== runtime dependency verification: ldd /usr/local/bin/s2 ===" \
     && { \
         set +e; \

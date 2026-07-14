@@ -16,6 +16,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DOCKERFILE = PROJECT_ROOT / "docker" / "s2cpp" / "Dockerfile.cuda"
 WORKFLOW = PROJECT_ROOT / ".github" / "workflows" / "paired-release.yml"
+PR_WORKFLOW = PROJECT_ROOT / ".github" / "workflows" / "pr-ci.yml"
 
 
 def _read(path: Path) -> str:
@@ -204,11 +205,35 @@ def test_runtime_installs_openmp_runtime_package() -> None:
     runtime_section = content.split("# -- runtime stage")[1] if "# -- runtime stage" in content else ""
     runtime_apt = runtime_section.split("# Copy only the required runtime artifacts.")[0]
 
+    assert "apt-get update" in runtime_apt
+    assert "apt-get upgrade -y" in runtime_apt
     assert "apt-get install -y --no-install-recommends" in runtime_apt
+    assert runtime_apt.index("apt-get update") < runtime_apt.index("apt-get upgrade -y")
+    assert runtime_apt.index("apt-get upgrade -y") < runtime_apt.index("apt-get install")
     assert "libgomp1" in runtime_apt, (
         "Runtime image should install libgomp1 for libgomp.so.1"
     )
     assert "rm -rf /var/lib/apt/lists/*" in runtime_apt
+
+
+def test_runtime_packages_offline_voice_importer() -> None:
+    """Backend image contains the local-only importer and its bounded dependencies."""
+    content = _read(DOCKERFILE)
+    runtime_section = content.split("# -- runtime stage")[1]
+
+    for package in ("ffmpeg", "python3", "python3-jsonschema"):
+        assert package in runtime_section, f"Runtime image is missing {package}"
+    for source in (
+        "app/__init__.py",
+        "app/voice_import.py",
+        "app/voice_profile.py",
+        "app/voice_schema.py",
+        "scripts/import_voice.py",
+    ):
+        assert source in runtime_section, f"Runtime image does not copy {source}"
+    assert "/usr/local/bin/import-s2voice" in runtime_section
+    assert "import-s2voice --help" in runtime_section
+    assert "ENV S2CPP_REVISION=${S2CPP_REVISION}" in runtime_section
 
 
 def test_runtime_copies_ggml_libs_and_runs_ldconfig() -> None:
@@ -308,6 +333,54 @@ def test_workflow_no_gpu_required() -> None:
     assert "runs-on: ubuntu-24.04" in content or "runs-on: ubuntu-latest" in content, (
         "Workflow runs on CPU-only runner"
     )
+
+
+def test_pr_ci_builds_and_smokes_exact_head_backend_without_publication() -> None:
+    """PR CI validates the actual importer image at the immutable PR head."""
+    content = _read(PR_WORKFLOW)
+
+    required = (
+        "backend-image-smoke:",
+        "needs: [source-tests, security-scan]",
+        "cancel-in-progress: true",
+        "ref: ${{ github.event.pull_request.head.sha }}",
+        "REVISION=${{ github.event.pull_request.head.sha }}",
+        "S2CPP_REVISION=2c33261938da1a41d713768b1b391b4d368d7d2c",
+        "file: docker/s2cpp/Dockerfile.cuda",
+        "push: false",
+        "load: true",
+        "/usr/local/bin/import-s2voice --help",
+        "PYTHONPATH=/usr/local/lib/wyoming-s2cpp-tts python3 -c",
+        "import app.voice_import, app.voice_profile, app.voice_schema, jsonschema",
+        "ffmpeg -version",
+        "test -x /usr/local/bin/s2",
+        "ldd /usr/local/bin/s2",
+        'runtime_ldd="$(ldd /usr/local/bin/s2)"',
+        'grep -v -E "^[[:space:]]*libcuda\\.so\\.1',
+        'missing runtime dependency other than host-injected libcuda.so.1',
+        "S2CPP_REVISION",
+        "wyoming-s2cpp-tts.s2cpp-revision",
+        'test "$(docker image inspect',
+        '"s2cpp"',
+        '"/entrypoint.sh"',
+        "--dry-run",
+        "[REDACTED TRANSCRIPT]",
+        "No managed artifacts expected after dry-run",
+        "active s2 --server process",
+        "image-ref: local/backend:pr-head",
+        "severity: HIGH,CRITICAL",
+        "exit-code: '1'",
+    )
+    for marker in required:
+        assert marker in content, f"PR backend image gate missing: {marker}"
+
+    job = content.split("  backend-image-smoke:", 1)[1]
+    assert "docker/login-action" not in job
+    assert "docker push" not in job
+    assert "/usr/local/bin/s2 --help" not in job
+    assert "awk '/not found/" not in job
+    assert "/tmp/s2-runtime-ldd.txt" not in job
+
 
 def test_backend_image_labels_are_production_ready() -> None:
     text = DOCKERFILE.read_text(encoding="utf-8")

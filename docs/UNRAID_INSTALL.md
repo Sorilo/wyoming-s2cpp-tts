@@ -91,6 +91,9 @@ For full upgrade and rollback procedures, see `docs/UPGRADE_ROLLBACK.md`.
 
 Saved `.s2voice` files belong under `<voices-dir>` on the host and `/voices` inside the backend. Phase 7A created six CMU ARCTIC profiles. Phase 7B added wrapper read-only voice discovery and Home Assistant selectable voices. Drop-in discovery: new `.s2voice` files are discoverable without container rebuild or restart.
 
+For importing an authorized recording through the daemon-free Unraid User
+Scripts operator, see [Unraid voice-import operator](UNRAID_VOICE_IMPORT.md).
+
 Do not assume a backend HTTP voice-management endpoint. Plan against CLI profile creation/listing and `/generate` voice selection.
 
 ## Home Assistant setup

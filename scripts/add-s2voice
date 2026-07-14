@@ -1,0 +1,37 @@
+#!/bin/bash
+# ---------------------------------------------------------------------------
+# Unraid User Scripts launcher for add-s2voice.
+#
+# Installation:
+#   1. Copy the operator files to a persistent location, e.g.:
+#        /mnt/user/appdata/s2cpp/operator/
+#   2. Copy this launcher to the User Scripts plugin directory or run it
+#      directly from the Unraid terminal.
+#   3. Make executable: chmod +x add-s2voice
+#
+# Usage:
+#   add-s2voice --audio /path/to/recording.wav \
+#       --transcript-file /path/to/transcript.txt \
+#       --voice-id myvoice \
+#       --license permission-granted \
+#       --attribution "Speaker Name" \
+#       --provenance-source "Local recording"
+#
+# Configuration:
+#   Place a config.env file beside the operator scripts or use --config.
+#   See config.env.example for supported keys.
+# ---------------------------------------------------------------------------
+set -euo pipefail
+
+# Default operator directory — override by setting OPERATOR_DIR before sourcing.
+: "${OPERATOR_DIR:=/mnt/user/appdata/s2cpp/operator}"
+
+OPERATOR_SCRIPT="${OPERATOR_DIR}/unraid_add_voice.py"
+
+if [[ ! -f "${OPERATOR_SCRIPT}" ]]; then
+    echo "ERROR: Operator script not found at ${OPERATOR_SCRIPT}" >&2
+    echo "Install the operator files first. See docs/UNRAID_VOICE_IMPORT.md" >&2
+    exit 1
+fi
+
+exec python3 "${OPERATOR_SCRIPT}" "$@"

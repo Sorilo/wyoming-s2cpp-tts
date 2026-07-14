@@ -351,6 +351,7 @@ def test_pr_ci_builds_and_smokes_exact_head_backend_without_publication() -> Non
         "ffmpeg -version",
         "test -x /usr/local/bin/s2",
         "ldd /usr/local/bin/s2",
+        'runtime_ldd="$(ldd /usr/local/bin/s2)"',
         'grep -v -E "^[[:space:]]*libcuda\\.so\\.1',
         'missing runtime dependency other than host-injected libcuda.so.1',
         "S2CPP_REVISION",
@@ -374,6 +375,7 @@ def test_pr_ci_builds_and_smokes_exact_head_backend_without_publication() -> Non
     assert "docker push" not in job
     assert "/usr/local/bin/s2 --help" not in job
     assert "awk '/not found/" not in job
+    assert "/tmp/s2-runtime-ldd.txt" not in job
 
 
 def test_backend_image_labels_are_production_ready() -> None:
